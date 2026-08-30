@@ -1,0 +1,105 @@
+{
+  "app": {
+    "name": "DuplicateEntityApp"
+  },
+  "capabilities": {
+    "provided": [],
+    "required": []
+  },
+  "diagnostics": [
+    {
+      "code": "DUPLICATE_ENTITY_NAME",
+      "details": {
+        "entity": "User",
+        "firstNode": "entity:User"
+      },
+      "level": "error",
+      "message": "Duplicate entity name \"User\" (already defined at tests/fixtures/duplicate-entity/app.spec.ts:5).",
+      "nodeId": "entity:User#2"
+    },
+    {
+      "code": "NODE_ID_COLLISION",
+      "details": {
+        "kind": "entity",
+        "name": "User"
+      },
+      "level": "error",
+      "message": "Two spec nodes share the deterministic id derived from kind/name \"entity:User\" (duplicate name?).",
+      "nodeId": "entity:User#2"
+    }
+  ],
+  "metadata": {
+    "compilerVersion": "0.1.0"
+  },
+  "nodes": [
+    {
+      "attributes": {
+        "entities": [
+          "User",
+          "User"
+        ],
+        "name": "DuplicateEntityApp"
+      },
+      "id": "app:DuplicateEntityApp",
+      "kind": "app",
+      "name": "DuplicateEntityApp",
+      "package": "@spec/core",
+      "source": {
+        "column": 16,
+        "file": "tests/fixtures/duplicate-entity/app.spec.ts",
+        "line": 14
+      }
+    },
+    {
+      "attributes": {
+        "fields": {
+          "email": {
+            "type": "email",
+            "unique": true
+          },
+          "id": {
+            "type": "uuid"
+          }
+        }
+      },
+      "id": "entity:User",
+      "kind": "entity",
+      "name": "User",
+      "package": "@spec/web",
+      "source": {
+        "column": 14,
+        "file": "tests/fixtures/duplicate-entity/app.spec.ts",
+        "line": 5
+      }
+    },
+    {
+      "attributes": {
+        "fields": {
+          "id": {
+            "type": "uuid"
+          }
+        }
+      },
+      "id": "entity:User#2",
+      "kind": "entity",
+      "name": "User",
+      "package": "@spec/web",
+      "source": {
+        "column": 19,
+        "file": "tests/fixtures/duplicate-entity/app.spec.ts",
+        "line": 10
+      }
+    }
+  ],
+  "packages": [
+    {
+      "name": "@spec/core",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/web",
+      "version": "0.1.0"
+    }
+  ],
+  "version": "spec-ir/0.1"
+}

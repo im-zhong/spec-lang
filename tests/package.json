@@ -1,0 +1,17 @@
+{
+  "name": "@spec/tests",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@spec/core": "workspace:*",
+    "@spec/package-sdk": "workspace:*",
+    "@spec/web": "workspace:*",
+    "@spec/auth": "workspace:*",
+    "@spec/postgres": "workspace:*",
+    "@spec/compiler": "workspace:*",
+    "@spec/cli": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.8"
+  }
+}

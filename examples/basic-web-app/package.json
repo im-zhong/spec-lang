@@ -1,0 +1,11 @@
+{
+  "name": "@spec/example-basic-web-app",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@spec/core": "workspace:*",
+    "@spec/web": "workspace:*",
+    "@spec/auth": "workspace:*",
+    "@spec/postgres": "workspace:*"
+  }
+}

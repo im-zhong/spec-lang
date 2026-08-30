@@ -1,0 +1,7 @@
+packages:
+  - "packages/*"
+  - "examples/*"
+  - "tests"
+  - "docs-site"
+allowBuilds:
+  esbuild: true

@@ -1,0 +1,21 @@
+{
+  "name": "@spec/cli",
+  "version": "0.1.0",
+  "description": "spec CLI: check / build / inspect specifications",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "spec": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@spec/compiler": "workspace:*",
+    "@spec/core": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.8"
+  }
+}

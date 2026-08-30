@@ -1,0 +1,17 @@
+[
+  {
+    "code": "AUTH_IDENTITY_NOT_IN_PRINCIPAL",
+    "details": {
+      "identity": "Product.id",
+      "principal": "User"
+    },
+    "level": "error",
+    "message": "Auth identity Product.id does not belong to principal entity \"User\".",
+    "nodeId": "passwordStrategy:auth:MainAuth#0",
+    "source": {
+      "column": 13,
+      "file": "tests/fixtures/invalid-auth-identity/app.spec.ts",
+      "line": 21
+    }
+  }
+]

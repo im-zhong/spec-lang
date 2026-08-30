@@ -1,0 +1,22 @@
+[
+  {
+    "code": "SPEC_UNSUPPORTED_SYNTAX",
+    "level": "error",
+    "message": "Unsupported call target \"ParenthesizedExpression\".",
+    "source": {
+      "column": 15,
+      "file": "tests/fixtures/unsupported-syntax/app.spec.ts",
+      "line": 9
+    }
+  },
+  {
+    "code": "SPEC_UNSUPPORTED_SYNTAX",
+    "level": "error",
+    "message": "Loops are not allowed in specifications.",
+    "source": {
+      "column": 1,
+      "file": "tests/fixtures/unsupported-syntax/app.spec.ts",
+      "line": 11
+    }
+  }
+]

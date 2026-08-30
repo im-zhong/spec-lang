@@ -1,0 +1,12 @@
+[
+  {
+    "code": "MISSING_CAPABILITY_PROVIDER",
+    "details": {
+      "capability": "RelationalStore",
+      "requester": "auth:MainAuth"
+    },
+    "level": "error",
+    "message": "\"auth:MainAuth\" requires capability \"RelationalStore\" but no spec node provides it.",
+    "nodeId": "auth:MainAuth"
+  }
+]

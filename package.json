@@ -1,0 +1,21 @@
+{
+  "name": "spec-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Specification Programming prototype: Spec -> Package -> Compiler -> IR -> Diagnostic",
+  "scripts": {
+    "build": "pnpm -r --workspace-concurrency=1 build",
+    "test": "pnpm build && vitest run",
+    "spec": "spec",
+    "clean": "pnpm -r --if-present clean",
+    "docs:dev": "pnpm --filter docs-site dev",
+    "docs:build": "pnpm --filter docs-site build",
+    "docs:preview": "pnpm --filter docs-site preview"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "@spec/cli": "workspace:*"
+  }
+}

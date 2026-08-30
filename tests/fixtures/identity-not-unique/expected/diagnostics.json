@@ -1,0 +1,16 @@
+[
+  {
+    "code": "AUTH_IDENTITY_NOT_UNIQUE",
+    "details": {
+      "identity": "User.email"
+    },
+    "level": "warning",
+    "message": "Authentication identity User.email should be unique.",
+    "nodeId": "passwordStrategy:auth:MainAuth#0",
+    "source": {
+      "column": 13,
+      "file": "tests/fixtures/identity-not-unique/app.spec.ts",
+      "line": 17
+    }
+  }
+]

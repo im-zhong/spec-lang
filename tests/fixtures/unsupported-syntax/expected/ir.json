@@ -1,0 +1,82 @@
+{
+  "app": {
+    "name": "UnsupportedSyntaxApp"
+  },
+  "capabilities": {
+    "provided": [],
+    "required": []
+  },
+  "diagnostics": [
+    {
+      "code": "SPEC_UNSUPPORTED_SYNTAX",
+      "level": "error",
+      "message": "Unsupported call target \"ParenthesizedExpression\".",
+      "source": {
+        "column": 15,
+        "file": "tests/fixtures/unsupported-syntax/app.spec.ts",
+        "line": 9
+      }
+    },
+    {
+      "code": "SPEC_UNSUPPORTED_SYNTAX",
+      "level": "error",
+      "message": "Loops are not allowed in specifications.",
+      "source": {
+        "column": 1,
+        "file": "tests/fixtures/unsupported-syntax/app.spec.ts",
+        "line": 11
+      }
+    }
+  ],
+  "metadata": {
+    "compilerVersion": "0.1.0"
+  },
+  "nodes": [
+    {
+      "attributes": {
+        "entities": [
+          "User"
+        ],
+        "name": "UnsupportedSyntaxApp"
+      },
+      "id": "app:UnsupportedSyntaxApp",
+      "kind": "app",
+      "name": "UnsupportedSyntaxApp",
+      "package": "@spec/core",
+      "source": {
+        "column": 16,
+        "file": "tests/fixtures/unsupported-syntax/app.spec.ts",
+        "line": 15
+      }
+    },
+    {
+      "attributes": {
+        "fields": {
+          "id": {
+            "type": "uuid"
+          }
+        }
+      },
+      "id": "entity:User",
+      "kind": "entity",
+      "name": "User",
+      "package": "@spec/web",
+      "source": {
+        "column": 14,
+        "file": "tests/fixtures/unsupported-syntax/app.spec.ts",
+        "line": 5
+      }
+    }
+  ],
+  "packages": [
+    {
+      "name": "@spec/core",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/web",
+      "version": "0.1.0"
+    }
+  ],
+  "version": "spec-ir/0.1"
+}

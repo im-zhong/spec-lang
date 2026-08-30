@@ -1,0 +1,127 @@
+{
+  "app": {
+    "name": "NoDatabaseApp"
+  },
+  "capabilities": {
+    "provided": [],
+    "required": [
+      {
+        "capability": "RelationalStore",
+        "requester": "auth:MainAuth"
+      }
+    ]
+  },
+  "diagnostics": [
+    {
+      "code": "MISSING_CAPABILITY_PROVIDER",
+      "details": {
+        "capability": "RelationalStore",
+        "requester": "auth:MainAuth"
+      },
+      "level": "error",
+      "message": "\"auth:MainAuth\" requires capability \"RelationalStore\" but no spec node provides it.",
+      "nodeId": "auth:MainAuth"
+    }
+  ],
+  "metadata": {
+    "compilerVersion": "0.1.0"
+  },
+  "nodes": [
+    {
+      "attributes": {
+        "entities": [
+          "User"
+        ],
+        "name": "NoDatabaseApp",
+        "services": [
+          "MainAuth"
+        ]
+      },
+      "id": "app:NoDatabaseApp",
+      "kind": "app",
+      "name": "NoDatabaseApp",
+      "package": "@spec/core",
+      "source": {
+        "column": 16,
+        "file": "tests/fixtures/missing-database/app.spec.ts",
+        "line": 20
+      }
+    },
+    {
+      "attributes": {
+        "principal": {
+          "nodeId": "entity:User"
+        },
+        "requires": [
+          "RelationalStore"
+        ]
+      },
+      "children": [
+        {
+          "attributes": {
+            "identity": {
+              "__fieldRef": true,
+              "entity": "User",
+              "field": "email",
+              "owner": "entity:User"
+            }
+          },
+          "id": "passwordStrategy:auth:MainAuth#0",
+          "kind": "passwordStrategy",
+          "package": "@spec/auth",
+          "source": {
+            "column": 13,
+            "file": "tests/fixtures/missing-database/app.spec.ts",
+            "line": 15
+          }
+        }
+      ],
+      "id": "auth:MainAuth",
+      "kind": "auth",
+      "name": "MainAuth",
+      "package": "@spec/auth",
+      "source": {
+        "column": 18,
+        "file": "tests/fixtures/missing-database/app.spec.ts",
+        "line": 12
+      }
+    },
+    {
+      "attributes": {
+        "fields": {
+          "email": {
+            "type": "email",
+            "unique": true
+          },
+          "id": {
+            "type": "uuid"
+          }
+        }
+      },
+      "id": "entity:User",
+      "kind": "entity",
+      "name": "User",
+      "package": "@spec/web",
+      "source": {
+        "column": 14,
+        "file": "tests/fixtures/missing-database/app.spec.ts",
+        "line": 7
+      }
+    }
+  ],
+  "packages": [
+    {
+      "name": "@spec/auth",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/core",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/web",
+      "version": "0.1.0"
+    }
+  ],
+  "version": "spec-ir/0.1"
+}

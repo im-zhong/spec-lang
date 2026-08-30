@@ -1,0 +1,22 @@
+[
+  {
+    "code": "DUPLICATE_ENTITY_NAME",
+    "details": {
+      "entity": "User",
+      "firstNode": "entity:User"
+    },
+    "level": "error",
+    "message": "Duplicate entity name \"User\" (already defined at tests/fixtures/duplicate-entity/app.spec.ts:5).",
+    "nodeId": "entity:User#2"
+  },
+  {
+    "code": "NODE_ID_COLLISION",
+    "details": {
+      "kind": "entity",
+      "name": "User"
+    },
+    "level": "error",
+    "message": "Two spec nodes share the deterministic id derived from kind/name \"entity:User\" (duplicate name?).",
+    "nodeId": "entity:User#2"
+  }
+]
