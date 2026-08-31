@@ -1,0 +1,327 @@
+{
+  "app": {
+    "name": "ContentAPI"
+  },
+  "capabilities": {
+    "provided": [
+      {
+        "capability": "RelationalStore",
+        "provider": "postgres:MainDB"
+      }
+    ],
+    "required": [
+      {
+        "capability": "RelationalStore",
+        "requester": "auth:MainAuth"
+      },
+      {
+        "capability": "RelationalStore",
+        "requester": "fastapi:Server"
+      }
+    ]
+  },
+  "diagnostics": [],
+  "metadata": {
+    "compilerVersion": "0.1.0"
+  },
+  "nodes": [
+    {
+      "attributes": {
+        "entities": [
+          "User",
+          "Post",
+          "Comment"
+        ],
+        "name": "ContentAPI",
+        "resources": [
+          "MainDB",
+          "Server"
+        ],
+        "services": [
+          "MainAuth",
+          "User",
+          "Post",
+          "Comment"
+        ]
+      },
+      "id": "app:ContentAPI",
+      "kind": "app",
+      "name": "ContentAPI",
+      "package": "@spec/core",
+      "source": {
+        "column": 16,
+        "file": "app.spec.ts",
+        "line": 52
+      }
+    },
+    {
+      "attributes": {
+        "principal": {
+          "nodeId": "entity:User"
+        },
+        "requires": [
+          "RelationalStore"
+        ]
+      },
+      "children": [
+        {
+          "attributes": {
+            "identity": {
+              "__fieldRef": true,
+              "entity": "User",
+              "field": "email",
+              "owner": "entity:User"
+            }
+          },
+          "id": "passwordStrategy:auth:MainAuth#0",
+          "kind": "passwordStrategy",
+          "package": "@spec/auth",
+          "source": {
+            "column": 13,
+            "file": "app.spec.ts",
+            "line": 37
+          }
+        }
+      ],
+      "id": "auth:MainAuth",
+      "kind": "auth",
+      "name": "MainAuth",
+      "package": "@spec/auth",
+      "source": {
+        "column": 18,
+        "file": "app.spec.ts",
+        "line": 35
+      }
+    },
+    {
+      "attributes": {
+        "auth": true,
+        "entity": {
+          "nodeId": "entity:Comment"
+        },
+        "path": "/comments"
+      },
+      "id": "crud:Comment",
+      "kind": "crud",
+      "name": "Comment",
+      "package": "@spec/web",
+      "source": {
+        "column": 18,
+        "file": "app.spec.ts",
+        "line": 42
+      }
+    },
+    {
+      "attributes": {
+        "auth": true,
+        "entity": {
+          "nodeId": "entity:Post"
+        },
+        "path": "/posts"
+      },
+      "id": "crud:Post",
+      "kind": "crud",
+      "name": "Post",
+      "package": "@spec/web",
+      "source": {
+        "column": 15,
+        "file": "app.spec.ts",
+        "line": 41
+      }
+    },
+    {
+      "attributes": {
+        "auth": true,
+        "entity": {
+          "nodeId": "entity:User"
+        },
+        "path": "/users"
+      },
+      "id": "crud:User",
+      "kind": "crud",
+      "name": "User",
+      "package": "@spec/web",
+      "source": {
+        "column": 15,
+        "file": "app.spec.ts",
+        "line": 40
+      }
+    },
+    {
+      "attributes": {
+        "fields": {
+          "author": {
+            "target": "User",
+            "type": "ref"
+          },
+          "body": {
+            "type": "string"
+          },
+          "id": {
+            "type": "uuid"
+          },
+          "post": {
+            "target": "Post",
+            "type": "ref"
+          }
+        }
+      },
+      "id": "entity:Comment",
+      "kind": "entity",
+      "name": "Comment",
+      "package": "@spec/web",
+      "source": {
+        "column": 17,
+        "file": "app.spec.ts",
+        "line": 28
+      }
+    },
+    {
+      "attributes": {
+        "fields": {
+          "author": {
+            "target": "User",
+            "type": "ref"
+          },
+          "body": {
+            "optional": true,
+            "type": "string"
+          },
+          "id": {
+            "type": "uuid"
+          },
+          "published": {
+            "default": false,
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "id": "entity:Post",
+      "kind": "entity",
+      "name": "Post",
+      "package": "@spec/web",
+      "source": {
+        "column": 14,
+        "file": "app.spec.ts",
+        "line": 20
+      }
+    },
+    {
+      "attributes": {
+        "fields": {
+          "email": {
+            "type": "email",
+            "unique": true
+          },
+          "id": {
+            "type": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "id": "entity:User",
+      "kind": "entity",
+      "name": "User",
+      "package": "@spec/web",
+      "source": {
+        "column": 14,
+        "file": "app.spec.ts",
+        "line": 14
+      }
+    },
+    {
+      "attributes": {
+        "port": 8000,
+        "prefix": "",
+        "requires": [
+          "RelationalStore"
+        ],
+        "resources": [
+          {
+            "nodeId": "postgres:MainDB"
+          }
+        ],
+        "services": [
+          {
+            "nodeId": "auth:MainAuth"
+          },
+          {
+            "nodeId": "crud:User"
+          },
+          {
+            "nodeId": "crud:Post"
+          },
+          {
+            "nodeId": "crud:Comment"
+          }
+        ],
+        "title": "Content API",
+        "version": "0.1.0"
+      },
+      "id": "fastapi:Server",
+      "kind": "fastapi",
+      "name": "Server",
+      "package": "@spec/fastapi",
+      "source": {
+        "column": 16,
+        "file": "app.spec.ts",
+        "line": 46
+      }
+    },
+    {
+      "attributes": {
+        "entities": [
+          {
+            "nodeId": "entity:User"
+          },
+          {
+            "nodeId": "entity:Post"
+          },
+          {
+            "nodeId": "entity:Comment"
+          }
+        ],
+        "provides": [
+          "RelationalStore"
+        ]
+      },
+      "id": "postgres:MainDB",
+      "kind": "postgres",
+      "name": "MainDB",
+      "package": "@spec/postgres",
+      "source": {
+        "column": 16,
+        "file": "app.spec.ts",
+        "line": 44
+      }
+    }
+  ],
+  "packages": [
+    {
+      "name": "@spec/auth",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/core",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/fastapi",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/postgres",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/web",
+      "version": "0.1.0"
+    }
+  ],
+  "version": "spec-ir/0.1"
+}

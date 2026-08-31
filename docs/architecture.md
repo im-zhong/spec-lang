@@ -122,25 +122,63 @@ with `--debug`).
 ## Repository layout
 
 ```
-packages/core         types, builder protocol, core DSL, logger, errors
+packages/core         types, builder protocol, core DSL, logger, errors, stable JSON
 packages/package-sdk  definePackage / defineNode / defineValidator / provides / requires
-packages/web          entity / field / page / api + validators + inspector
+packages/web          entity / field / crud / count / page / api + validators
 packages/auth         auth / password + validators (principal, identity, uniqueness)
 packages/postgres     postgres resource + RelationalStore provider
-packages/compiler     parse, evaluate, loader, passes, stable JSON, config, inspect
-packages/cli          spec check / build / inspect, exit codes 0/1/2
-examples/basic-web-app/app.spec.ts   the §59 acceptance specification
+packages/fastapi      backend target: blueprint lowering, conformance suite, prompts,
+                      verification plan (the traditional↔agentic bridge)
+packages/agent        Claude Code bridge: headless runner, shot orchestration,
+                      repeatability harness (openapi equality)
+packages/compiler     parse, evaluate, loader, passes, config, inspect
+packages/cli          spec check / build / inspect / generate, exit codes 0/1/2
+examples/basic-web-app/           §59 acceptance specification (static only)
+examples/cblog/ inventory/ booking/  golden-rule test projects (generate)
 tests/fixtures/*/     golden fixtures (valid, invalid, warning, capability, syntax)
 ```
 
-## Future extension points (reserved, not implemented)
+## The agentic pass (implemented)
 
-- `SpecLowering` + the `lower` pass — package-specific generators,
-  verifiers and (later) agentic passes.
+The `lower` extension point is now exercised by `@spec/fastapi` +
+`@spec/agent` through `spec generate`:
+
+```
+Spec IR ──(buildBlueprint, pure)──► BackendBlueprint
+   blueprint pins EVERYTHING observable:
+   routes, status codes, request/response shapes, exact error bodies,
+   auth flow, list ordering, defaults, ref semantics, db url format
+        │
+        ├──(implementPrompt, deterministic)──► coding agent (claude -p)
+        │                                        writes out/<app>-<n>/
+        ├──(buildConformanceSuite, deterministic)──► compiler-owned pytest
+        │                                            dropped into every shot
+        └──(fastApiVerification)──► uv venv / install / import / pytest
+                     │ failure ──► repairPrompt ──► agent (bounded rounds)
+                     ▼
+        N shots must pass the SAME suite and expose the SAME normalized
+        OpenAPI interface — the golden rule
+```
+
+Division of responsibility is strict:
+
+- the **agent** writes code — it never grades itself;
+- the **compiler** owns the contract, the suite and the verdict;
+- divergence between shots is a specification/compiler defect: pin more
+  of the contract, don't re-roll the agent.
+
+Provenance is real: every generated file becomes an `Artifact` with a
+SHA-256 content hash, `generatedBy` task id and `sourceNodes` pointing at
+the SpecNodes it derives from.
+
+## Future extension points
+
+- `SpecLowering` + the `lower` pass — more backend targets (the fastapi
+  package is the reference implementation of a target).
 - `AgentTask` / `AgentResult` / `Artifact` / `Constraint` types in
   `@spec/core` — the provenance chain
-  `Artifact → AgentTask → SpecNode → SourceLocation` is already navigable
-  because every IR node carries `source`.
+  `Artifact → AgentTask → SpecNode → SourceLocation` is navigable in
+  `agent.result.json`.
 - `spec-ir/0.2+` versioning: the IR carries `version: "spec-ir/0.1"`.
 - Protobuf IR, incremental compilation, remote registry, LSP: the pass
   pipeline and the `SpecPackage` interface are the seams.

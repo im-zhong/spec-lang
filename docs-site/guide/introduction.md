@@ -14,14 +14,20 @@ Specification (.spec.ts)
         ▼
     Spec IR  ──►  structured diagnostics
         │
-        ▼  (future: agentic / verification / lowering passes)
-   Software artifacts
+        ▼  blueprint + conformance suite (deterministic)
+   Coding agent ──► generated FastAPI backend
+        │
+        ▼  compiler-owned verification, N repeatable shots
+   Verified, repeatable software artifacts
 ```
 
-The goal of the MVP is **not** to generate a full web project yet. It is to
-make the core spine rock solid:
+The core spine is rock solid:
 
-> **Spec → Package → Compiler → IR → Diagnostic**
+> **Spec → Package → Compiler → IR → Diagnostic → Blueprint → Agent → Verified software**
+
+and the agentic pass is held to one standard: generating the same spec
+twice must produce software that behaves identically (see
+[the golden rule](./golden-rule)).
 
 ## Why a specification language?
 

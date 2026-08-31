@@ -50,6 +50,46 @@ compiler core emits structural codes; each package owns its domain codes.
 | `DUPLICATE_FIELD_NAME`      | error  | Two fields share a name within an entity           |
 | `INVALID_FIELD_DEFINITION`  | error  | Field is not built with `field.*()`                |
 | `FIELD_TYPE_UNKNOWN`        | error  | Field type not in the supported set                |
+| `FIELD_REF_TARGET_INVALID`  | error  | `ref` field has no target (`field.ref("X")`)       |
+| `FIELD_REF_TARGET_UNKNOWN`  | error  | `ref` field points at an unknown entity            |
+| `CRUD_TARGET_INVALID`       | error  | `crud(...)` target is not an entity builder        |
+| `CRUD_ENTITY_NOT_FOUND`     | error  | `crud(...)` references an undefined entity         |
+| `CRUD_INVALID_PATH`         | error  | CRUD path is not an absolute URL path              |
+| `CRUD_DUPLICATE_PATH`       | error  | Two CRUD resources share a path                    |
+| `CRUD_METHOD_UNKNOWN`       | error  | Method outside `list/get/create/update/delete`     |
+| `CRUD_METHOD_DUPLICATE`     | error  | Duplicate method in `crud(..., { methods })`       |
+| `CRUD_METHODS_INVALID`      | error  | `methods` is not an array                          |
+| `CRUD_NAME_MISMATCH`        | warning | CRUD node name differs from its entity name       |
+| `API_TARGET_INVALID`        | error  | `count(...)` target is not an entity builder       |
+| `API_ENTITY_NOT_FOUND`      | error  | `count(...)` references an undefined entity        |
+| `API_INVALID_PATH`          | error  | `count(...)` path is invalid                       |
+
+## @spec/fastapi
+
+| Code                            | Level   | Meaning                                            |
+| ------------------------------- | ------- | -------------------------------------------------- |
+| `FASTAPI_NO_SERVICES`           | warning | Server exposes no services                         |
+| `FASTAPI_SERVICE_INVALID`       | error   | Service entry is not a node reference              |
+| `FASTAPI_SERVICE_NOT_FOUND`     | error   | Referenced service node does not exist             |
+| `FASTAPI_SERVICE_KIND_UNSUPPORTED` | error | Server cannot serve this node kind                |
+| `FASTAPI_RESOURCE_INVALID`      | error   | Resource entry is not a node reference             |
+| `FASTAPI_RESOURCE_NOT_FOUND`    | error   | Referenced resource node does not exist            |
+| `FASTAPI_API_OPERATION_UNSUPPORTED` | error | Generic `api()` node has no pinned operation      |
+| `FASTAPI_PRINCIPAL_REF_UNSUPPORTED` | error | Auth principal must not have `ref` fields         |
+| `FASTAPI_NODE_NOT_SERVED`       | warning | crud/auth node not served by any server            |
+
+## @spec/agent (generation)
+
+| Code                        | Level   | Meaning                                           |
+| --------------------------- | ------- | ------------------------------------------------- |
+| `AGENT_TASK_FAILED`         | error   | The coding agent run failed                       |
+| `AGENT_VERIFICATION_FAILED` | error   | A shot failed the compiler's verification plan    |
+| `AGENT_VERIFIED`            | info    | A shot passed conformance verification            |
+| `AGENT_REPAIRED`            | info    | A shot was repaired after verification failure    |
+| `REPEATABLE`                | info    | All shots passed the same conformance suite       |
+| `INTERFACE_IDENTICAL`       | info    | Shots expose an identical OpenAPI interface       |
+| `INTERFACE_DIVERGENT`       | error   | Shots diverge — the golden rule is violated       |
+| `OPENAPI_SNAPSHOT_FAILED`   | warning | Could not capture a shot's OpenAPI interface      |
 
 ## @spec/auth
 

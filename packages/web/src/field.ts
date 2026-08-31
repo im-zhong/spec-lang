@@ -8,7 +8,14 @@
  * (`{ type, unique, optional, default }`).
  */
 
-export type FieldType = "string" | "int" | "boolean" | "uuid" | "email" | "datetime"
+export type FieldType =
+  | "string"
+  | "int"
+  | "boolean"
+  | "uuid"
+  | "email"
+  | "datetime"
+  | "ref"
 
 export const FIELD_TYPES: readonly FieldType[] = [
   "string",
@@ -17,6 +24,7 @@ export const FIELD_TYPES: readonly FieldType[] = [
   "uuid",
   "email",
   "datetime",
+  "ref",
 ]
 
 export interface FieldSpec {
@@ -26,6 +34,8 @@ export interface FieldSpec {
   readonly optionalFlag: boolean
   readonly hasDefault: boolean
   readonly defaultValue: unknown
+  /** For `ref` fields: the referenced entity's name. */
+  readonly refTarget?: string
   unique(): FieldSpec
   optional(): FieldSpec
   default(value: unknown): FieldSpec
@@ -37,6 +47,7 @@ interface FieldData {
   optionalFlag?: boolean
   hasDefault?: boolean
   defaultValue?: unknown
+  refTarget?: string
 }
 
 export function isFieldSpec(value: unknown): value is FieldSpec {
@@ -48,7 +59,7 @@ export function isFieldSpec(value: unknown): value is FieldSpec {
 }
 
 function makeField(data: FieldData): FieldSpec {
-  const base: Required<FieldData> = {
+  const base: Omit<Required<FieldData>, "refTarget"> & { refTarget?: string } = {
     type: data.type,
     uniqueFlag: data.uniqueFlag === true,
     optionalFlag: data.optionalFlag === true,
@@ -58,9 +69,10 @@ function makeField(data: FieldData): FieldSpec {
   return {
     __specFieldSpec: true,
     ...base,
-    unique: () => makeField({ ...base, uniqueFlag: true }),
-    optional: () => makeField({ ...base, optionalFlag: true }),
-    default: (value: unknown) => makeField({ ...base, hasDefault: true, defaultValue: value }),
+    ...(data.refTarget === undefined ? {} : { refTarget: data.refTarget }),
+    unique: () => makeField({ ...data, ...base, uniqueFlag: true }),
+    optional: () => makeField({ ...data, ...base, optionalFlag: true }),
+    default: (value: unknown) => makeField({ ...data, ...base, hasDefault: true, defaultValue: value }),
   }
 }
 
@@ -75,4 +87,6 @@ export const field = {
   uuid: () => makeField({ type: "uuid" }),
   email: () => makeField({ type: "email" }),
   datetime: () => makeField({ type: "datetime" }),
+  /** Reference to another entity (foreign key): `field.ref("User")`. */
+  ref: (target: string) => makeField({ type: "ref", refTarget: target }),
 }

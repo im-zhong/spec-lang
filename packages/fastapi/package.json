@@ -1,0 +1,26 @@
+{
+  "name": "@spec/fastapi",
+  "version": "0.1.0",
+  "description": "FastAPI backend target package: fastapi server builder + agentic lowering",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@spec/core": "workspace:*",
+    "@spec/package-sdk": "workspace:*",
+    "@spec/web": "workspace:*"
+  },
+  "spec": {
+    "package": true,
+    "entry": "./dist/spec-package.js"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.8",
+    "@spec/compiler": "workspace:*",
+    "@spec/auth": "workspace:*",
+    "@spec/postgres": "workspace:*"
+  }
+}

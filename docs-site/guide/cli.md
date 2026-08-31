@@ -88,6 +88,18 @@ Resources
     └── entities: User
 ```
 
+## spec generate
+
+Compiles the specification and then **generates the application** with a
+headless coding agent. Each independent generation (shot) must pass the
+compiler's own conformance suite and expose the same interface as every
+other shot — repeatability is part of the build, not a hope. See
+[agentic generation](./generate) and [the golden rule](./golden-rule).
+
+```
+spec generate app.spec.ts --shots 2
+```
+
 ## Exit codes
 
 | Code | Meaning                                              |

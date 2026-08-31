@@ -1,0 +1,17 @@
+{
+  "name": "@spec/agent",
+  "version": "0.1.0",
+  "description": "Coding-agent bridge: drives Claude Code headless for the agentic compiler passes",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@spec/core": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { entity, field, isFieldSpec, webPackage } from "../src"
+import { count, crud, defaultCrudPath, entity, field, isFieldSpec, webPackage } from "../src"
 
 describe("@spec/web entity/field", () => {
   it("field builders produce chainable immutable specs", () => {
@@ -55,5 +55,94 @@ describe("@spec/web entity/field", () => {
     expect(webPackage.name).toBe("@spec/web")
     expect(webPackage.validators?.length).toBeGreaterThan(0)
     expect(webPackage.inspectors?.entity).toBeTypeOf("function")
+  })
+})
+
+describe("@spec/web ref fields", () => {
+  it("field.ref produces a ref field with its target", () => {
+    const ref = field.ref("User")
+    expect(ref.type).toBe("ref")
+    expect(ref.refTarget).toBe("User")
+    const chained = ref.optional()
+    expect(chained.refTarget).toBe("User")
+    expect(chained.optionalFlag).toBe(true)
+  })
+
+  it("entity flattens ref targets into field attributes", () => {
+    const Post = entity("Post", {
+      id: field.uuid(),
+      author: field.ref("User"),
+    })
+    expect(Post.attributes.fields).toEqual({
+      id: { type: "uuid" },
+      author: { type: "ref", target: "User" },
+    })
+  })
+})
+
+describe("@spec/web crud", () => {
+  it("crud targets an entity with the default REST path", () => {
+    const User = entity("User", { id: field.uuid() })
+    const Users = crud(User)
+    expect(Users.kind).toBe("crud")
+    expect(Users.package).toBe("@spec/web")
+    expect(Users.name).toBe("User")
+    expect(Users.attributes).toEqual({
+      entity: { nodeId: "entity:User" },
+      path: "/users",
+      auth: true,
+    })
+  })
+
+  it("crud pluralizes and kebab-cases default paths", () => {
+    expect(defaultCrudPath("User")).toBe("/users")
+    expect(defaultCrudPath("BlogPost")).toBe("/blog-posts")
+    expect(defaultCrudPath("Category")).toBe("/categories")
+    expect(defaultCrudPath("Box")).toBe("/boxes")
+  })
+
+  it("crud accepts path, methods and auth overrides", () => {
+    const Post = entity("Post", { id: field.uuid() })
+    const Posts = crud(Post, { path: "/articles", methods: ["list", "get"], auth: false })
+    expect(Posts.attributes).toEqual({
+      entity: { nodeId: "entity:Post" },
+      path: "/articles",
+      methods: ["list", "get"],
+      auth: false,
+    })
+  })
+
+  it("invalid targets pass through for the validator", () => {
+    const Bad = crud("nope")
+    expect(Bad.attributes.entity).toBe("nope")
+    expect(Bad.name).toBeUndefined()
+  })
+
+  it("the package registers the crud node kind and inspector", () => {
+    expect(webPackage.nodeKinds?.map((k) => k.kind)).toContain("crud")
+    expect(webPackage.inspectors?.crud).toBeTypeOf("function")
+  })
+})
+
+describe("@spec/web count", () => {
+  it("count() produces an api node with pinned count semantics", () => {
+    const Product = entity("Product", { id: field.uuid(), sku: field.string().unique() })
+    const ProductCount = count(Product)
+    expect(ProductCount.kind).toBe("api")
+    expect(ProductCount.name).toBe("ProductCount")
+    expect(ProductCount.attributes).toEqual({
+      method: "GET",
+      operation: "count",
+      entity: { nodeId: "entity:Product" },
+      path: "/products/count",
+      auth: true,
+    })
+  })
+
+  it("count() accepts path and auth overrides", () => {
+    const Product = entity("Product", { id: field.uuid() })
+    const c = count(Product, { path: "/catalog/size", auth: false })
+    expect(c.attributes.path).toBe("/catalog/size")
+    expect(c.attributes.auth).toBe(false)
   })
 })

@@ -35,12 +35,40 @@ On failure, prints diagnostics and writes nothing.
 Prints the human-readable specification tree. Requires a valid
 specification (exit 1 otherwise).
 
+### `spec generate <file>`
+
+Compiles, lowers to a backend blueprint, and generates the application
+with a headless coding agent — N independent shots, each judged by the
+compiler's conformance suite and compared for interface equality (see
+[agentic generation](/guide/generate)). Requires `claude` on `PATH`, plus
+`uv` and Python 3.10+ for verification.
+
+| Exit | Meaning                                            |
+| ---- | -------------------------------------------------- |
+| 0    | All shots conformant and interface-identical       |
+| 1    | Invalid spec, a shot failed, or shots diverged     |
+| 2    | Compiler/usage error                               |
+
+Artifacts written to the output dir: `blueprint.json`,
+`agent.tasks.json`, `agent.result.json`; generated apps in `out/`.
+
 ## Options
 
 | Option   | Effect                                        |
 | -------- | --------------------------------------------- |
 | `--debug` | Show internal stack traces on compiler bugs  |
 | `--help`  | Print usage                                   |
+
+### `generate` options
+
+| Option                 | Effect                                        | Default |
+| ---------------------- | --------------------------------------------- | ------- |
+| `--shots <n>`          | Independent generations per spec              | `2`     |
+| `--dry-run`            | Plan only (blueprint + tasks), no agent       | —       |
+| `--out <dir>`          | Generated-app root                            | `out/`  |
+| `--model <id>`         | Agent model                                   | `SPEC_AGENT_MODEL` or `claude-sonnet-4-5` |
+| `--max-turns <n>`      | Agent turn budget per run                     | `60`    |
+| `--repair-rounds <n>`  | Verification failures fed back for repair     | `2`     |
 
 ## Configuration
 

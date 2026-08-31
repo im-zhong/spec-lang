@@ -58,6 +58,13 @@ export default defineConfig({
           ],
         },
         {
+          text: "Generation",
+          items: [
+            { text: "Agentic generation", link: "/guide/generate" },
+            { text: "The golden rule", link: "/guide/golden-rule" },
+          ],
+        },
+        {
           text: "Extending",
           items: [
             { text: "Authoring spec packages", link: "/guide/package-authoring" },

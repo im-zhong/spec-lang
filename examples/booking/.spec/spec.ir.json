@@ -1,0 +1,357 @@
+{
+  "app": {
+    "name": "BookingAPI"
+  },
+  "capabilities": {
+    "provided": [
+      {
+        "capability": "RelationalStore",
+        "provider": "postgres:MainDB"
+      }
+    ],
+    "required": [
+      {
+        "capability": "RelationalStore",
+        "requester": "auth:MainAuth"
+      },
+      {
+        "capability": "RelationalStore",
+        "requester": "fastapi:Server"
+      }
+    ]
+  },
+  "diagnostics": [],
+  "metadata": {
+    "compilerVersion": "0.1.0"
+  },
+  "nodes": [
+    {
+      "attributes": {
+        "auth": true,
+        "entity": {
+          "nodeId": "entity:Booking"
+        },
+        "method": "GET",
+        "operation": "count",
+        "path": "/bookings/count"
+      },
+      "id": "api:BookingCount",
+      "kind": "api",
+      "name": "BookingCount",
+      "package": "@spec/web",
+      "source": {
+        "column": 22,
+        "file": "app.spec.ts",
+        "line": 42
+      }
+    },
+    {
+      "attributes": {
+        "entities": [
+          "User",
+          "Venue",
+          "Booking"
+        ],
+        "name": "BookingAPI",
+        "resources": [
+          "MainDB",
+          "Server"
+        ],
+        "services": [
+          "MainAuth",
+          "User",
+          "Venue",
+          "Booking",
+          "BookingCount"
+        ]
+      },
+      "id": "app:BookingAPI",
+      "kind": "app",
+      "name": "BookingAPI",
+      "package": "@spec/core",
+      "source": {
+        "column": 16,
+        "file": "app.spec.ts",
+        "line": 52
+      }
+    },
+    {
+      "attributes": {
+        "principal": {
+          "nodeId": "entity:User"
+        },
+        "requires": [
+          "RelationalStore"
+        ]
+      },
+      "children": [
+        {
+          "attributes": {
+            "identity": {
+              "__fieldRef": true,
+              "entity": "User",
+              "field": "email",
+              "owner": "entity:User"
+            }
+          },
+          "id": "passwordStrategy:auth:MainAuth#0",
+          "kind": "passwordStrategy",
+          "package": "@spec/auth",
+          "source": {
+            "column": 13,
+            "file": "app.spec.ts",
+            "line": 36
+          }
+        }
+      ],
+      "id": "auth:MainAuth",
+      "kind": "auth",
+      "name": "MainAuth",
+      "package": "@spec/auth",
+      "source": {
+        "column": 18,
+        "file": "app.spec.ts",
+        "line": 34
+      }
+    },
+    {
+      "attributes": {
+        "auth": true,
+        "entity": {
+          "nodeId": "entity:Booking"
+        },
+        "methods": [
+          "list",
+          "get",
+          "create",
+          "delete"
+        ],
+        "path": "/bookings"
+      },
+      "id": "crud:Booking",
+      "kind": "crud",
+      "name": "Booking",
+      "package": "@spec/web",
+      "source": {
+        "column": 18,
+        "file": "app.spec.ts",
+        "line": 41
+      }
+    },
+    {
+      "attributes": {
+        "auth": true,
+        "entity": {
+          "nodeId": "entity:User"
+        },
+        "methods": [
+          "list",
+          "get"
+        ],
+        "path": "/users"
+      },
+      "id": "crud:User",
+      "kind": "crud",
+      "name": "User",
+      "package": "@spec/web",
+      "source": {
+        "column": 15,
+        "file": "app.spec.ts",
+        "line": 39
+      }
+    },
+    {
+      "attributes": {
+        "auth": false,
+        "entity": {
+          "nodeId": "entity:Venue"
+        },
+        "path": "/venues"
+      },
+      "id": "crud:Venue",
+      "kind": "crud",
+      "name": "Venue",
+      "package": "@spec/web",
+      "source": {
+        "column": 16,
+        "file": "app.spec.ts",
+        "line": 40
+      }
+    },
+    {
+      "attributes": {
+        "fields": {
+          "id": {
+            "type": "uuid"
+          },
+          "notes": {
+            "optional": true,
+            "type": "string"
+          },
+          "startsAt": {
+            "type": "datetime"
+          },
+          "user": {
+            "target": "User",
+            "type": "ref"
+          },
+          "venue": {
+            "target": "Venue",
+            "type": "ref"
+          }
+        }
+      },
+      "id": "entity:Booking",
+      "kind": "entity",
+      "name": "Booking",
+      "package": "@spec/web",
+      "source": {
+        "column": 17,
+        "file": "app.spec.ts",
+        "line": 26
+      }
+    },
+    {
+      "attributes": {
+        "fields": {
+          "email": {
+            "type": "email",
+            "unique": true
+          },
+          "id": {
+            "type": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "id": "entity:User",
+      "kind": "entity",
+      "name": "User",
+      "package": "@spec/web",
+      "source": {
+        "column": 14,
+        "file": "app.spec.ts",
+        "line": 14
+      }
+    },
+    {
+      "attributes": {
+        "fields": {
+          "capacity": {
+            "type": "int"
+          },
+          "id": {
+            "type": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "unique": true
+          }
+        }
+      },
+      "id": "entity:Venue",
+      "kind": "entity",
+      "name": "Venue",
+      "package": "@spec/web",
+      "source": {
+        "column": 15,
+        "file": "app.spec.ts",
+        "line": 20
+      }
+    },
+    {
+      "attributes": {
+        "port": 8000,
+        "prefix": "",
+        "requires": [
+          "RelationalStore"
+        ],
+        "resources": [
+          {
+            "nodeId": "postgres:MainDB"
+          }
+        ],
+        "services": [
+          {
+            "nodeId": "auth:MainAuth"
+          },
+          {
+            "nodeId": "crud:User"
+          },
+          {
+            "nodeId": "crud:Venue"
+          },
+          {
+            "nodeId": "crud:Booking"
+          },
+          {
+            "nodeId": "api:BookingCount"
+          }
+        ],
+        "title": "Booking API",
+        "version": "0.1.0"
+      },
+      "id": "fastapi:Server",
+      "kind": "fastapi",
+      "name": "Server",
+      "package": "@spec/fastapi",
+      "source": {
+        "column": 16,
+        "file": "app.spec.ts",
+        "line": 46
+      }
+    },
+    {
+      "attributes": {
+        "entities": [
+          {
+            "nodeId": "entity:User"
+          },
+          {
+            "nodeId": "entity:Venue"
+          },
+          {
+            "nodeId": "entity:Booking"
+          }
+        ],
+        "provides": [
+          "RelationalStore"
+        ]
+      },
+      "id": "postgres:MainDB",
+      "kind": "postgres",
+      "name": "MainDB",
+      "package": "@spec/postgres",
+      "source": {
+        "column": 16,
+        "file": "app.spec.ts",
+        "line": 44
+      }
+    }
+  ],
+  "packages": [
+    {
+      "name": "@spec/auth",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/core",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/fastapi",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/postgres",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/web",
+      "version": "0.1.0"
+    }
+  ],
+  "version": "spec-ir/0.1"
+}

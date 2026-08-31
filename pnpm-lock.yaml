@@ -11,6 +11,12 @@ importers:
       '@spec/cli':
         specifier: workspace:*
         version: link:packages/cli
+      '@spec/compiler':
+        specifier: workspace:*
+        version: link:packages/compiler
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:packages/fastapi
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
@@ -45,6 +51,67 @@ importers:
         specifier: workspace:*
         version: link:../../packages/web
 
+  examples/booking:
+    dependencies:
+      '@spec/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:../../packages/fastapi
+      '@spec/postgres':
+        specifier: workspace:*
+        version: link:../../packages/postgres
+      '@spec/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+
+  examples/cblog:
+    dependencies:
+      '@spec/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:../../packages/fastapi
+      '@spec/postgres':
+        specifier: workspace:*
+        version: link:../../packages/postgres
+      '@spec/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+
+  examples/inventory:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:../../packages/fastapi
+      '@spec/postgres':
+        specifier: workspace:*
+        version: link:../../packages/postgres
+      '@spec/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+
+  packages/agent:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
   packages/auth:
     dependencies:
       '@spec/core':
@@ -63,12 +130,18 @@ importers:
 
   packages/cli:
     dependencies:
+      '@spec/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@spec/compiler':
         specifier: workspace:*
         version: link:../compiler
       '@spec/core':
         specifier: workspace:*
         version: link:../core
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:../fastapi
     devDependencies:
       vitest:
         specifier: ^2.1.8
@@ -89,6 +162,31 @@ importers:
 
   packages/core:
     devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/fastapi:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+      '@spec/web':
+        specifier: workspace:*
+        version: link:../web
+    devDependencies:
+      '@spec/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@spec/compiler':
+        specifier: workspace:*
+        version: link:../compiler
+      '@spec/postgres':
+        specifier: workspace:*
+        version: link:../postgres
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)
@@ -134,6 +232,9 @@ importers:
 
   tests:
     dependencies:
+      '@spec/agent':
+        specifier: workspace:*
+        version: link:../packages/agent
       '@spec/auth':
         specifier: workspace:*
         version: link:../packages/auth
@@ -146,6 +247,9 @@ importers:
       '@spec/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:../packages/fastapi
       '@spec/package-sdk':
         specifier: workspace:*
         version: link:../packages/package-sdk

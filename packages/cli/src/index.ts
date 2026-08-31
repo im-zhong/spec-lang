@@ -6,29 +6,61 @@
  *   spec check <file>     parse + resolve + validate + link (no artifacts)
  *   spec build <file>     full compile, writes .spec/ artifacts
  *   spec inspect <file>   render a human-readable specification tree
+ *   spec generate <file>  compile, then let a coding agent implement the
+ *                         spec; verify against the compiler's conformance
+ *                         suite; repeat N independent shots and require
+ *                         identical behavior (the golden rule)
  *
  * Exit codes:
  *   0  success
- *   1  specification error (structured diagnostics)
+ *   1  specification error / generation failed verification
  *   2  compiler / internal error (stack traces only with --debug)
  */
 import * as path from "node:path"
-import { compile, renderSpecTree, writeArtifacts, COMPILER_VERSION } from "@spec/compiler"
+import * as fs from "node:fs"
+import { createHash } from "node:crypto"
+import { compile, renderSpecTree, stableStringify, writeArtifacts, COMPILER_VERSION } from "@spec/compiler"
 import { InternalCompilerError, createLogger, type Diagnostic } from "@spec/core"
+import { implementPrompt, planGeneration, repairPrompt } from "@spec/fastapi"
+import { runRepeatability, type ShotSpec } from "@spec/agent"
 
 interface CliArgs {
   command: string | undefined
   file: string | undefined
   debug: boolean
   help: boolean
+  dryRun: boolean
+  out: string | undefined
+  shots: number
+  model: string | undefined
+  maxTurns: number
+  repairRounds: number
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { command: undefined, file: undefined, debug: false, help: false }
+  const args: CliArgs = {
+    command: undefined,
+    file: undefined,
+    debug: false,
+    help: false,
+    dryRun: false,
+    out: undefined,
+    shots: 2,
+    model: process.env.SPEC_AGENT_MODEL,
+    maxTurns: 60,
+    repairRounds: 2,
+  }
   const positional: string[] = []
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
     if (arg === "--debug") args.debug = true
     else if (arg === "--help" || arg === "-h") args.help = true
+    else if (arg === "--dry-run") args.dryRun = true
+    else if (arg === "--out") args.out = argv[++i]
+    else if (arg === "--model") args.model = argv[++i]
+    else if (arg === "--shots") args.shots = Number(argv[++i])
+    else if (arg === "--max-turns") args.maxTurns = Number(argv[++i])
+    else if (arg === "--repair-rounds") args.repairRounds = Number(argv[++i])
     else positional.push(arg)
   }
   args.command = positional[0]
@@ -39,13 +71,23 @@ function parseArgs(argv: string[]): CliArgs {
 const USAGE = `spec ${COMPILER_VERSION} — specification compiler
 
 Usage:
-  spec check <file.spec.ts>     Statically check a specification
-  spec build <file.spec.ts>     Compile and write artifacts to <outputDir> (default .spec/)
-  spec inspect <file.spec.ts>   Print the specification tree
+  spec check <file.spec.ts>       Statically check a specification
+  spec build <file.spec.ts>       Compile and write artifacts to <outputDir> (default .spec/)
+  spec inspect <file.spec.ts>     Print the specification tree
+  spec generate <file.spec.ts>    Compile, then generate the application with a
+                                  coding agent; every shot must pass the compiler's
+                                  conformance suite and expose the same interface
+                                  (the golden rule)
 
 Options:
-  --debug    Show internal stack traces
-  --help     Show this help
+  --dry-run                 Plan only: write blueprint + agent tasks, no agent
+  --out <dir>               Generation output root (default "out/")
+  --shots <n>               Independent generations per spec (default 2)
+  --model <id>              Agent model (default SPEC_AGENT_MODEL or CLI default)
+  --max-turns <n>           Agent turn budget per run (default 60)
+  --repair-rounds <n>       Verification failures fed back to the agent (default 2)
+  --debug                   Show internal stack traces
+  --help                    Show this help
 `
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -54,7 +96,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stdout.write(USAGE)
     return args.command === undefined && !args.help ? 2 : 0
   }
-  if (!["check", "build", "inspect"].includes(args.command)) {
+  if (!["check", "build", "inspect", "generate"].includes(args.command!)) {
     process.stderr.write(`Unknown command "${args.command}".\n\n${USAGE}`)
     return 2
   }
@@ -92,18 +134,143 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return 1
     }
 
-    // build
+    if (args.command === "build") {
+      if (!result.ok) {
+        process.stderr.write("✗ Specification invalid\n\n")
+        printDiagnostics(result.diagnostics)
+        return 1
+      }
+      const artifacts = await writeArtifacts(result, projectRoot)
+      process.stdout.write("✓ Specification compiled\n")
+      process.stdout.write(`✓ IR written to ${path.relative(projectRoot, artifacts.irPath)}\n`)
+      const warnings = result.diagnostics.filter((d) => d.level === "warning")
+      if (warnings.length > 0) printDiagnostics(warnings)
+      return 0
+    }
+
+    // ---------------- generate ----------------
     if (!result.ok) {
-      process.stderr.write("✗ Specification invalid\n\n")
+      process.stderr.write("✗ Specification invalid — fix these before generating:\n\n")
       printDiagnostics(result.diagnostics)
       return 1
     }
-    const artifacts = await writeArtifacts(result, projectRoot)
-    process.stdout.write("✓ Specification compiled\n")
-    process.stdout.write(`✓ IR written to ${path.relative(projectRoot, artifacts.irPath)}\n`)
-    const warnings = result.diagnostics.filter((d) => d.level === "warning")
-    if (warnings.length > 0) printDiagnostics(warnings)
-    return 0
+
+    const plan = planGeneration(result.ir)
+    const specDir = path.resolve(projectRoot, result.outputDir)
+    fs.mkdirSync(specDir, { recursive: true })
+    const implement = implementPrompt(plan.blueprint)
+    fs.writeFileSync(
+      path.join(specDir, "blueprint.json"),
+      stableStringify(plan.blueprint) + "\n",
+      "utf8",
+    )
+    fs.writeFileSync(
+      path.join(specDir, "agent.tasks.json"),
+      stableStringify({
+        tasks: plan.tasks,
+        promptSha256: createHash("sha256").update(implement).digest("hex"),
+        verification: plan.verification,
+        conformanceFiles: Object.keys(plan.conformance.files).sort(),
+      }) + "\n",
+      "utf8",
+    )
+
+    process.stdout.write(
+      `✓ Plan derived: ${plan.blueprint.routes.length} routes, ` +
+        `${plan.blueprint.entities.length} entities` +
+        (plan.blueprint.auth ? ", auth" : "") + "\n",
+    )
+
+    if (args.dryRun) {
+      process.stdout.write(
+        `✓ Dry run complete — artifacts in ${path.relative(projectRoot, specDir)} (no agent run)\n`,
+      )
+      return 0
+    }
+
+    const outRoot = args.out ? path.resolve(projectRoot, args.out) : path.join(projectRoot, "out")
+    const appName = plan.blueprint.app.name
+    const workspaces = Array.from({ length: args.shots }, (_, i) => ({
+      shot: `shot-${i + 1}`,
+      workspace: path.join(outRoot, `${appName.toLowerCase()}-${i + 1}`),
+    }))
+
+    const shotSpec: ShotSpec = {
+      implementPrompt: implement,
+      repairPrompt: (failure) => repairPrompt(plan.blueprint, failure),
+      conformanceFiles: plan.conformance.files,
+      conformanceDirs: ["conformance"],
+      verification: plan.verification,
+      specNodeIds: plan.tasks[0]?.context.specNodeIds ?? [],
+    }
+
+    process.stdout.write(
+      `⟳ Generating ${args.shots} independent shot(s) with the coding agent (this takes a while)…\n`,
+    )
+    const model = args.model ?? "claude-sonnet-4-5"
+    const report = await runRepeatability(shotSpec, workspaces, {
+      model,
+      maxTurns: args.maxTurns,
+      repairRounds: args.repairRounds,
+    })
+
+    for (const shot of report.shots) {
+      const mark = shot.ok ? "✓" : "✗"
+      const repairs = shot.repairs.length > 0 ? ` (${shot.repairs.length} repair round(s))` : ""
+      const cost = shot.totalCostUsd !== undefined ? ` · $${shot.totalCostUsd.toFixed(2)}` : ""
+      process.stdout.write(
+        `${mark} ${shot.shot}: ${shot.ok ? "conformance passed" : "FAILED"}${repairs}${cost} → ${path.relative(projectRoot, shot.workspace)}\n`,
+      )
+    }
+
+    if (workspaces.length > 1) {
+      process.stdout.write(
+        report.interfaceEqual
+          ? "✓ All shots expose an identical OpenAPI interface\n"
+          : "✗ Shots expose DIFFERENT interfaces (golden rule violated)\n",
+      )
+    }
+
+    fs.writeFileSync(
+      path.join(specDir, "agent.result.json"),
+      stableStringify({
+        ok: report.ok,
+        interfaceEqual: report.interfaceEqual,
+        totalCostUsd: report.totalCostUsd,
+        shots: report.shots.map((s) => ({
+          shot: s.shot,
+          workspace: s.workspace,
+          ok: s.ok,
+          repairs: s.repairs.map((r) => ({
+            round: r.round,
+            fixed: r.failure.name,
+            failureOutput: r.failure.output.slice(-2000),
+            run: { ok: r.run.ok, turns: r.run.turns, costUsd: r.run.costUsd },
+          })),
+          generate: {
+            ok: s.generate.ok,
+            sessionId: s.generate.sessionId,
+            turns: s.generate.turns,
+            costUsd: s.generate.costUsd,
+          },
+          verification: s.verification,
+          artifactCount: s.artifacts.length,
+          artifacts: s.artifacts,
+          diagnostics: s.diagnostics,
+        })),
+        diagnostics: report.diagnostics,
+      }) + "\n",
+      "utf8",
+    )
+
+    const errors = report.diagnostics.filter((d) => d.level === "error")
+    if (errors.length > 0) printDiagnostics(errors)
+    process.stdout.write(
+      report.ok
+        ? `✓ Generation repeatable across ${workspaces.length} shot(s) — results in ${path.relative(projectRoot, specDir)}/agent.result.json\n`
+        : `✗ Generation did not satisfy the golden rule — see ${path.relative(projectRoot, specDir)}/agent.result.json\n`,
+    )
+    return report.ok ? 0 : 1
   } catch (err) {
     if (err instanceof InternalCompilerError) {
       process.stderr.write(`✗ Internal compiler error: ${err.message}\n`)

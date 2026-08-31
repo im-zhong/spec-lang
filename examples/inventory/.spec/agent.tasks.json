@@ -1,0 +1,498 @@
+{
+  "conformanceFiles": [
+    "conformance/conftest.py",
+    "conformance/contract.json",
+    "conformance/helpers.py",
+    "conformance/test_contract.py"
+  ],
+  "promptSha256": "754308edba9ee8fc8ec738c0d1d46c09f400b8bf10130eea6ae497281ed8f5d6",
+  "tasks": [
+    {
+      "constraints": [
+        {
+          "kind": "interface",
+          "value": [
+            "DELETE /api/v1/categories/{id}",
+            "DELETE /api/v1/products/{id}",
+            "GET /api/v1/categories",
+            "GET /api/v1/categories/{id}",
+            "GET /api/v1/products",
+            "GET /api/v1/products/count",
+            "GET /api/v1/products/{id}",
+            "PATCH /api/v1/categories/{id}",
+            "PATCH /api/v1/products/{id}",
+            "POST /api/v1/categories",
+            "POST /api/v1/products"
+          ]
+        },
+        {
+          "kind": "serialization",
+          "value": {
+            "createDefaults": "omittable-appliesDefault",
+            "entityKeys": "declaredFieldNames",
+            "hiddenColumns": [
+              "password_hash",
+              "created_at"
+            ],
+            "idGeneration": "serverUuid4",
+            "listOrder": "createdAtAscending",
+            "listShape": "bareArray",
+            "refFields": "referencedIdString"
+          }
+        },
+        {
+          "kind": "errors",
+          "value": {
+            "alreadyExists": {
+              "body": {
+                "detail": "Already exists"
+              },
+              "status": 409
+            },
+            "danglingRef": {
+              "body": {
+                "detail": "Not found"
+              },
+              "status": 404
+            },
+            "invalidCredentials": {
+              "body": {
+                "detail": "Invalid credentials"
+              },
+              "status": 401
+            },
+            "notFound": {
+              "body": {
+                "detail": "Not found"
+              },
+              "status": 404
+            },
+            "unauthenticated": {
+              "body": {
+                "detail": "Not authenticated"
+              },
+              "status": 401
+            },
+            "validation": {
+              "body": "fastapi-default",
+              "status": 422
+            }
+          }
+        },
+        {
+          "kind": "entrypoint",
+          "value": "app/main.py must export create_app(database_url: str | None = None) and app = create_app()"
+        },
+        {
+          "kind": "tooling",
+          "value": "pyproject.toml with a dev extra providing pytest and httpx; project installable via uv pip install -e '.[dev]'"
+        },
+        {
+          "kind": "conformance",
+          "value": "the compiler drops conformance/ into the workspace — never create or modify it"
+        }
+      ],
+      "context": {
+        "specNodeIds": [
+          "api:ProductCount",
+          "app:InventoryAPI",
+          "crud:Category",
+          "crud:Product",
+          "entity:Category",
+          "entity:Product",
+          "fastapi:Server"
+        ]
+      },
+      "id": "fastapi:implement",
+      "input": {
+        "blueprint": {
+          "app": {
+            "name": "InventoryAPI",
+            "port": 8000,
+            "prefix": "/api/v1",
+            "title": "Inventory API",
+            "version": "0.1.0"
+          },
+          "contract": {
+            "auth": {
+              "loginRequest": {
+                "email": "string",
+                "password": "string"
+              },
+              "loginResponse": {
+                "access_token": "string",
+                "token_type": "bearer"
+              },
+              "registerRequest": {
+                "password": "string"
+              },
+              "scheme": "bearer-jwt"
+            },
+            "errors": {
+              "alreadyExists": {
+                "body": {
+                  "detail": "Already exists"
+                },
+                "status": 409
+              },
+              "danglingRef": {
+                "body": {
+                  "detail": "Not found"
+                },
+                "status": 404
+              },
+              "invalidCredentials": {
+                "body": {
+                  "detail": "Invalid credentials"
+                },
+                "status": 401
+              },
+              "notFound": {
+                "body": {
+                  "detail": "Not found"
+                },
+                "status": 404
+              },
+              "unauthenticated": {
+                "body": {
+                  "detail": "Not authenticated"
+                },
+                "status": 401
+              },
+              "validation": {
+                "body": "fastapi-default",
+                "status": 422
+              }
+            },
+            "serialization": {
+              "createDefaults": "omittable-appliesDefault",
+              "entityKeys": "declaredFieldNames",
+              "hiddenColumns": [
+                "password_hash",
+                "created_at"
+              ],
+              "idGeneration": "serverUuid4",
+              "listOrder": "createdAtAscending",
+              "listShape": "bareArray",
+              "refFields": "referencedIdString"
+            }
+          },
+          "database": {
+            "engine": "postgres",
+            "fallback": "sqlite:///./dev.db",
+            "urlEnv": "DATABASE_URL",
+            "urlFormat": "sqlalchemy-url"
+          },
+          "entities": [
+            {
+              "fields": [
+                {
+                  "column": "id",
+                  "name": "id",
+                  "type": "uuid"
+                },
+                {
+                  "column": "name",
+                  "name": "name",
+                  "type": "string",
+                  "unique": true
+                },
+                {
+                  "column": "slug",
+                  "name": "slug",
+                  "type": "string",
+                  "unique": true
+                }
+              ],
+              "name": "Category",
+              "table": "categorys"
+            },
+            {
+              "fields": [
+                {
+                  "column": "description",
+                  "name": "description",
+                  "optional": true,
+                  "type": "string"
+                },
+                {
+                  "column": "discontinued",
+                  "default": false,
+                  "name": "discontinued",
+                  "type": "boolean"
+                },
+                {
+                  "column": "id",
+                  "name": "id",
+                  "type": "uuid"
+                },
+                {
+                  "column": "in_stock",
+                  "default": true,
+                  "name": "inStock",
+                  "type": "boolean"
+                },
+                {
+                  "column": "name",
+                  "name": "name",
+                  "type": "string"
+                },
+                {
+                  "column": "price",
+                  "name": "price",
+                  "type": "int"
+                },
+                {
+                  "column": "sku",
+                  "name": "sku",
+                  "type": "string",
+                  "unique": true
+                }
+              ],
+              "name": "Product",
+              "table": "products"
+            }
+          ],
+          "routes": [
+            {
+              "auth": false,
+              "entity": "Category",
+              "id": "GET /api/v1/categories",
+              "method": "GET",
+              "operation": "list",
+              "path": "/api/v1/categories",
+              "response": {
+                "entity": "Category",
+                "kind": "entityArray"
+              },
+              "status": 200
+            },
+            {
+              "auth": false,
+              "entity": "Category",
+              "id": "GET /api/v1/categories/{id}",
+              "method": "GET",
+              "operation": "get",
+              "path": "/api/v1/categories/{id}",
+              "response": {
+                "entity": "Category",
+                "kind": "entity"
+              },
+              "status": 200
+            },
+            {
+              "auth": false,
+              "entity": "Category",
+              "id": "POST /api/v1/categories",
+              "method": "POST",
+              "operation": "create",
+              "path": "/api/v1/categories",
+              "request": {
+                "shape": {
+                  "name": "string",
+                  "slug": "string"
+                }
+              },
+              "response": {
+                "entity": "Category",
+                "kind": "entity"
+              },
+              "status": 201
+            },
+            {
+              "auth": false,
+              "entity": "Category",
+              "id": "PATCH /api/v1/categories/{id}",
+              "method": "PATCH",
+              "operation": "update",
+              "path": "/api/v1/categories/{id}",
+              "request": {
+                "partial": true,
+                "shape": {
+                  "name": "string",
+                  "slug": "string"
+                }
+              },
+              "response": {
+                "entity": "Category",
+                "kind": "entity"
+              },
+              "status": 200
+            },
+            {
+              "auth": false,
+              "entity": "Category",
+              "id": "DELETE /api/v1/categories/{id}",
+              "method": "DELETE",
+              "operation": "delete",
+              "path": "/api/v1/categories/{id}",
+              "response": {
+                "kind": "empty"
+              },
+              "status": 204
+            },
+            {
+              "auth": false,
+              "entity": "Product",
+              "id": "GET /api/v1/products",
+              "method": "GET",
+              "operation": "list",
+              "path": "/api/v1/products",
+              "response": {
+                "entity": "Product",
+                "kind": "entityArray"
+              },
+              "status": 200
+            },
+            {
+              "auth": false,
+              "entity": "Product",
+              "id": "GET /api/v1/products/{id}",
+              "method": "GET",
+              "operation": "get",
+              "path": "/api/v1/products/{id}",
+              "response": {
+                "entity": "Product",
+                "kind": "entity"
+              },
+              "status": 200
+            },
+            {
+              "auth": false,
+              "entity": "Product",
+              "id": "POST /api/v1/products",
+              "method": "POST",
+              "operation": "create",
+              "path": "/api/v1/products",
+              "request": {
+                "shape": {
+                  "description": "string?",
+                  "discontinued": "boolean",
+                  "inStock": "boolean",
+                  "name": "string",
+                  "price": "int",
+                  "sku": "string"
+                }
+              },
+              "response": {
+                "entity": "Product",
+                "kind": "entity"
+              },
+              "status": 201
+            },
+            {
+              "auth": false,
+              "entity": "Product",
+              "id": "PATCH /api/v1/products/{id}",
+              "method": "PATCH",
+              "operation": "update",
+              "path": "/api/v1/products/{id}",
+              "request": {
+                "partial": true,
+                "shape": {
+                  "description": "string?",
+                  "discontinued": "boolean",
+                  "inStock": "boolean",
+                  "name": "string",
+                  "price": "int",
+                  "sku": "string"
+                }
+              },
+              "response": {
+                "entity": "Product",
+                "kind": "entity"
+              },
+              "status": 200
+            },
+            {
+              "auth": false,
+              "entity": "Product",
+              "id": "DELETE /api/v1/products/{id}",
+              "method": "DELETE",
+              "operation": "delete",
+              "path": "/api/v1/products/{id}",
+              "response": {
+                "kind": "empty"
+              },
+              "status": 204
+            },
+            {
+              "auth": false,
+              "entity": "Product",
+              "id": "GET /api/v1/products/count",
+              "method": "GET",
+              "operation": "count",
+              "path": "/api/v1/products/count",
+              "response": {
+                "kind": "count"
+              },
+              "status": 200
+            }
+          ]
+        }
+      },
+      "type": "generate"
+    },
+    {
+      "constraints": [
+        {
+          "kind": "golden-rule",
+          "value": "all conformance tests must pass"
+        }
+      ],
+      "context": {
+        "specNodeIds": [
+          "api:ProductCount",
+          "app:InventoryAPI",
+          "crud:Category",
+          "crud:Product",
+          "entity:Category",
+          "entity:Product",
+          "fastapi:Server"
+        ]
+      },
+      "id": "fastapi:conform",
+      "input": {
+        "commands": [
+          "uv venv .venv --clear --quiet",
+          "uv pip install --quiet -e '.[dev]'",
+          ".venv/bin/python -c \"from app.main import app, create_app; assert app.title\"",
+          ".venv/bin/python -m pytest conformance -q"
+        ],
+        "suite": [
+          "conformance/conftest.py",
+          "conformance/contract.json",
+          "conformance/helpers.py",
+          "conformance/test_contract.py"
+        ]
+      },
+      "type": "verify"
+    }
+  ],
+  "verification": {
+    "check": [
+      {
+        "command": ".venv/bin/python -c \"from app.main import app, create_app; assert app.title\"",
+        "name": "import",
+        "timeoutMs": 60000
+      },
+      {
+        "command": ".venv/bin/python -m pytest conformance -q",
+        "name": "conformance",
+        "timeoutMs": 300000
+      }
+    ],
+    "setup": [
+      {
+        "command": "uv venv .venv --clear --quiet",
+        "name": "venv",
+        "timeoutMs": 120000
+      },
+      {
+        "command": "uv pip install --quiet -e '.[dev]'",
+        "name": "install",
+        "timeoutMs": 600000
+      }
+    ]
+  }
+}

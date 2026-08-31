@@ -1,0 +1,701 @@
+{
+  "conformanceFiles": [
+    "conformance/conftest.py",
+    "conformance/contract.json",
+    "conformance/helpers.py",
+    "conformance/test_contract.py"
+  ],
+  "promptSha256": "0747ca12283f67c0ca8610151d9836998f1b2fc2cd20720a41534efdb893d3a6",
+  "tasks": [
+    {
+      "constraints": [
+        {
+          "kind": "interface",
+          "value": [
+            "DELETE /comments/{id}",
+            "DELETE /posts/{id}",
+            "DELETE /users/{id}",
+            "GET /auth/me",
+            "GET /comments",
+            "GET /comments/{id}",
+            "GET /posts",
+            "GET /posts/{id}",
+            "GET /users",
+            "GET /users/{id}",
+            "PATCH /comments/{id}",
+            "PATCH /posts/{id}",
+            "PATCH /users/{id}",
+            "POST /auth/login",
+            "POST /auth/register",
+            "POST /comments",
+            "POST /posts",
+            "POST /users"
+          ]
+        },
+        {
+          "kind": "serialization",
+          "value": {
+            "createDefaults": "omittable-appliesDefault",
+            "entityKeys": "declaredFieldNames",
+            "hiddenColumns": [
+              "password_hash",
+              "created_at"
+            ],
+            "idGeneration": "serverUuid4",
+            "listOrder": "createdAtAscending",
+            "listShape": "bareArray",
+            "refFields": "referencedIdString"
+          }
+        },
+        {
+          "kind": "errors",
+          "value": {
+            "alreadyExists": {
+              "body": {
+                "detail": "Already exists"
+              },
+              "status": 409
+            },
+            "danglingRef": {
+              "body": {
+                "detail": "Not found"
+              },
+              "status": 404
+            },
+            "invalidCredentials": {
+              "body": {
+                "detail": "Invalid credentials"
+              },
+              "status": 401
+            },
+            "notFound": {
+              "body": {
+                "detail": "Not found"
+              },
+              "status": 404
+            },
+            "unauthenticated": {
+              "body": {
+                "detail": "Not authenticated"
+              },
+              "status": 401
+            },
+            "validation": {
+              "body": "fastapi-default",
+              "status": 422
+            }
+          }
+        },
+        {
+          "kind": "entrypoint",
+          "value": "app/main.py must export create_app(database_url: str | None = None) and app = create_app()"
+        },
+        {
+          "kind": "tooling",
+          "value": "pyproject.toml with a dev extra providing pytest and httpx; project installable via uv pip install -e '.[dev]'"
+        },
+        {
+          "kind": "conformance",
+          "value": "the compiler drops conformance/ into the workspace — never create or modify it"
+        }
+      ],
+      "context": {
+        "specNodeIds": [
+          "app:ContentAPI",
+          "auth:MainAuth",
+          "crud:Comment",
+          "crud:Post",
+          "crud:User",
+          "entity:Comment",
+          "entity:Post",
+          "entity:User",
+          "fastapi:Server"
+        ]
+      },
+      "id": "fastapi:implement",
+      "input": {
+        "blueprint": {
+          "app": {
+            "name": "ContentAPI",
+            "port": 8000,
+            "prefix": "",
+            "title": "Content API",
+            "version": "0.1.0"
+          },
+          "auth": {
+            "identityField": "email",
+            "passwordColumn": "password_hash",
+            "principal": "User",
+            "routes": [
+              {
+                "auth": false,
+                "entity": "User",
+                "id": "POST /auth/login",
+                "method": "POST",
+                "operation": "login",
+                "path": "/auth/login",
+                "request": {
+                  "shape": {
+                    "email": "string",
+                    "password": "string"
+                  }
+                },
+                "response": {
+                  "kind": "token"
+                },
+                "status": 200
+              },
+              {
+                "auth": false,
+                "entity": "User",
+                "id": "POST /auth/register",
+                "method": "POST",
+                "operation": "register",
+                "path": "/auth/register",
+                "request": {
+                  "shape": {
+                    "email": "email",
+                    "name": "string",
+                    "password": "string"
+                  }
+                },
+                "response": {
+                  "entity": "User",
+                  "kind": "entity"
+                },
+                "status": 201
+              },
+              {
+                "auth": true,
+                "entity": "User",
+                "id": "GET /auth/me",
+                "method": "GET",
+                "operation": "me",
+                "path": "/auth/me",
+                "response": {
+                  "entity": "User",
+                  "kind": "entity"
+                },
+                "status": 200
+              }
+            ],
+            "strategy": "password-jwt"
+          },
+          "contract": {
+            "auth": {
+              "loginRequest": {
+                "email": "string",
+                "password": "string"
+              },
+              "loginResponse": {
+                "access_token": "string",
+                "token_type": "bearer"
+              },
+              "registerRequest": {
+                "email": "email",
+                "name": "string",
+                "password": "string"
+              },
+              "scheme": "bearer-jwt"
+            },
+            "errors": {
+              "alreadyExists": {
+                "body": {
+                  "detail": "Already exists"
+                },
+                "status": 409
+              },
+              "danglingRef": {
+                "body": {
+                  "detail": "Not found"
+                },
+                "status": 404
+              },
+              "invalidCredentials": {
+                "body": {
+                  "detail": "Invalid credentials"
+                },
+                "status": 401
+              },
+              "notFound": {
+                "body": {
+                  "detail": "Not found"
+                },
+                "status": 404
+              },
+              "unauthenticated": {
+                "body": {
+                  "detail": "Not authenticated"
+                },
+                "status": 401
+              },
+              "validation": {
+                "body": "fastapi-default",
+                "status": 422
+              }
+            },
+            "serialization": {
+              "createDefaults": "omittable-appliesDefault",
+              "entityKeys": "declaredFieldNames",
+              "hiddenColumns": [
+                "password_hash",
+                "created_at"
+              ],
+              "idGeneration": "serverUuid4",
+              "listOrder": "createdAtAscending",
+              "listShape": "bareArray",
+              "refFields": "referencedIdString"
+            }
+          },
+          "database": {
+            "engine": "postgres",
+            "fallback": "sqlite:///./dev.db",
+            "urlEnv": "DATABASE_URL",
+            "urlFormat": "sqlalchemy-url"
+          },
+          "entities": [
+            {
+              "fields": [
+                {
+                  "column": "author",
+                  "name": "author",
+                  "target": "User",
+                  "type": "ref"
+                },
+                {
+                  "column": "body",
+                  "name": "body",
+                  "type": "string"
+                },
+                {
+                  "column": "id",
+                  "name": "id",
+                  "type": "uuid"
+                },
+                {
+                  "column": "post",
+                  "name": "post",
+                  "target": "Post",
+                  "type": "ref"
+                }
+              ],
+              "name": "Comment",
+              "table": "comments"
+            },
+            {
+              "fields": [
+                {
+                  "column": "author",
+                  "name": "author",
+                  "target": "User",
+                  "type": "ref"
+                },
+                {
+                  "column": "body",
+                  "name": "body",
+                  "optional": true,
+                  "type": "string"
+                },
+                {
+                  "column": "id",
+                  "name": "id",
+                  "type": "uuid"
+                },
+                {
+                  "column": "published",
+                  "default": false,
+                  "name": "published",
+                  "type": "boolean"
+                },
+                {
+                  "column": "title",
+                  "name": "title",
+                  "type": "string"
+                }
+              ],
+              "name": "Post",
+              "table": "posts"
+            },
+            {
+              "fields": [
+                {
+                  "column": "email",
+                  "name": "email",
+                  "type": "email",
+                  "unique": true
+                },
+                {
+                  "column": "id",
+                  "name": "id",
+                  "type": "uuid"
+                },
+                {
+                  "column": "name",
+                  "name": "name",
+                  "type": "string"
+                }
+              ],
+              "name": "User",
+              "passwordColumn": "password_hash",
+              "table": "users"
+            }
+          ],
+          "routes": [
+            {
+              "auth": true,
+              "entity": "Comment",
+              "id": "GET /comments",
+              "method": "GET",
+              "operation": "list",
+              "path": "/comments",
+              "response": {
+                "entity": "Comment",
+                "kind": "entityArray"
+              },
+              "status": 200
+            },
+            {
+              "auth": true,
+              "entity": "Comment",
+              "id": "GET /comments/{id}",
+              "method": "GET",
+              "operation": "get",
+              "path": "/comments/{id}",
+              "response": {
+                "entity": "Comment",
+                "kind": "entity"
+              },
+              "status": 200
+            },
+            {
+              "auth": true,
+              "entity": "Comment",
+              "id": "POST /comments",
+              "method": "POST",
+              "operation": "create",
+              "path": "/comments",
+              "request": {
+                "shape": {
+                  "author": "ref:User",
+                  "body": "string",
+                  "post": "ref:Post"
+                }
+              },
+              "response": {
+                "entity": "Comment",
+                "kind": "entity"
+              },
+              "status": 201
+            },
+            {
+              "auth": true,
+              "entity": "Comment",
+              "id": "PATCH /comments/{id}",
+              "method": "PATCH",
+              "operation": "update",
+              "path": "/comments/{id}",
+              "request": {
+                "partial": true,
+                "shape": {
+                  "author": "ref:User",
+                  "body": "string",
+                  "post": "ref:Post"
+                }
+              },
+              "response": {
+                "entity": "Comment",
+                "kind": "entity"
+              },
+              "status": 200
+            },
+            {
+              "auth": true,
+              "entity": "Comment",
+              "id": "DELETE /comments/{id}",
+              "method": "DELETE",
+              "operation": "delete",
+              "path": "/comments/{id}",
+              "response": {
+                "kind": "empty"
+              },
+              "status": 204
+            },
+            {
+              "auth": true,
+              "entity": "Post",
+              "id": "GET /posts",
+              "method": "GET",
+              "operation": "list",
+              "path": "/posts",
+              "response": {
+                "entity": "Post",
+                "kind": "entityArray"
+              },
+              "status": 200
+            },
+            {
+              "auth": true,
+              "entity": "Post",
+              "id": "GET /posts/{id}",
+              "method": "GET",
+              "operation": "get",
+              "path": "/posts/{id}",
+              "response": {
+                "entity": "Post",
+                "kind": "entity"
+              },
+              "status": 200
+            },
+            {
+              "auth": true,
+              "entity": "Post",
+              "id": "POST /posts",
+              "method": "POST",
+              "operation": "create",
+              "path": "/posts",
+              "request": {
+                "shape": {
+                  "author": "ref:User",
+                  "body": "string?",
+                  "published": "boolean",
+                  "title": "string"
+                }
+              },
+              "response": {
+                "entity": "Post",
+                "kind": "entity"
+              },
+              "status": 201
+            },
+            {
+              "auth": true,
+              "entity": "Post",
+              "id": "PATCH /posts/{id}",
+              "method": "PATCH",
+              "operation": "update",
+              "path": "/posts/{id}",
+              "request": {
+                "partial": true,
+                "shape": {
+                  "author": "ref:User",
+                  "body": "string?",
+                  "published": "boolean",
+                  "title": "string"
+                }
+              },
+              "response": {
+                "entity": "Post",
+                "kind": "entity"
+              },
+              "status": 200
+            },
+            {
+              "auth": true,
+              "entity": "Post",
+              "id": "DELETE /posts/{id}",
+              "method": "DELETE",
+              "operation": "delete",
+              "path": "/posts/{id}",
+              "response": {
+                "kind": "empty"
+              },
+              "status": 204
+            },
+            {
+              "auth": true,
+              "entity": "User",
+              "id": "GET /users",
+              "method": "GET",
+              "operation": "list",
+              "path": "/users",
+              "response": {
+                "entity": "User",
+                "kind": "entityArray"
+              },
+              "status": 200
+            },
+            {
+              "auth": true,
+              "entity": "User",
+              "id": "GET /users/{id}",
+              "method": "GET",
+              "operation": "get",
+              "path": "/users/{id}",
+              "response": {
+                "entity": "User",
+                "kind": "entity"
+              },
+              "status": 200
+            },
+            {
+              "auth": true,
+              "entity": "User",
+              "id": "POST /users",
+              "method": "POST",
+              "operation": "create",
+              "path": "/users",
+              "request": {
+                "shape": {
+                  "email": "email",
+                  "name": "string"
+                }
+              },
+              "response": {
+                "entity": "User",
+                "kind": "entity"
+              },
+              "status": 201
+            },
+            {
+              "auth": true,
+              "entity": "User",
+              "id": "PATCH /users/{id}",
+              "method": "PATCH",
+              "operation": "update",
+              "path": "/users/{id}",
+              "request": {
+                "partial": true,
+                "shape": {
+                  "email": "email",
+                  "name": "string"
+                }
+              },
+              "response": {
+                "entity": "User",
+                "kind": "entity"
+              },
+              "status": 200
+            },
+            {
+              "auth": true,
+              "entity": "User",
+              "id": "DELETE /users/{id}",
+              "method": "DELETE",
+              "operation": "delete",
+              "path": "/users/{id}",
+              "response": {
+                "kind": "empty"
+              },
+              "status": 204
+            },
+            {
+              "auth": false,
+              "entity": "User",
+              "id": "POST /auth/login",
+              "method": "POST",
+              "operation": "login",
+              "path": "/auth/login",
+              "request": {
+                "shape": {
+                  "email": "string",
+                  "password": "string"
+                }
+              },
+              "response": {
+                "kind": "token"
+              },
+              "status": 200
+            },
+            {
+              "auth": false,
+              "entity": "User",
+              "id": "POST /auth/register",
+              "method": "POST",
+              "operation": "register",
+              "path": "/auth/register",
+              "request": {
+                "shape": {
+                  "email": "email",
+                  "name": "string",
+                  "password": "string"
+                }
+              },
+              "response": {
+                "entity": "User",
+                "kind": "entity"
+              },
+              "status": 201
+            },
+            {
+              "auth": true,
+              "entity": "User",
+              "id": "GET /auth/me",
+              "method": "GET",
+              "operation": "me",
+              "path": "/auth/me",
+              "response": {
+                "entity": "User",
+                "kind": "entity"
+              },
+              "status": 200
+            }
+          ]
+        }
+      },
+      "type": "generate"
+    },
+    {
+      "constraints": [
+        {
+          "kind": "golden-rule",
+          "value": "all conformance tests must pass"
+        }
+      ],
+      "context": {
+        "specNodeIds": [
+          "app:ContentAPI",
+          "auth:MainAuth",
+          "crud:Comment",
+          "crud:Post",
+          "crud:User",
+          "entity:Comment",
+          "entity:Post",
+          "entity:User",
+          "fastapi:Server"
+        ]
+      },
+      "id": "fastapi:conform",
+      "input": {
+        "commands": [
+          "uv venv .venv --clear --quiet",
+          "uv pip install --quiet -e '.[dev]'",
+          ".venv/bin/python -c \"from app.main import app, create_app; assert app.title\"",
+          ".venv/bin/python -m pytest conformance -q"
+        ],
+        "suite": [
+          "conformance/conftest.py",
+          "conformance/contract.json",
+          "conformance/helpers.py",
+          "conformance/test_contract.py"
+        ]
+      },
+      "type": "verify"
+    }
+  ],
+  "verification": {
+    "check": [
+      {
+        "command": ".venv/bin/python -c \"from app.main import app, create_app; assert app.title\"",
+        "name": "import",
+        "timeoutMs": 60000
+      },
+      {
+        "command": ".venv/bin/python -m pytest conformance -q",
+        "name": "conformance",
+        "timeoutMs": 300000
+      }
+    ],
+    "setup": [
+      {
+        "command": "uv venv .venv --clear --quiet",
+        "name": "venv",
+        "timeoutMs": 120000
+      },
+      {
+        "command": "uv pip install --quiet -e '.[dev]'",
+        "name": "install",
+        "timeoutMs": 600000
+      }
+    ]
+  }
+}

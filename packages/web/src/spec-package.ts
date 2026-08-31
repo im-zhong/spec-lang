@@ -1,5 +1,5 @@
 import { definePackage, defineNode } from "@spec/package-sdk"
-import { validateEntities } from "./validators"
+import { validateCountApis, validateCrud, validateEntities } from "./validators"
 import type { SpecNode } from "@spec/core"
 
 function inspectEntity(node: SpecNode): { label: string; lines: string[] } {
@@ -16,11 +16,24 @@ function inspectEntity(node: SpecNode): { label: string; lines: string[] } {
         d.unique === true ? "unique" : undefined,
         d.optional === true ? "optional" : undefined,
         d.default !== undefined ? `default ${JSON.stringify(d.default)}` : undefined,
+        typeof d.target === "string" ? `→ ${d.target}` : undefined,
       ].filter(Boolean)
       lines.push(`${fieldName}: ${String(d.type)}${flags.length > 0 ? ` [${flags.join("][")}]` : ""}`)
     }
   }
   return { label: node.name ?? "entity", lines }
+}
+
+function inspectCrud(node: SpecNode): { label: string; lines: string[] } {
+  const entity = node.attributes.entity as { nodeId?: string } | undefined
+  const methods = Array.isArray(node.attributes.methods)
+    ? (node.attributes.methods as string[]).join(", ")
+    : "list, get, create, update, delete"
+  const auth = node.attributes.auth === false ? "public" : "protected"
+  return {
+    label: `${node.name ?? "crud"} → ${entity?.nodeId ?? "<invalid>"}`,
+    lines: [`${String(node.attributes.path)}  (${methods})  [${auth}]`],
+  }
 }
 
 export default definePackage({
@@ -31,7 +44,8 @@ export default definePackage({
     defineNode("field"),
     defineNode("page"),
     defineNode("api"),
+    defineNode("crud"),
   ],
-  validators: [validateEntities],
-  inspectors: { entity: inspectEntity },
+  validators: [validateEntities, validateCrud, validateCountApis],
+  inspectors: { entity: inspectEntity, crud: inspectCrud },
 })

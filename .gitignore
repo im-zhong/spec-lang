@@ -146,3 +146,7 @@ vite.config.ts.timestamp-*
 .spec/
 .DS_Store
 .playwright-mcp/
+out/
+
+# generation outputs
+agent.result.json

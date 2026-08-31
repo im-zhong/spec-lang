@@ -13,7 +13,9 @@
   },
   "dependencies": {
     "@spec/compiler": "workspace:*",
-    "@spec/core": "workspace:*"
+    "@spec/core": "workspace:*",
+    "@spec/agent": "workspace:*",
+    "@spec/fastapi": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^2.1.8"
