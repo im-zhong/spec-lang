@@ -82,10 +82,10 @@ compiler core emits structural codes; each package owns its domain codes.
 
 | Code                        | Level   | Meaning                                           |
 | --------------------------- | ------- | ------------------------------------------------- |
-| `AGENT_TASK_FAILED`         | error   | The coding agent run failed                       |
-| `AGENT_VERIFICATION_FAILED` | error   | A shot failed the compiler's verification plan    |
-| `AGENT_VERIFIED`            | info    | A shot passed conformance verification            |
-| `AGENT_REPAIRED`            | info    | A shot was repaired after verification failure    |
+| `AGENT_TASK_FAILED`         | error   | A DAG generation task's agent run failed          |
+| `GENERATION_NONCONFORMANT`  | error   | A shot failed its FIRST verification — a specification/blueprint defect; pin the contract and regenerate (there is no repair) |
+| `SCOPE_VIOLATION`           | warning | A task modified files outside its declared scope  |
+| `AGENT_VERIFIED`            | info    | A shot passed conformance on the first attempt    |
 | `REPEATABLE`                | info    | All shots passed the same conformance suite       |
 | `INTERFACE_IDENTICAL`       | info    | Shots expose an identical OpenAPI interface       |
 | `INTERFACE_DIVERGENT`       | error   | Shots diverge — the golden rule is violated       |

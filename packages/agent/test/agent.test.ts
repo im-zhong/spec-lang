@@ -6,6 +6,8 @@ import { parseResultJson } from "../src/runner"
 import { normalizeJson, OPENAPI_SNIPPET } from "../src/repeatability"
 import { isCompilerWorkspace, MARKER_FILE, prepareWorkspace, scanArtifacts, sha256 } from "../src/artifacts"
 import { runCommand } from "../src/orchestrate"
+import { AgentHarness, schedule, type HarnessTask } from "../src/harness"
+import type { AgentRunResult, ClaudeCodeAgentRunner } from "../src/runner"
 
 describe("parseResultJson", () => {
   it("parses a clean result payload", () => {
@@ -97,5 +99,120 @@ describe("repeatability helpers", () => {
     fs.writeFileSync(path.join(tmp, "snap.py"), OPENAPI_SNIPPET)
     const { execFileSync } = await import("node:child_process")
     expect(() => execFileSync("python3", ["-m", "py_compile", "snap.py"], { cwd: tmp })).not.toThrow()
+  })
+})
+
+describe("agent harness", () => {
+  /** Fake runner: records prompts, writes one file per task. */
+  function fakeRunner(
+    handlers: Record<string, (cwd: string) => void>,
+  ): ClaudeCodeAgentRunner {
+    const seen: string[] = []
+    const runner = {
+      seen,
+      run: async (prompt: string, cwd: string): Promise<AgentRunResult> => {
+        seen.push(prompt)
+        for (const [marker, handler] of Object.entries(handlers)) {
+          if (prompt.includes(`# Task: ${marker}`)) {
+            handler(cwd)
+            return { ok: true, resultText: `did ${marker}` }
+          }
+        }
+        return { ok: false, error: `no handler for prompt: ${prompt.slice(0, 60)}` }
+      },
+    }
+    return runner as unknown as ClaudeCodeAgentRunner
+  }
+
+  const tasks: HarnessTask[] = [
+    { id: "app", dependsOn: ["router:b", "router:a"], scope: ["app/main.py"], prompt: "# Task: app\n" },
+    { id: "router:a", dependsOn: ["models"], scope: ["app/routers/a.py"], prompt: "# Task: router:a\n" },
+    { id: "router:b", dependsOn: ["models"], scope: ["app/routers/b.py"], prompt: "# Task: router:b\n" },
+    { id: "models", dependsOn: [], scope: ["app/models.py"], prompt: "# Task: models\n" },
+  ]
+
+  it("schedule is a deterministic topological order", () => {
+    const order = schedule(tasks).map((t) => t.id)
+    expect(order.indexOf("models")).toBeLessThan(order.indexOf("router:a"))
+    expect(order.indexOf("models")).toBeLessThan(order.indexOf("router:b"))
+    expect(order.indexOf("router:a")).toBeLessThan(order.indexOf("app"))
+    expect(order.indexOf("router:b")).toBeLessThan(order.indexOf("app"))
+    expect(schedule(tasks).map((t) => t.id)).toEqual(order)
+  })
+
+  it("schedule rejects cycles", () => {
+    const cyclic: HarnessTask[] = [
+      { id: "a", dependsOn: ["b"], scope: [], prompt: "" },
+      { id: "b", dependsOn: ["a"], scope: [], prompt: "" },
+    ]
+    expect(() => schedule(cyclic)).toThrow(/cycle/)
+  })
+
+  it("executes tasks in dependency order and attributes produced files", async () => {
+    const order: string[] = []
+    const runner = fakeRunner({
+      models: (cwd) => fs.writeFileSync(path.join(cwd, "app/models.py"), "models\n"),
+      "router:a": (cwd) => fs.writeFileSync(path.join(cwd, "app/routers/a.py"), "a\n"),
+      "router:b": (cwd) => fs.writeFileSync(path.join(cwd, "app/routers/b.py"), "b\n"),
+      app: (cwd) => {
+        order.push("app-after-routers")
+        fs.writeFileSync(path.join(cwd, "app/main.py"), "main\n")
+      },
+    })
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "spec-harness-"))
+    fs.mkdirSync(path.join(ws, "app", "routers"), { recursive: true })
+    const report = await new AgentHarness({ runner }).execute(ws, tasks)
+
+    expect(report.ok).toBe(true)
+    expect(report.results.map((r) => r.id)).toEqual(["models", "router:a", "router:b", "app"])
+    // the app task really ran after both routers wrote their files
+    expect(order).toEqual(["app-after-routers"])
+    const app = report.results.find((r) => r.id === "app")!
+    expect(app.produced.map((p) => p.path)).toEqual(["app/main.py"])
+    expect(app.scopeViolations).toEqual([])
+    expect(fs.readFileSync(path.join(ws, "app/main.py"), "utf8")).toBe("main\n")
+  })
+
+  it("detects scope violations and stops on failed tasks", async () => {
+    const runner = fakeRunner({
+      models: (cwd) => fs.writeFileSync(path.join(cwd, "app/models.py"), "models\n"),
+      "router:a": (cwd) => {
+        fs.writeFileSync(path.join(cwd, "app/routers/a.py"), "a\n")
+        fs.writeFileSync(path.join(cwd, "app/rogue.py"), "rogue\n") // out of scope
+      },
+      "router:b": () => {
+        throw new Error("router:b must not run — the chain is broken")
+      },
+      app: () => {
+        throw new Error("app must not run")
+      },
+    })
+    // make router:b fail: replace its handler effect by returning ok:false
+    const failing = {
+      run: async (prompt: string, cwd: string): Promise<AgentRunResult> => {
+        if (prompt.includes("# Task: models")) {
+          fs.writeFileSync(path.join(cwd, "app/models.py"), "models\n")
+          return { ok: true }
+        }
+        if (prompt.includes("# Task: router:a")) {
+          fs.writeFileSync(path.join(cwd, "app/routers/a.py"), "a\n")
+          fs.writeFileSync(path.join(cwd, "app/rogue.py"), "rogue\n")
+          return { ok: true }
+        }
+        if (prompt.includes("# Task: router:b")) return { ok: false, error: "boom" }
+        throw new Error("app must not run after a failure")
+      },
+    }
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "spec-harness-"))
+    fs.mkdirSync(path.join(ws, "app", "routers"), { recursive: true })
+    const report = await new AgentHarness({
+      runner: failing as unknown as ClaudeCodeAgentRunner,
+    }).execute(ws, tasks)
+
+    expect(report.ok).toBe(false)
+    expect(report.results.map((r) => r.id)).toEqual(["models", "router:a", "router:b"])
+    const rogue = report.results.find((r) => r.id === "router:a")!
+    expect(rogue.scopeViolations).toEqual(["app/rogue.py"])
+    void runner
   })
 })

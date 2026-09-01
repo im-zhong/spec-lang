@@ -121,6 +121,7 @@ export function serializeValue(value: unknown): unknown {
       if (record.optionalFlag === true) flat.optional = true
       if (record.hasDefault === true) flat.default = serializeValue(record.defaultValue)
       if (typeof record.refTarget === "string") flat.target = record.refTarget
+      if (Array.isArray(record.states)) flat.states = [...record.states]
       return flat
     }
     const out: Record<string, unknown> = {}

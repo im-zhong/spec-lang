@@ -95,6 +95,12 @@
         },
         "status": 404
       },
+      "guardFailed": {
+        "body": {
+          "detail": "Invalid state"
+        },
+        "status": 409
+      },
       "invalidCredentials": {
         "body": {
           "detail": "Invalid credentials"
@@ -127,6 +133,7 @@
       ],
       "idGeneration": "serverUuid4",
       "listOrder": "createdAtAscending",
+      "listScope": "allRows",
       "listShape": "bareArray",
       "refFields": "referencedIdString"
     }
@@ -224,6 +231,7 @@
       "table": "users"
     }
   ],
+  "lifecycles": [],
   "routes": [
     {
       "auth": true,
@@ -513,5 +521,22 @@
       },
       "status": 200
     }
-  ]
+  ],
+  "stack": {
+    "dependencies": {
+      "bcrypt": "5.0.0",
+      "email-validator": "2.2.0",
+      "fastapi": "0.141.1",
+      "pydantic": "2.13.5",
+      "pydantic-settings": "2.15.0",
+      "pyjwt": "2.13.0",
+      "sqlalchemy": "2.0.52",
+      "uvicorn": "0.52.4"
+    },
+    "dev": {
+      "httpx": "0.28.1",
+      "pytest": "9.1.1"
+    },
+    "python": "3.13"
+  }
 }

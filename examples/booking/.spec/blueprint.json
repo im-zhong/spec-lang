@@ -95,6 +95,12 @@
         },
         "status": 404
       },
+      "guardFailed": {
+        "body": {
+          "detail": "Invalid state"
+        },
+        "status": 409
+      },
       "invalidCredentials": {
         "body": {
           "detail": "Invalid credentials"
@@ -127,6 +133,7 @@
       ],
       "idGeneration": "serverUuid4",
       "listOrder": "createdAtAscending",
+      "listScope": "allRows",
       "listShape": "bareArray",
       "refFields": "referencedIdString"
     }
@@ -155,6 +162,16 @@
           "column": "starts_at",
           "name": "startsAt",
           "type": "datetime"
+        },
+        {
+          "column": "status",
+          "name": "status",
+          "states": [
+            "pending",
+            "confirmed",
+            "cancelled"
+          ],
+          "type": "enum"
         },
         {
           "column": "user",
@@ -216,6 +233,30 @@
       ],
       "name": "Venue",
       "table": "venues"
+    }
+  ],
+  "lifecycles": [
+    {
+      "entity": "Booking",
+      "field": "status",
+      "initial": "pending",
+      "transitions": [
+        {
+          "event": "confirm",
+          "from": [
+            "pending"
+          ],
+          "to": "confirmed"
+        },
+        {
+          "event": "cancel",
+          "from": [
+            "pending",
+            "confirmed"
+          ],
+          "to": "cancelled"
+        }
+      ]
     }
   ],
   "routes": [
@@ -394,6 +435,49 @@
       "status": 200
     },
     {
+      "auth": true,
+      "entity": "Booking",
+      "id": "POST /bookings/{id}/confirm",
+      "method": "POST",
+      "operation": "transition",
+      "path": "/bookings/{id}/confirm",
+      "response": {
+        "entity": "Booking",
+        "kind": "entity"
+      },
+      "status": 200,
+      "transition": {
+        "event": "confirm",
+        "field": "status",
+        "from": [
+          "pending"
+        ],
+        "to": "confirmed"
+      }
+    },
+    {
+      "auth": true,
+      "entity": "Booking",
+      "id": "POST /bookings/{id}/cancel",
+      "method": "POST",
+      "operation": "transition",
+      "path": "/bookings/{id}/cancel",
+      "response": {
+        "entity": "Booking",
+        "kind": "entity"
+      },
+      "status": 200,
+      "transition": {
+        "event": "cancel",
+        "field": "status",
+        "from": [
+          "confirmed",
+          "pending"
+        ],
+        "to": "cancelled"
+      }
+    },
+    {
       "auth": false,
       "entity": "User",
       "id": "POST /auth/login",
@@ -444,5 +528,22 @@
       },
       "status": 200
     }
-  ]
+  ],
+  "stack": {
+    "dependencies": {
+      "bcrypt": "5.0.0",
+      "email-validator": "2.2.0",
+      "fastapi": "0.141.1",
+      "pydantic": "2.13.5",
+      "pydantic-settings": "2.15.0",
+      "pyjwt": "2.13.0",
+      "sqlalchemy": "2.0.52",
+      "uvicorn": "0.52.4"
+    },
+    "dev": {
+      "httpx": "0.28.1",
+      "pytest": "9.1.1"
+    },
+    "python": "3.13"
+  }
 }

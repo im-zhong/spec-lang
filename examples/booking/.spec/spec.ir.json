@@ -42,7 +42,7 @@
       "source": {
         "column": 22,
         "file": "app.spec.ts",
-        "line": 42
+        "line": 45
       }
     },
     {
@@ -62,7 +62,8 @@
           "User",
           "Venue",
           "Booking",
-          "BookingCount"
+          "BookingCount",
+          "BookingLifecycle"
         ]
       },
       "id": "app:BookingAPI",
@@ -72,7 +73,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 52
+        "line": 78
       }
     },
     {
@@ -100,7 +101,7 @@
           "source": {
             "column": 13,
             "file": "app.spec.ts",
-            "line": 36
+            "line": 39
           }
         }
       ],
@@ -111,7 +112,7 @@
       "source": {
         "column": 18,
         "file": "app.spec.ts",
-        "line": 34
+        "line": 37
       }
     },
     {
@@ -135,7 +136,7 @@
       "source": {
         "column": 18,
         "file": "app.spec.ts",
-        "line": 41
+        "line": 44
       }
     },
     {
@@ -157,7 +158,7 @@
       "source": {
         "column": 15,
         "file": "app.spec.ts",
-        "line": 39
+        "line": 42
       }
     },
     {
@@ -175,7 +176,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 40
+        "line": 43
       }
     },
     {
@@ -190,6 +191,14 @@
           },
           "startsAt": {
             "type": "datetime"
+          },
+          "status": {
+            "states": [
+              "pending",
+              "confirmed",
+              "cancelled"
+            ],
+            "type": "enum"
           },
           "user": {
             "target": "User",
@@ -208,7 +217,7 @@
       "source": {
         "column": 17,
         "file": "app.spec.ts",
-        "line": 26
+        "line": 28
       }
     },
     {
@@ -233,7 +242,7 @@
       "source": {
         "column": 14,
         "file": "app.spec.ts",
-        "line": 14
+        "line": 16
       }
     },
     {
@@ -258,7 +267,7 @@
       "source": {
         "column": 15,
         "file": "app.spec.ts",
-        "line": 20
+        "line": 22
       }
     },
     {
@@ -288,8 +297,25 @@
           },
           {
             "nodeId": "api:BookingCount"
+          },
+          {
+            "nodeId": "lifecycle:BookingLifecycle"
           }
         ],
+        "stack": {
+          "dependencies": {
+            "bcrypt": "5.0.0",
+            "fastapi": "0.141.1",
+            "pydantic": "2.13.5",
+            "pyjwt": "2.13.0",
+            "sqlalchemy": "2.0.52"
+          },
+          "dev": {
+            "httpx": "0.28.1",
+            "pytest": "9.1.1"
+          },
+          "python": "3.13"
+        },
         "title": "Booking API",
         "version": "0.1.0"
       },
@@ -300,7 +326,42 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 46
+        "line": 59
+      }
+    },
+    {
+      "attributes": {
+        "entity": {
+          "nodeId": "entity:Booking"
+        },
+        "field": "status",
+        "initial": "pending",
+        "transitions": [
+          {
+            "event": "confirm",
+            "from": [
+              "pending"
+            ],
+            "to": "confirmed"
+          },
+          {
+            "event": "cancel",
+            "from": [
+              "pending",
+              "confirmed"
+            ],
+            "to": "cancelled"
+          }
+        ]
+      },
+      "id": "lifecycle:BookingLifecycle",
+      "kind": "lifecycle",
+      "name": "BookingLifecycle",
+      "package": "@spec/web",
+      "source": {
+        "column": 21,
+        "file": "app.spec.ts",
+        "line": 48
       }
     },
     {
@@ -327,7 +388,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 44
+        "line": 57
       }
     }
   ],

@@ -20,9 +20,9 @@ export interface VerificationPlan {
 export function fastApiVerification(): VerificationPlan {
   return {
     setup: [
-      // --clear keeps verification idempotent across repair rounds
-      // (uv refuses to recreate an existing venv otherwise).
-      { name: "venv", command: "uv venv .venv --clear --quiet", timeoutMs: 120_000 },
+      // --clear keeps verification idempotent; --python pins the stack's
+      // interpreter version (the stack is part of the spec).
+      { name: "venv", command: "uv venv .venv --clear --quiet --python 3.13", timeoutMs: 180_000 },
       { name: "install", command: "uv pip install --quiet -e '.[dev]'", timeoutMs: 600_000 },
     ],
     check: [

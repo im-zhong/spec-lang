@@ -24,6 +24,7 @@ export type RouteOperation =
   | "create"
   | "update"
   | "delete"
+  | "transition"
   | "login"
   | "register"
   | "me"
@@ -33,9 +34,11 @@ export interface BlueprintField {
   name: string
   /** snake_case column name. */
   column: string
-  type: "string" | "int" | "boolean" | "uuid" | "email" | "datetime" | "ref"
+  type: "string" | "int" | "boolean" | "uuid" | "email" | "datetime" | "ref" | "enum"
   /** For ref fields: referenced entity name. */
   target?: string
+  /** For enum fields: the closed set of states. */
+  states?: string[]
   unique?: boolean
   optional?: boolean
   default?: unknown
@@ -67,6 +70,16 @@ export interface BlueprintRoute {
   request?: { shape: Record<string, string>; partial?: boolean }
   /** Response semantics. */
   response: { kind: "entity" | "entityArray" | "empty" | "token" | "count"; entity?: string }
+  /** For transition routes: the state machine edge being lowered. */
+  transition?: { field: string; event: string; from: string[]; to: string }
+}
+
+/** A served lifecycle (behavior Phase 1): entity + state machine. */
+export interface BlueprintLifecycle {
+  entity: string
+  field: string
+  initial: string
+  transitions: Array<{ event: string; from: string[]; to: string }>
 }
 
 export interface BlueprintAuth {
@@ -94,6 +107,10 @@ export interface BackendContract {
     listShape: "bareArray"
     /** Implicit created_at orders list results ascending; never serialized. */
     listOrder: "createdAtAscending"
+    /** list returns EVERY row of the entity — including the requesting
+     * principal when the listed entity is the principal. No requester
+     * filtering of any kind. */
+    listScope: "allRows"
     /** Server generates uuid4 ids; id is ignored in create bodies. */
     idGeneration: "serverUuid4"
     /** Fields with defaults are omittable in create bodies; the declared
@@ -108,6 +125,8 @@ export interface BackendContract {
     danglingRef: { status: 404; body: { detail: "Not found" } }
     /** Unique-field violations on create/update/register. */
     alreadyExists: { status: 409; body: { detail: "Already exists" } }
+    /** A lifecycle transition whose guard (current state) fails. */
+    guardFailed: { status: 409; body: { detail: "Invalid state" } }
     /** Field validation failures use the framework default (422). */
     validation: { status: 422; body: "fastapi-default" }
   }
@@ -129,6 +148,7 @@ export interface BackendBlueprint {
   }
   entities: BlueprintEntity[]
   routes: BlueprintRoute[]
+  lifecycles: BlueprintLifecycle[]
   auth?: BlueprintAuth
   database: {
     engine: "postgres" | "sqlite"
@@ -138,7 +158,72 @@ export interface BackendBlueprint {
     /** database_url values are SQLAlchemy URL strings, never bare paths. */
     urlFormat: "sqlalchemy-url"
   }
+  /** The pinned technology stack — part of the contract. */
+  stack: BackendStack
   contract: BackendContract
+}
+
+/**
+ * The technology stack, pinned to EXACT versions. Repeatability across
+ * time (not just across shots) requires that two generations resolve
+ * identical dependencies; floating versions made that a coincidence of
+ * install dates. Defaults are owned by @spec/fastapi and validated by the
+ * golden-rule runs; specifications may override individual pins via
+ * `fastapi({ stack: { fastapi: "0.141.1" } })`.
+ */
+export interface BackendStack {
+  /** Python minor version used for generation + verification. */
+  python: string
+  /** Runtime dependencies (name → exact version spec). */
+  dependencies: Record<string, string>
+  /** Dev/test dependencies (name → exact version spec). */
+  dev: Record<string, string>
+}
+
+export const DEFAULT_FASTAPI_STACK: BackendStack = {
+  python: "3.13",
+  dependencies: {
+    fastapi: "0.141.1",
+    uvicorn: "0.52.4",
+    sqlalchemy: "2.0.52",
+    pydantic: "2.13.5",
+    "pydantic-settings": "2.15.0",
+    pyjwt: "2.13.0",
+    bcrypt: "5.0.0",
+    "email-validator": "2.2.0",
+  },
+  dev: {
+    pytest: "9.1.1",
+    httpx: "0.28.1",
+  },
+}
+
+/** Merge spec-level stack overrides onto the pinned defaults. */
+export function resolveStack(overrides: unknown): BackendStack {
+  const merged: BackendStack = {
+    python: DEFAULT_FASTAPI_STACK.python,
+    dependencies: { ...DEFAULT_FASTAPI_STACK.dependencies },
+    dev: { ...DEFAULT_FASTAPI_STACK.dev },
+  }
+  if (overrides && typeof overrides === "object" && !Array.isArray(overrides)) {
+    const record = overrides as Record<string, unknown>
+    if (typeof record.python === "string") merged.python = record.python
+    for (const section of ["dependencies", "dev"] as const) {
+      const given = record[section]
+      if (given && typeof given === "object" && !Array.isArray(given)) {
+        for (const [name, version] of Object.entries(given as Record<string, unknown>)) {
+          if (typeof version === "string") merged[section][name] = version
+        }
+      }
+    }
+  }
+  merged.dependencies = sortRecord(merged.dependencies)
+  merged.dev = sortRecord(merged.dev)
+  return merged
+}
+
+function sortRecord(record: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(record).sort(([a], [b]) => (a < b ? -1 : 1)))
 }
 
 /** snake_case("BlogPost") → "blog_post". */
@@ -176,10 +261,14 @@ function crudMethods(node: SpecNode): CrudMethod[] {
 }
 
 /** Request body shape for create: all fields except the id column. */
-function createRequestShape(entity: BlueprintEntity): Record<string, string> {
+function createRequestShape(
+  entity: BlueprintEntity,
+  lifecycleField?: string,
+): Record<string, string> {
   const shape: Record<string, string> = {}
   for (const field of entity.fields) {
     if (field.name === "id") continue
+    if (field.name === lifecycleField) continue // server assigns the initial state
     shape[field.name] = field.type === "ref" ? `ref:${field.target ?? ""}` : field.type
     if (field.optional) shape[field.name] = `${shape[field.name]}?`
   }
@@ -231,6 +320,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
           type: def.type as BlueprintField["type"],
         }
         if (typeof def.target === "string") field.target = def.target
+        if (Array.isArray(def.states)) field.states = [...(def.states as string[])]
         if (def.unique === true) field.unique = true
         if (def.optional === true) field.optional = true
         if (def.default !== undefined) field.default = def.default
@@ -268,6 +358,21 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
   const authActive =
     !!authNode && isServed(authNode) && principalName !== undefined && entityByName.has(principalName)
 
+  // Served lifecycles: entity name → { field, initial } (Phase 1 of
+  // docs/behavior-model.md — transitions derive below, after crud paths).
+  const lifecycles = new Map<string, { field: string; initial: string }>()
+  for (const node of nodes.filter((n) => n.kind === "lifecycle")) {
+    if (!isServed(node)) continue
+    const targetRef = node.attributes.entity
+    const targetId =
+      isPlainObject(targetRef) && typeof targetRef.nodeId === "string" ? targetRef.nodeId : undefined
+    const entityName = targetId ? byId.get(targetId)?.name : undefined
+    if (!entityName) continue
+    if (typeof node.attributes.field === "string" && typeof node.attributes.initial === "string") {
+      lifecycles.set(entityName, { field: node.attributes.field, initial: node.attributes.initial })
+    }
+  }
+
   for (const node of nodes.filter((n) => n.kind === "crud")) {
     if (!isServed(node)) continue
     const targetRef = node.attributes.entity
@@ -282,7 +387,8 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
     const auth = authActive && node.attributes.auth !== false
     const path = String(node.attributes.path ?? `/${entityName.toLowerCase()}s`)
     const base = `${prefix}${path}`
-    const request = createRequestShape(entity)
+    const lifecycle = lifecycles.get(entityName)
+    const request = createRequestShape(entity, lifecycle?.field)
 
     if (methods.includes("list")) {
       routes.push({
@@ -371,6 +477,66 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
     })
   }
 
+  /* ---------------- lifecycle transitions (behavior Phase 1) ---------------- */
+  const blueprintLifecycles: BlueprintLifecycle[] = []
+  for (const node of nodes.filter((n) => n.kind === "lifecycle")) {
+    if (!isServed(node)) continue
+    const targetRef = node.attributes.entity
+    const targetId =
+      isPlainObject(targetRef) && typeof targetRef.nodeId === "string" ? targetRef.nodeId : undefined
+    const entityName = targetId ? byId.get(targetId)?.name : undefined
+    if (!entityName || !entityByName.has(entityName)) continue
+    const field = String(node.attributes.field ?? "")
+    const transitions = Array.isArray(node.attributes.transitions) ? node.attributes.transitions : []
+    const declared = transitions
+      .filter((raw): raw is Record<string, unknown> => isPlainObject(raw))
+      .filter((raw) => typeof raw.event === "string" && typeof raw.to === "string")
+      .map((raw) => ({
+        event: String(raw.event),
+        from: (Array.isArray(raw.from) ? raw.from : []).filter(
+          (s): s is string => typeof s === "string",
+        ),
+        to: String(raw.to),
+      }))
+    if (declared.length > 0 && typeof node.attributes.initial === "string") {
+      blueprintLifecycles.push({
+        entity: entityName,
+        field,
+        initial: String(node.attributes.initial),
+        transitions: declared,
+      })
+    }
+
+    // Path base mirrors the entity's CRUD resource when one exists.
+    const crudNode = nodes.find(
+      (n) => n.kind === "crud" && n.attributes.entity &&
+        isPlainObject(n.attributes.entity) && (n.attributes.entity as { nodeId?: string }).nodeId === targetId,
+    )
+    const base = crudNode
+      ? `${prefix}${String(crudNode.attributes.path ?? `/${entityName.toLowerCase()}s`)}`
+      : `${prefix}/${entityName.toLowerCase()}s`
+
+    for (const raw of transitions) {
+      if (!isPlainObject(raw)) continue
+      const event = String(raw.event)
+      const to = typeof raw.to === "string" ? raw.to : ""
+      const from = Array.isArray(raw.from) ? (raw.from as string[]).filter((s) => typeof s === "string") : []
+      if (!event || !to) continue
+      const path = `${base}/{id}/${event}`
+      routes.push({
+        id: `POST ${path}`,
+        method: "POST",
+        path,
+        operation: "transition",
+        entity: entityName,
+        status: 200,
+        auth: authActive,
+        response: { kind: "entity", entity: entityName },
+        transition: { field, event, from: [...from].sort(), to },
+      })
+    }
+  }
+
   /* ---------------- auth routes ---------------- */
   let auth: BlueprintAuth | undefined
   let identity = "email"
@@ -433,6 +599,9 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
   )
   const engine: "postgres" | "sqlite" = databaseNode?.kind === "sqlite" ? "sqlite" : "postgres"
 
+  /* ---------------- stack (pinned, spec-overridable) ---------------- */
+  const stack = resolveStack(serverNode?.attributes.stack)
+
   /* ---------------- pinned contract ---------------- */
   const contract: BackendContract = {
     serialization: {
@@ -441,6 +610,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
       hiddenColumns: ["password_hash", "created_at"],
       listShape: "bareArray",
       listOrder: "createdAtAscending",
+      listScope: "allRows",
       idGeneration: "serverUuid4",
       createDefaults: "omittable-appliesDefault",
     },
@@ -450,6 +620,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
       notFound: { status: 404, body: { detail: "Not found" } },
       danglingRef: { status: 404, body: { detail: "Not found" } },
       alreadyExists: { status: 409, body: { detail: "Already exists" } },
+      guardFailed: { status: 409, body: { detail: "Invalid state" } },
       validation: { status: 422, body: "fastapi-default" },
     },
     auth: {
@@ -473,8 +644,10 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
     },
     entities,
     routes,
+    lifecycles: blueprintLifecycles,
     ...(auth ? { auth } : {}),
     database: { engine, urlEnv: "DATABASE_URL", fallback: "sqlite:///./dev.db", urlFormat: "sqlalchemy-url" },
+    stack,
     contract,
   }
 }

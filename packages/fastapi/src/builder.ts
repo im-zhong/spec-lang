@@ -18,6 +18,21 @@ import {
 
 export const FASTAPI_REQUIRES = ["RelationalStore"]
 
+/**
+ * Stack overrides: exact version pins merged onto the target package's
+ * validated defaults. Pinning the stack is part of the golden rule —
+ * floating versions make repeatability a coincidence of install dates.
+ *   fastapi({ stack: { fastapi: "0.141.1", dependencies: { pydantic: "2.13.5" } } })
+ */
+export interface FastApiStackInput {
+  /** Python minor version, e.g. "3.13". */
+  python?: string
+  /** Runtime dependency pins (name → exact version). */
+  dependencies?: Record<string, string>
+  /** Dev/test dependency pins (name → exact version). */
+  dev?: Record<string, string>
+}
+
 export interface FastApiInput {
   /** OpenAPI title; defaults to the app name. */
   title?: string
@@ -30,6 +45,8 @@ export interface FastApiInput {
   services?: unknown
   /** Storage resources (e.g. postgres(...)) this server binds to. */
   resources?: unknown
+  /** Technology stack pins (merged onto @spec/fastapi's defaults). */
+  stack?: FastApiStackInput
   [key: string]: unknown
 }
 
@@ -63,6 +80,12 @@ export function fastapi(input: FastApiInput): SpecNodeBuilder {
   )
   if (servesCrud || servesAuth) {
     attributes.requires = [...FASTAPI_REQUIRES]
+  }
+
+  // Stack pins are part of the specification: store the overrides (the
+  // blueprint merges them onto the pinned defaults).
+  if (input?.stack !== undefined) {
+    attributes.stack = serializeValue(input.stack)
   }
 
   return nodeBuilder("@spec/fastapi", "fastapi", undefined, attributes)

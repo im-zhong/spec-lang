@@ -72,6 +72,7 @@ export default defineConfig({
           items: [
             { text: "Agentic generation", link: "/guide/generate" },
             { text: "The golden rule", link: "/guide/golden-rule" },
+            { text: "Why static evaluation", link: "/guide/why-static-evaluation" },
           ],
         },
         {

@@ -99,6 +99,51 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
     expect(bookings.every((r) => r.auth)).toBe(true)
   })
 
+  it("booking: lifecycle lowers to transition operations with pinned outcomes", async () => {
+    const result = await compileExample("booking")
+    const plan = planGeneration(result.ir)
+    // the state machine itself
+    expect(plan.blueprint.lifecycles).toEqual([
+      {
+        entity: "Booking",
+        field: "status",
+        initial: "pending",
+        transitions: [
+          { event: "confirm", from: ["pending"], to: "confirmed" },
+          { event: "cancel", from: ["pending", "confirmed"], to: "cancelled" },
+        ],
+      },
+    ])
+    // one route per transition, mirroring the crud path
+    const confirm = plan.blueprint.routes.find((r) => r.id === "POST /bookings/{id}/confirm")
+    expect(confirm).toMatchObject({
+      method: "POST",
+      status: 200,
+      auth: true,
+      operation: "transition",
+      entity: "Booking",
+      response: { kind: "entity", entity: "Booking" },
+      transition: { field: "status", event: "confirm", from: ["pending"], to: "confirmed" },
+    })
+    // the guard-failure body is part of the contract
+    expect(plan.blueprint.contract.errors.guardFailed).toEqual({
+      status: 409,
+      body: { detail: "Invalid state" },
+    })
+    // the state field is server-controlled: excluded from create bodies
+    const create = plan.blueprint.routes.find((r) => r.id === "POST /bookings")!
+    expect(Object.keys(create.request!.shape)).not.toContain("status")
+    // the conformance matrix asserts legal/illegal/unknown-id outcomes
+    const testFile = plan.conformance.files["conformance/test_contract.py"]
+    expect(testFile).toContain("def test_transition_confirm(client):")
+    expect(testFile).toContain('assert r.json()["status"] == "confirmed"')
+    expect(testFile).toContain('assert r.json() == {"detail": "Invalid state"}')
+    expect(testFile).toContain("def test_transition_cancel(client):")
+    // projects without lifecycles derive none
+    const inventory = planGeneration((await compileExample("inventory")).ir)
+    expect(inventory.blueprint.lifecycles).toEqual([])
+  }))
+
   it("generated conformance python is syntactically valid", async () => {
     if (!hasPython) return
     for (const name of ["cblog", "inventory", "booking"]) {
@@ -124,21 +169,54 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
     expect(a.conformance.files["conformance/test_contract.py"]).toBe(
       b.conformance.files["conformance/test_contract.py"],
     )
-    expect(a.tasks.map((t) => t.id)).toEqual(["fastapi:implement", "fastapi:conform"])
   })
 
-  it("prompts pin the contract and are deterministic", async () => {
-    const result = await compileExample("cblog")
+  it("derives a correct, deterministic generation DAG", async () => {
+    const result = await compileExample("booking")
     const plan = planGeneration(result.ir)
-    const { implementPrompt, repairPrompt } = await import("../src")
-    const p1 = implementPrompt(plan.blueprint)
-    const p2 = implementPrompt(plan.blueprint)
-    expect(p1).toBe(p2)
-    expect(p1).toContain('"detail": "Not authenticated"')
-    expect(p1).toContain('"detail": "Already exists"')
-    expect(p1).toContain("create_app(database_url")
-    expect(repairPrompt(plan.blueprint, { command: "pytest", exitCode: 1, output: "boom" })).toContain(
-      "FAILED",
-    )
+    const ids = plan.dag.tasks.map((t) => t.id)
+    expect(ids).toEqual([
+      "project",
+      "database",
+      "models",
+      "schemas",
+      "security",
+      "router:Booking",
+      "router:User",
+      "router:Venue",
+      "router:auth",
+      "app",
+    ])
+    // public router has no security dependency
+    const venue = plan.dag.tasks.find((t) => t.id === "router:Venue")!
+    expect(venue.dependsOn).not.toContain("security")
+    const booking = plan.dag.tasks.find((t) => t.id === "router:Booking")!
+    expect(booking.dependsOn).toContain("security")
+    // topological correctness: every dependency appears before its dependents
+    const seen = new Set<string>()
+    for (const task of plan.dag.tasks) {
+      for (const dep of task.dependsOn) expect(seen.has(dep)).toBe(true)
+      seen.add(task.id)
+    }
+    // the no-auth project drops security and the auth router entirely
+    const inventory = planGeneration((await compileExample("inventory")).ir)
+    expect(inventory.dag.tasks.map((t) => t.id)).not.toContain("security")
+    expect(inventory.dag.tasks.map((t) => t.id)).not.toContain("router:auth")
+  })
+
+  it("per-task prompts pin the contract and are deterministic", async () => {
+    const result = await compileExample("cblog")
+    const a = planGeneration(result.ir)
+    const b = planGeneration(result.ir)
+    const pa = a.dag.tasks.find((t) => t.id === "app")!.prompt
+    const pb = b.dag.tasks.find((t) => t.id === "app")!.prompt
+    expect(pa).toBe(pb)
+    expect(pa).toContain("create_app(database_url")
+    const models = a.dag.tasks.find((t) => t.id === "models")!.prompt
+    expect(models).toContain("password_hash")
+    const shared = a.dag.tasks.find((t) => t.id === "router:Post")!.prompt
+    expect(shared).toContain('"detail": "Not authenticated"')
+    expect(shared).toContain('"detail": "Already exists"')
+    expect(shared).toContain("list returns EVERY row")
   })
 })

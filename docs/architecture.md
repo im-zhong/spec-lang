@@ -147,25 +147,30 @@ The `lower` extension point is now exercised by `@spec/fastapi` +
 Spec IR ──(buildBlueprint, pure)──► BackendBlueprint
    blueprint pins EVERYTHING observable:
    routes, status codes, request/response shapes, exact error bodies,
-   auth flow, list ordering, defaults, ref semantics, db url format
+   auth flow, list scope and ordering, defaults, ref semantics, db url format
         │
-        ├──(implementPrompt, deterministic)──► coding agent (claude -p)
-        │                                        writes out/<app>-<n>/
+        ├──(buildTaskDag, deterministic)──► generation DAG
+        │        project → models → schemas/security → routers → app
+        │        one narrow prompt + file scope per task
+        ├──(AgentHarness)──► claude -p per task, topological order,
+        │                    per-task scope auditing  → out/<app>-<n>/
         ├──(buildConformanceSuite, deterministic)──► compiler-owned pytest
         │                                            dropped into every shot
         └──(fastApiVerification)──► uv venv / install / import / pytest
-                     │ failure ──► repairPrompt ──► agent (bounded rounds)
+                     │ ONE attempt, no repair
                      ▼
-        N shots must pass the SAME suite and expose the SAME normalized
-        OpenAPI interface — the golden rule
+        N shots must pass the SAME suite on the FIRST attempt and expose
+        the SAME normalized OpenAPI interface — the golden rule
 ```
 
 Division of responsibility is strict:
 
-- the **agent** writes code — it never grades itself;
+- the **agent harness** writes code task-by-task along the DAG — it never
+  grades itself;
 - the **compiler** owns the contract, the suite and the verdict;
-- divergence between shots is a specification/compiler defect: pin more
-  of the contract, don't re-roll the agent.
+- there is **no repair**: a failed first verification or a divergence
+  between shots is a specification/compiler defect — pin more of the
+  contract and regenerate all shots.
 
 Provenance is real: every generated file becomes an `Artifact` with a
 SHA-256 content hash, `generatedBy` task id and `sourceNodes` pointing at

@@ -16,6 +16,7 @@ export type FieldType =
   | "email"
   | "datetime"
   | "ref"
+  | "enum"
 
 export const FIELD_TYPES: readonly FieldType[] = [
   "string",
@@ -25,6 +26,7 @@ export const FIELD_TYPES: readonly FieldType[] = [
   "email",
   "datetime",
   "ref",
+  "enum",
 ]
 
 export interface FieldSpec {
@@ -36,6 +38,8 @@ export interface FieldSpec {
   readonly defaultValue: unknown
   /** For `ref` fields: the referenced entity's name. */
   readonly refTarget?: string
+  /** For `enum` fields: the closed set of states. */
+  readonly states?: readonly string[]
   unique(): FieldSpec
   optional(): FieldSpec
   default(value: unknown): FieldSpec
@@ -48,6 +52,7 @@ interface FieldData {
   hasDefault?: boolean
   defaultValue?: unknown
   refTarget?: string
+  states?: readonly string[]
 }
 
 export function isFieldSpec(value: unknown): value is FieldSpec {
@@ -59,7 +64,10 @@ export function isFieldSpec(value: unknown): value is FieldSpec {
 }
 
 function makeField(data: FieldData): FieldSpec {
-  const base: Omit<Required<FieldData>, "refTarget"> & { refTarget?: string } = {
+  const base: Omit<Required<FieldData>, "refTarget" | "states"> & {
+    refTarget?: string
+    states?: readonly string[]
+  } = {
     type: data.type,
     uniqueFlag: data.uniqueFlag === true,
     optionalFlag: data.optionalFlag === true,
@@ -70,6 +78,7 @@ function makeField(data: FieldData): FieldSpec {
     __specFieldSpec: true,
     ...base,
     ...(data.refTarget === undefined ? {} : { refTarget: data.refTarget }),
+    ...(data.states === undefined ? {} : { states: [...data.states] }),
     unique: () => makeField({ ...data, ...base, uniqueFlag: true }),
     optional: () => makeField({ ...data, ...base, optionalFlag: true }),
     default: (value: unknown) => makeField({ ...data, ...base, hasDefault: true, defaultValue: value }),
@@ -89,4 +98,6 @@ export const field = {
   datetime: () => makeField({ type: "datetime" }),
   /** Reference to another entity (foreign key): `field.ref("User")`. */
   ref: (target: string) => makeField({ type: "ref", refTarget: target }),
+  /** Closed set of states — the field a `lifecycle` drives. */
+  enum: (...states: string[]) => makeField({ type: "enum", states }),
 }

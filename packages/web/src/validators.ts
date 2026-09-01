@@ -265,3 +265,153 @@ export const validateCountApis = defineValidator("web/validate-count-apis", (ctx
   }
   return diagnostics
 })
+
+/**
+ * Lifecycles (docs/behavior-model.md §5): the state machine must be
+ * well-formed and deterministic — a nondeterministic next-state is
+ * unrepresentable, the same philosophy that rejects Date.now().
+ */
+export const validateLifecycles = defineValidator("web/validate-lifecycles", (ctx) => {
+  const diagnostics: Diagnostic[] = []
+  const entities = ctx.findNodes("entity")
+  const byId = new Map(entities.map((e) => [e.id, e]))
+
+  for (const node of ctx.findNodes("lifecycle")) {
+    const targetRef = node.attributes.entity
+    if (!isPlainObject(targetRef) || typeof targetRef.nodeId !== "string") {
+      diagnostics.push(
+        diag("LIFECYCLE_TARGET_INVALID", "error", `lifecycle(...) must target an entity.`, {
+          nodeId: node.id,
+        }),
+      )
+      continue
+    }
+    const entity = byId.get(targetRef.nodeId)
+    if (!entity) {
+      diagnostics.push(
+        diag(
+          "LIFECYCLE_ENTITY_NOT_FOUND",
+          "error",
+          `lifecycle(...) targets "${targetRef.nodeId}" but no such entity exists.`,
+          { nodeId: node.id, details: { entity: targetRef.nodeId } },
+        ),
+      )
+      continue
+    }
+
+    const fieldName = node.attributes.field
+    const fields = entity.attributes.fields
+    const fieldDef = isPlainObject(fields) ? fields[String(fieldName)] : undefined
+    if (!isPlainObject(fieldDef) || fieldDef.type !== "enum") {
+      diagnostics.push(
+        diag(
+          "LIFECYCLE_FIELD_INVALID",
+          "error",
+          `lifecycle field "${String(fieldName)}" is not an enum field of entity "${entity.name}" (use field.enum(...)).`,
+          { nodeId: node.id, details: { entity: entity.name, field: String(fieldName) } },
+        ),
+      )
+      continue
+    }
+    const states = new Set(Array.isArray(fieldDef.states) ? (fieldDef.states as string[]) : [])
+    const initial = node.attributes.initial
+    if (typeof initial !== "string" || !states.has(initial)) {
+      diagnostics.push(
+        diag(
+          "LIFECYCLE_INITIAL_NOT_STATE",
+          "error",
+          `lifecycle initial ${JSON.stringify(initial)} is not a state of ${entity.name}.${String(fieldName)} (${[...states].join(", ")}).`,
+          { nodeId: node.id, details: { initial } },
+        ),
+      )
+    }
+
+    const transitions = node.attributes.transitions
+    if (!Array.isArray(transitions) || transitions.length === 0) {
+      diagnostics.push(
+        diag("LIFECYCLE_NO_TRANSITIONS", "error", `lifecycle must declare at least one transition.`, {
+          nodeId: node.id,
+        }),
+      )
+      continue
+    }
+
+    // (event, from-state) → to : must be a function, never a relation
+    const next = new Map<string, string>()
+    const reachable = new Set<string>(typeof initial === "string" && states.has(initial) ? [initial] : [])
+    const declaredEvents = new Set<string>()
+
+    for (const raw of transitions) {
+      if (!isPlainObject(raw)) continue
+      const event = String(raw.event)
+      const to = raw.to
+      declaredEvents.add(event)
+      if (typeof to !== "string" || !states.has(to)) {
+        diagnostics.push(
+          diag(
+            "LIFECYCLE_TRANSITION_TARGET_UNKNOWN",
+            "error",
+            `transition "${event}" targets unknown state ${JSON.stringify(to)}.`,
+            { nodeId: node.id, details: { event, to } },
+          ),
+        )
+        continue
+      }
+      const fromList = Array.isArray(raw.from) ? raw.from : []
+      for (const from of fromList) {
+        if (typeof from !== "string" || !states.has(from)) {
+          diagnostics.push(
+            diag(
+              "LIFECYCLE_TRANSITION_TARGET_UNKNOWN",
+              "error",
+              `transition "${event}" lists unknown from-state ${JSON.stringify(from)}.`,
+              { nodeId: node.id, details: { event, from } },
+            ),
+          )
+          continue
+        }
+        const key = `${event}|${from}`
+        const previous = next.get(key)
+        if (previous !== undefined && previous !== to) {
+          diagnostics.push(
+            diag(
+              "LIFECYCLE_TRANSITION_DUPLICATE",
+              "error",
+              `transition "${event}" from state "${from}" has two targets ("${previous}" and "${to}") — a nondeterministic next-state is not representable.`,
+              { nodeId: node.id, details: { event, from, previous, to } },
+            ),
+          )
+        } else {
+          next.set(key, to)
+        }
+      }
+    }
+
+    // reachability (fixpoint over declared transitions)
+    let changed = true
+    while (changed) {
+      changed = false
+      for (const [key, to] of next) {
+        const from = key.split("|")[1]
+        if (reachable.has(from) && !reachable.has(to)) {
+          reachable.add(to)
+          changed = true
+        }
+      }
+    }
+    for (const state of states) {
+      if (!reachable.has(state)) {
+        diagnostics.push(
+          diag(
+            "LIFECYCLE_STATE_UNREACHABLE",
+            "warning",
+            `state "${state}" of ${entity.name}.${String(fieldName)} is unreachable from the initial state.`,
+            { nodeId: node.id, details: { state } },
+          ),
+        )
+      }
+    }
+    void declaredEvents
+  }
+  return diagnostics
+})

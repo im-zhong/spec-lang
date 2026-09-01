@@ -30,11 +30,15 @@ The derived routes (what a generated backend must expose, exactly):
 
 | Operation | Route | Success | Body |
 | --------- | ----- | ------- | ---- |
-| `list`    | `GET /posts` | `200` | bare JSON array |
+| `list`    | `GET /posts` | `200` | bare JSON array — **every** row, in creation order |
 | `get`     | `GET /posts/{id}` | `200` | the row |
 | `create`  | `POST /posts` | `201` | the stored row |
 | `update`  | `PATCH /posts/{id}` | `200` | the updated row (partial) |
 | `delete`  | `DELETE /posts/{id}` | `204` | empty |
+
+`list` has **no requester filtering**: it returns every row of the entity,
+including the requesting principal when the listed entity is the
+principal (the blueprint's `listScope: "allRows"` pin).
 
 ### Options
 
@@ -173,6 +177,14 @@ const Bookings = crud(Booking, {                         // protected, no update
   methods: ["list", "get", "create", "delete"],
 })
 const BookingCount = count(Booking)
+const BookingFlow = lifecycle(Booking, {                 // state machine
+  field: "status",
+  initial: "pending",
+  transitions: [
+    transition("confirm", { from: ["pending"], to: "confirmed" }),
+    transition("cancel", { from: ["pending", "confirmed"], to: "cancelled" }),
+  ],
+})
 ```
 
 Serve them with a [`fastapi()`](/guide/generate) server resource and
@@ -191,12 +203,75 @@ GET    /bookings/{id}    protected
 POST   /bookings         protected
 DELETE /bookings/{id}    protected
 GET    /bookings/count   protected
+POST   /bookings/{id}/confirm   protected   (pending → confirmed)
+POST   /bookings/{id}/cancel    protected   (pending|confirmed → cancelled)
 POST   /auth/login       public
 POST   /auth/register    public
 GET    /auth/me          protected
 ```
 
-Fifteen routes, every status code, request/response shape and error body
-decided by the specification. Continue with
+Seventeen routes, every status code, request/response shape, error body —
+and every legal state change — decided by the specification. Continue with
 [Agentic generation](/guide/generate) to see them implemented, or read
 [the blueprint reference](/reference/blueprint) for the full contract.
+
+## Lifecycles (behavior: which operations are legal *when*)
+
+REST resources pin *what* exists. A **lifecycle** pins *when* operations
+are legal — the "line" facet of behavior from
+the behavior model plan in `docs/behavior-model.md` (Phase 1:
+transitions without guards/effects):
+
+```ts
+import { lifecycle, transition } from "@spec/web"
+
+const Booking = entity("Booking", {
+  id: field.uuid(),
+  user: field.ref("User"),
+  venue: field.ref("Venue"),
+  startsAt: field.datetime(),
+  status: field.enum("pending", "confirmed", "cancelled"),  // the state field
+})
+
+const BookingFlow = lifecycle(Booking, {
+  field: "status",        // must be an enum field of the entity
+  initial: "pending",     // assigned on create
+  transitions: [
+    transition("confirm", { from: ["pending"], to: "confirmed" }),
+    transition("cancel",  { from: ["pending", "confirmed"], to: "cancelled" }),
+  ],
+})
+```
+
+Serve it (`fastapi({ services: [..., BookingFlow] })`) and each transition
+becomes an **operation**, lowered to an action endpoint backed by an
+atomic guarded update:
+
+| Route | Guard | Effect | Outcomes |
+| ----- | ----- | ------ | -------- |
+| `POST /bookings/{id}/confirm` | `status ∈ {pending}` | `status = confirmed` | `200` row · `409 {"detail": "Invalid state"}` · `404 {"detail": "Not found"}` |
+| `POST /bookings/{id}/cancel` | `status ∈ {pending, confirmed}` | `status = cancelled` | same |
+
+The guard never leaves SQL — two concurrent transitions of the same row
+serialize in the database and the loser observes the pinned `409`. The
+state field is **server-controlled**: it never appears in create or update
+bodies (create assigns `initial`; PATCH ignores it), so state changes only
+through transitions — the compiler enforces what prose usually only asks
+for.
+
+The compiler validates the machine itself, before any generation:
+
+| Diagnostic | Meaning |
+| ---------- | ------- |
+| `LIFECYCLE_FIELD_INVALID` | the field is not an `enum` field of the entity |
+| `LIFECYCLE_INITIAL_NOT_STATE` | `initial` is not one of the enum's states |
+| `LIFECYCLE_TRANSITION_TARGET_UNKNOWN` | a `from`/`to` state is misspelled |
+| `LIFECYCLE_TRANSITION_DUPLICATE` | the same `(event, from-state)` leads to two states — nondeterminism is unrepresentable |
+| `LIFECYCLE_STATE_UNREACHABLE` | warning: no path from `initial` reaches the state |
+
+And the conformance suite derives the full matrix from the same data:
+every legal transition (200 + new state echoed), every illegal re-apply
+(409 with the exact body), unknown ids (404), create-assigns-initial, and
+update-ignores-state. Roadmap (Phase 2/3 of the behavior model):
+`invariant` for cross-entity truths and `effect.set`/`effect.emit` —
+every new expression must pass the SQL litmus test to enter the language.

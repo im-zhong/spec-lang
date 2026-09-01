@@ -4,43 +4,42 @@
  * This is the bridge between the two halves of the compiler:
  *
  *   traditional half:  .spec.ts → passes → Spec IR → blueprint (pure)
- *   agentic half:      plan.tasks → coding agent → workspace → conformance
+ *   agentic half:      DAG of generation tasks → agent harness → workspace
+ *                      → compiler-owned conformance (NO repair)
  *
- * The plan is DETERMINISTIC: the same IR always lowers to the same task
- * list, the same prompts, the same conformance suite and the same
- * verification commands. Nondeterminism is confined to the agent's code,
- * and the conformance suite pins its observable behavior (golden rule).
+ * The plan is DETERMINISTIC: the same IR always lowers to the same DAG
+ * (same tasks, same edges, same prompts — byte-stable fingerprint), the
+ * same conformance suite and the same verification commands. There is no
+ * repair loop: if a shot does not conform on its FIRST verification, the
+ * specification/blueprint is under-pinned and must be fixed, then all
+ * shots regenerated.
  */
 import type { AgentTask, Constraint, SpecIR } from "@spec/core"
 import { stableStringify } from "@spec/core"
 import { buildBlueprint, type BackendBlueprint } from "./blueprint"
 import { buildConformanceSuite, type ConformanceFiles } from "./conformance"
-import { implementPrompt, repairPrompt } from "./prompt"
+import { buildTaskDag, dagFingerprint, type GenerationDag } from "./dag"
 import { fastApiVerification, type VerificationPlan } from "./verify"
 
 export interface FastApiGenerationPlan {
   blueprint: BackendBlueprint
-  /** Ordered agent tasks (deterministic ids). */
-  tasks: AgentTask[]
+  /** Dependency-structured generation tasks (topologically sorted). */
+  dag: GenerationDag
+  /** Core AgentTask view of the DAG (for agent.tasks.json). */
+  agentTasks: AgentTask[]
   /** Compiler-owned conformance files written into the workspace. */
   conformance: ConformanceFiles
   /** Deterministic verification executed by the orchestrator. */
   verification: VerificationPlan
-  /** Deterministic byte-stable form (task contract, prompts included). */
+  /** Deterministic byte-stable form (DAG + prompts included). */
   stable: string
 }
 
 export function planGeneration(ir: SpecIR): FastApiGenerationPlan {
   const blueprint = buildBlueprint(ir)
+  const dag = buildTaskDag(blueprint, ir)
   const conformance = buildConformanceSuite(blueprint)
   const verification = fastApiVerification()
-
-  const specNodeIds = ir.nodes
-    .map((node) => node.id)
-    .filter((id) =>
-      /^(app:|entity:|crud:|auth:|fastapi:|api:)/.test(id),
-    )
-    .sort()
 
   const constraints: Constraint[] = [
     { kind: "interface", value: blueprint.routes.map((r) => r.id).sort() },
@@ -51,8 +50,8 @@ export function planGeneration(ir: SpecIR): FastApiGenerationPlan {
       value: "app/main.py must export create_app(database_url: str | None = None) and app = create_app()",
     },
     {
-      kind: "tooling",
-      value: "pyproject.toml with a dev extra providing pytest and httpx; project installable via uv pip install -e '.[dev]'",
+      kind: "no-repair",
+      value: "shots must pass conformance on the FIRST verification; failures indicate an under-pinned specification",
     },
     {
       kind: "conformance",
@@ -60,41 +59,23 @@ export function planGeneration(ir: SpecIR): FastApiGenerationPlan {
     },
   ]
 
-  const tasks: AgentTask[] = [
-    {
-      id: "fastapi:implement",
-      type: "generate",
-      input: { blueprint },
-      constraints,
-      context: { specNodeIds },
-    },
-    {
-      id: "fastapi:conform",
-      type: "verify",
-      input: {
-        commands: [...verification.setup, ...verification.check].map((c) => c.command),
-        suite: Object.keys(conformance.files).sort(),
-      },
-      constraints: [{ kind: "golden-rule", value: "all conformance tests must pass" }],
-      context: { specNodeIds },
-    },
-  ]
+  const agentTasks: AgentTask[] = dag.tasks.map((task) => ({
+    id: task.id,
+    type: "generate",
+    input: { scope: task.scope, dependsOn: task.dependsOn },
+    constraints,
+    context: { specNodeIds: task.specNodeIds },
+  }))
 
   return {
     blueprint,
-    tasks,
+    dag,
+    agentTasks,
     conformance,
     verification,
     stable: stableStringify({
       blueprint,
-      tasks: tasks.map((t) => ({
-        id: t.id,
-        type: t.type,
-        constraints: t.constraints,
-        context: t.context,
-        input: t.id === "fastapi:implement" ? "<blueprint>" : t.input,
-      })),
-      prompts: { implement: implementPrompt(blueprint), repair: "<failure-output>" },
+      dag: JSON.parse(dagFingerprint(dag)),
       verification,
       conformance: conformance.files,
     }),

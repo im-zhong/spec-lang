@@ -1,8 +1,11 @@
-export { fastapi, FASTAPI_REQUIRES, type FastApiInput } from "./builder"
+export { fastapi, FASTAPI_REQUIRES, type FastApiInput, type FastApiStackInput } from "./builder"
 export {
   buildBlueprint,
   snakeCase,
+  DEFAULT_FASTAPI_STACK,
+  resolveStack,
   type BackendBlueprint,
+  type BackendStack,
   type BlueprintEntity,
   type BlueprintField,
   type BlueprintRoute,
@@ -11,9 +14,26 @@ export {
 } from "./blueprint"
 export { buildConformanceSuite, type ConformanceFiles } from "./conformance"
 export {
+  buildTaskDag,
+  dagFingerprint,
+  topologicalSort,
+  type GenerationDag,
+  type DagTask,
+} from "./dag"
+export {
   planGeneration,
   type FastApiGenerationPlan,
 } from "./lowering"
-export { implementPrompt, repairPrompt } from "./prompt"
+export {
+  projectPrompt,
+  modelsPrompt,
+  databasePrompt,
+  schemasPrompt,
+  securityPrompt,
+  routerPrompt,
+  authRouterPrompt,
+  appPrompt,
+  type TaskPromptInput,
+} from "./prompt"
 export { fastApiVerification, type VerificationPlan, type VerificationCommand } from "./verify"
 export { default as fastApiPackage } from "./spec-package"

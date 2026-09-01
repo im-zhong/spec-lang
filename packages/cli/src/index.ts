@@ -21,7 +21,7 @@ import * as fs from "node:fs"
 import { createHash } from "node:crypto"
 import { compile, renderSpecTree, stableStringify, writeArtifacts, COMPILER_VERSION } from "@spec/compiler"
 import { InternalCompilerError, createLogger, type Diagnostic } from "@spec/core"
-import { implementPrompt, planGeneration, repairPrompt } from "@spec/fastapi"
+import { planGeneration } from "@spec/fastapi"
 import { runRepeatability, type ShotSpec } from "@spec/agent"
 
 interface CliArgs {
@@ -34,7 +34,6 @@ interface CliArgs {
   shots: number
   model: string | undefined
   maxTurns: number
-  repairRounds: number
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -45,10 +44,9 @@ function parseArgs(argv: string[]): CliArgs {
     help: false,
     dryRun: false,
     out: undefined,
-    shots: 2,
+    shots: 3,
     model: process.env.SPEC_AGENT_MODEL,
     maxTurns: 60,
-    repairRounds: 2,
   }
   const positional: string[] = []
   for (let i = 0; i < argv.length; i++) {
@@ -60,7 +58,6 @@ function parseArgs(argv: string[]): CliArgs {
     else if (arg === "--model") args.model = argv[++i]
     else if (arg === "--shots") args.shots = Number(argv[++i])
     else if (arg === "--max-turns") args.maxTurns = Number(argv[++i])
-    else if (arg === "--repair-rounds") args.repairRounds = Number(argv[++i])
     else positional.push(arg)
   }
   args.command = positional[0]
@@ -75,19 +72,23 @@ Usage:
   spec build <file.spec.ts>       Compile and write artifacts to <outputDir> (default .spec/)
   spec inspect <file.spec.ts>     Print the specification tree
   spec generate <file.spec.ts>    Compile, then generate the application with a
-                                  coding agent; every shot must pass the compiler's
-                                  conformance suite and expose the same interface
-                                  (the golden rule)
+                                  coding agent executing a generation DAG; every
+                                  shot must pass the compiler's conformance suite
+                                  on the FIRST attempt and all shots must expose
+                                  the same interface (the golden rule)
 
 Options:
-  --dry-run                 Plan only: write blueprint + agent tasks, no agent
+  --dry-run                 Plan only: write blueprint + DAG, no agent
   --out <dir>               Generation output root (default "out/")
-  --shots <n>               Independent generations per spec (default 2)
-  --model <id>              Agent model (default SPEC_AGENT_MODEL or CLI default)
-  --max-turns <n>           Agent turn budget per run (default 60)
-  --repair-rounds <n>       Verification failures fed back to the agent (default 2)
+  --shots <n>               Independent generations per spec (default 3)
+  --model <id>              Agent model (default SPEC_AGENT_MODEL or glm-5.3-flash)
+  --max-turns <n>           Agent turn budget per task (default 60)
   --debug                   Show internal stack traces
   --help                    Show this help
+
+There is deliberately no repair option: a nonconformant shot is a
+specification defect. Pin the behavior in the spec/blueprint, then
+regenerate all shots.
 `
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -158,7 +159,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const plan = planGeneration(result.ir)
     const specDir = path.resolve(projectRoot, result.outputDir)
     fs.mkdirSync(specDir, { recursive: true })
-    const implement = implementPrompt(plan.blueprint)
     fs.writeFileSync(
       path.join(specDir, "blueprint.json"),
       stableStringify(plan.blueprint) + "\n",
@@ -167,8 +167,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     fs.writeFileSync(
       path.join(specDir, "agent.tasks.json"),
       stableStringify({
-        tasks: plan.tasks,
-        promptSha256: createHash("sha256").update(implement).digest("hex"),
+        dag: {
+          tasks: plan.dag.tasks.map((t) => ({
+            id: t.id,
+            label: t.label,
+            dependsOn: t.dependsOn,
+            scope: t.scope,
+            promptSha256: createHash("sha256").update(t.prompt).digest("hex"),
+            specNodeIds: t.specNodeIds,
+          })),
+          edges: plan.dag.edges,
+        },
         verification: plan.verification,
         conformanceFiles: Object.keys(plan.conformance.files).sort(),
       }) + "\n",
@@ -178,7 +187,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stdout.write(
       `✓ Plan derived: ${plan.blueprint.routes.length} routes, ` +
         `${plan.blueprint.entities.length} entities` +
-        (plan.blueprint.auth ? ", auth" : "") + "\n",
+        (plan.blueprint.auth ? ", auth" : "") +
+        `, ${plan.dag.tasks.length} DAG tasks\n`,
     )
 
     if (args.dryRun) {
@@ -196,30 +206,31 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }))
 
     const shotSpec: ShotSpec = {
-      implementPrompt: implement,
-      repairPrompt: (failure) => repairPrompt(plan.blueprint, failure),
+      tasks: plan.dag.tasks,
       conformanceFiles: plan.conformance.files,
       conformanceDirs: ["conformance"],
       verification: plan.verification,
-      specNodeIds: plan.tasks[0]?.context.specNodeIds ?? [],
     }
 
     process.stdout.write(
-      `⟳ Generating ${args.shots} independent shot(s) with the coding agent (this takes a while)…\n`,
+      `⟳ Generating ${args.shots} independent shot(s), ${plan.dag.tasks.length} DAG tasks each (this takes a while)…\n`,
     )
-    const model = args.model ?? "claude-sonnet-4-5"
+    const model = args.model ?? "glm-5.3-flash"
     const report = await runRepeatability(shotSpec, workspaces, {
       model,
       maxTurns: args.maxTurns,
-      repairRounds: args.repairRounds,
     })
 
     for (const shot of report.shots) {
       const mark = shot.ok ? "✓" : "✗"
-      const repairs = shot.repairs.length > 0 ? ` (${shot.repairs.length} repair round(s))` : ""
       const cost = shot.totalCostUsd !== undefined ? ` · $${shot.totalCostUsd.toFixed(2)}` : ""
+      const violations = shot.tasks
+        .filter((t) => t.scopeViolations.length > 0)
+        .map((t) => `${t.id}→${t.scopeViolations.length} out-of-scope file(s)`)
+        .join(", ")
       process.stdout.write(
-        `${mark} ${shot.shot}: ${shot.ok ? "conformance passed" : "FAILED"}${repairs}${cost} → ${path.relative(projectRoot, shot.workspace)}\n`,
+        `${mark} ${shot.shot}: ${shot.ok ? "conformance passed (first attempt, no repair)" : "FAILED"}${cost} → ${path.relative(projectRoot, shot.workspace)}\n` +
+          (violations ? `    scope violations: ${violations}\n` : ""),
       )
     }
 
@@ -241,18 +252,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
           shot: s.shot,
           workspace: s.workspace,
           ok: s.ok,
-          repairs: s.repairs.map((r) => ({
-            round: r.round,
-            fixed: r.failure.name,
-            failureOutput: r.failure.output.slice(-2000),
-            run: { ok: r.run.ok, turns: r.run.turns, costUsd: r.run.costUsd },
+          tasks: s.tasks.map((t) => ({
+            id: t.id,
+            ok: t.ok,
+            run: { sessionId: t.run.sessionId, turns: t.run.turns, costUsd: t.run.costUsd },
+            produced: t.produced,
+            scopeViolations: t.scopeViolations,
+            durationMs: t.durationMs,
           })),
-          generate: {
-            ok: s.generate.ok,
-            sessionId: s.generate.sessionId,
-            turns: s.generate.turns,
-            costUsd: s.generate.costUsd,
-          },
           verification: s.verification,
           artifactCount: s.artifacts.length,
           artifacts: s.artifacts,
@@ -267,8 +274,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (errors.length > 0) printDiagnostics(errors)
     process.stdout.write(
       report.ok
-        ? `✓ Generation repeatable across ${workspaces.length} shot(s) — results in ${path.relative(projectRoot, specDir)}/agent.result.json\n`
-        : `✗ Generation did not satisfy the golden rule — see ${path.relative(projectRoot, specDir)}/agent.result.json\n`,
+        ? `✓ Generation repeatable across ${workspaces.length} shot(s), zero repairs — results in ${path.relative(projectRoot, specDir)}/agent.result.json\n`
+        : `✗ Generation did not satisfy the golden rule — fix the spec/blueprint and regenerate; see ${path.relative(projectRoot, specDir)}/agent.result.json\n`,
     )
     return report.ok ? 0 : 1
   } catch (err) {

@@ -18,29 +18,49 @@ Spec IR into a complete, deterministic generation plan:
 ```ts
 interface FastApiGenerationPlan {
   blueprint: BackendBlueprint                 // the contract (see blueprint ref)
-  tasks: AgentTask[]                          // fastapi:implement, fastapi:conform
+  dag: GenerationDag                          // dependency-structured tasks
+  agentTasks: AgentTask[]                     // core AgentTask view of the DAG
   conformance: { files: Record<string, string> }  // compiler-owned suite
   verification: VerificationPlan              // commands to run
   stable: string                              // byte-stable form (fingerprint)
 }
 ```
 
-`AgentTask` comes from `@spec/core` (the types reserved since the MVP):
+## The generation DAG
+
+Code has structure, so generation has structure. `buildTaskDag(blueprint,
+ir)` (`packages/fastapi/src/dag.ts`) derives the task graph from the
+blueprint's own dependencies:
+
+```
+project ──► models ──► schemas ─────────► router:<entity> ─┐
+   │           │  ╲                              ▲         │
+   │           │   ╲► security (auth only) ──────┘         │
+   └──► database ──────────────────────────────────────────┤
+                                      router:auth ──────────┤
+                                                           ▼
+                                                    app (wiring)
+```
 
 ```ts
-interface AgentTask {
-  id: string          // "fastapi:implement" | "fastapi:conform"
-  type: string        // "generate" | "verify"
-  input: unknown      // the blueprint for implement; commands for verify
-  constraints: Constraint[]
-  context: { specNodeIds: string[] }   // provenance: which IR nodes
+interface DagTask {
+  id: string          // "models" | "router:User" | "app" | …
+  label: string
+  dependsOn: string[]
+  scope: string[]     // files this task owns — audited by the harness
+  prompt: string      // pure function of the blueprint slice
+  specNodeIds: string[]  // provenance: which IR nodes
 }
 ```
 
-Prompts (`implementPrompt`, `repairPrompt`) are **pure functions of the
-blueprint** — no timestamps, no session state — so identical specs produce
-identical prompts. `agent.tasks.json` records the task list plus a SHA-256
-of the implement prompt as a determinism fingerprint.
+Derivation rules (all deterministic): one router task per served entity
+(count routes merge into their entity's router); `security` and
+`router:auth` exist only when the blueprint has auth; a router gains the
+`security` dependency only when one of its routes is protected; `app`
+depends on every router and on `database`. The DAG is topologically
+sorted (Kahn, stable by id) and fingerprinted with prompts included —
+`agent.tasks.json` records the task list, edges and per-task prompt
+SHA-256 hashes.
 
 ## The agent runner
 
@@ -57,7 +77,7 @@ claude -p --output-format json --permission-mode acceptEdits \
 - the prompt arrives on **stdin**; the result is parsed from the JSON on
   stdout (session id, cost, turns, duration)
 - the tool allowlist is deliberately narrow: file tools plus the Python
-  toolchain. `rm` is absent — repair agents must not be able to destroy
+  toolchain. `rm` is absent — agents must not be able to destroy
   workspaces
 - wall-clock budget per run (45 min default), because slow model gateways
   otherwise hang shots forever
@@ -65,21 +85,38 @@ claude -p --output-format json --permission-mode acceptEdits \
 The runner is a code-writing engine only. It never grades anything —
 verification is compiler-side.
 
+## The agent harness
+
+`AgentHarness` (`packages/agent/src/harness.ts`) executes a task DAG:
+
+- **scheduling** — deterministic topological order (`schedule`, Kahn,
+  stable by id). Sequential by default: two agents must never write the
+  same workspace concurrently.
+- **per-task execution** — one runner.run per task with the task's narrow
+  prompt (its scope, its readable context files, its blueprint slice).
+- **auditing** — the workspace is hashed before and after each task; the
+  diff attributes every created/modified file to the task that made it
+  and flags **scope violations** (files touched outside `scope`,
+  reported as `SCOPE_VIOLATION` warnings).
+- **failure semantics** — a failed task stops the chain immediately
+  (`AGENT_TASK_FAILED`); dependents never run on a broken foundation.
+
 ## The shot lifecycle
 
 `runShot()` (`packages/agent/src/orchestrate.ts`) executes one independent
-generation:
+generation — **no repair, by policy**:
 
 ```
 1. prepareWorkspace()   fresh dir, marked .spec-generated
                        (only marked dirs may ever be wiped)
-2. agent implements     implementPrompt → claude -p → code written
+2. harness runs the DAG one task per agent run, topological order,
+                       scope-audited
 3. drop the suite       conformance/ files written by the COMPILER,
                        overwriting anything the agent put there
-4. verify               setup commands, then check commands
-5. repair loop          on failure: repairPrompt(failure) → agent
-                       (bounded, default 2 rounds); the suite is
-                       re-dropped before every re-check
+4. verify — ONCE        setup commands, then check commands
+5. verdict              pass → AGENT_VERIFIED
+                       fail → GENERATION_NONCONFORMANT (a specification
+                       defect: pin the contract, regenerate all shots)
 6. scan artifacts       every file → Artifact with sha256 + provenance
 ```
 
@@ -118,7 +155,7 @@ constraints.
 
 ### The verification plan
 
-`fastApiVerification()` — idempotent, re-runnable across repair rounds:
+`fastApiVerification()` — idempotent, so re-runs and re-validations behave identically:
 
 | Step | Command | Budget |
 | ---- | ------- | ------ |
@@ -128,7 +165,7 @@ constraints.
 | `conformance` | `.venv/bin/python -m pytest conformance -q` | 5 min |
 
 (`--clear` matters: `uv venv` refuses to recreate an existing venv, which
-once sent repair agents chasing a phantom failure.)
+once produced a phantom failure that masked the real one.)
 
 ## Artifacts and provenance
 
@@ -185,19 +222,21 @@ session ids, costs, timings — and therefore gitignored):
   shots: Array<{
     shot: string                       // "shot-1"
     workspace: string
-    ok: boolean
-    repairs: Array<{                   // what failed, what fixed it
-      round: number
-      fixed: string                    // failing step name
-      failureOutput: string            // command output tail
-      run: { ok, turns, costUsd }
+    ok: boolean                        // first-attempt conformance
+    tasks: Array<{                     // one entry per DAG task
+      id: string                       // "models" | "router:User" | …
+      ok: boolean
+      run: { sessionId, turns, costUsd }
+      produced: Array<{ path, sha256 }>   // files this task wrote
+      scopeViolations: string[]           // out-of-scope touches
+      durationMs: number
     }>
-    generate: { ok, sessionId, turns, costUsd }
     verification: { setup: CommandResult[]; check: CommandResult[] }
     artifacts: Artifact[]
     diagnostics: Diagnostic[]
   }>
-  diagnostics: Diagnostic[]            // AGENT_*, REPEATABLE, INTERFACE_*
+  diagnostics: Diagnostic[]            // AGENT_*, GENERATION_NONCONFORMANT,
+                                       // SCOPE_VIOLATION, REPEATABLE, INTERFACE_*
 }
 ```
 

@@ -63,12 +63,14 @@ Artifacts written to the output dir: `blueprint.json`,
 
 | Option                 | Effect                                        | Default |
 | ---------------------- | --------------------------------------------- | ------- |
-| `--shots <n>`          | Independent generations per spec              | `2`     |
-| `--dry-run`            | Plan only (blueprint + tasks), no agent       | —       |
+| `--shots <n>`          | Independent generations per spec              | `3`     |
+| `--dry-run`            | Plan only (blueprint + DAG), no agent         | —       |
 | `--out <dir>`          | Generated-app root                            | `out/`  |
-| `--model <id>`         | Agent model                                   | `SPEC_AGENT_MODEL` or `claude-sonnet-4-5` |
-| `--max-turns <n>`      | Agent turn budget per run                     | `60`    |
-| `--repair-rounds <n>`  | Verification failures fed back for repair     | `2`     |
+| `--model <id>`         | Agent model                                   | `SPEC_AGENT_MODEL` or `glm-5.3-flash` |
+| `--max-turns <n>`      | Agent turn budget per DAG task                | `60`    |
+
+There is deliberately no repair option: a shot that fails its first
+verification is a specification defect (pin the contract, regenerate).
 
 ## Configuration
 

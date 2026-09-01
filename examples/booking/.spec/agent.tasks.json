@@ -5,603 +5,276 @@
     "conformance/helpers.py",
     "conformance/test_contract.py"
   ],
-  "promptSha256": "c93599f6a16760de52e7fe6a5b1a8dfd8b02843010112c1a6812a9aaa4073a36",
-  "tasks": [
-    {
-      "constraints": [
-        {
-          "kind": "interface",
-          "value": [
-            "DELETE /bookings/{id}",
-            "DELETE /venues/{id}",
-            "GET /auth/me",
-            "GET /bookings",
-            "GET /bookings/count",
-            "GET /bookings/{id}",
-            "GET /users",
-            "GET /users/{id}",
-            "GET /venues",
-            "GET /venues/{id}",
-            "PATCH /venues/{id}",
-            "POST /auth/login",
-            "POST /auth/register",
-            "POST /bookings",
-            "POST /venues"
-          ]
-        },
-        {
-          "kind": "serialization",
-          "value": {
-            "createDefaults": "omittable-appliesDefault",
-            "entityKeys": "declaredFieldNames",
-            "hiddenColumns": [
-              "password_hash",
-              "created_at"
-            ],
-            "idGeneration": "serverUuid4",
-            "listOrder": "createdAtAscending",
-            "listShape": "bareArray",
-            "refFields": "referencedIdString"
-          }
-        },
-        {
-          "kind": "errors",
-          "value": {
-            "alreadyExists": {
-              "body": {
-                "detail": "Already exists"
-              },
-              "status": 409
-            },
-            "danglingRef": {
-              "body": {
-                "detail": "Not found"
-              },
-              "status": 404
-            },
-            "invalidCredentials": {
-              "body": {
-                "detail": "Invalid credentials"
-              },
-              "status": 401
-            },
-            "notFound": {
-              "body": {
-                "detail": "Not found"
-              },
-              "status": 404
-            },
-            "unauthenticated": {
-              "body": {
-                "detail": "Not authenticated"
-              },
-              "status": 401
-            },
-            "validation": {
-              "body": "fastapi-default",
-              "status": 422
-            }
-          }
-        },
-        {
-          "kind": "entrypoint",
-          "value": "app/main.py must export create_app(database_url: str | None = None) and app = create_app()"
-        },
-        {
-          "kind": "tooling",
-          "value": "pyproject.toml with a dev extra providing pytest and httpx; project installable via uv pip install -e '.[dev]'"
-        },
-        {
-          "kind": "conformance",
-          "value": "the compiler drops conformance/ into the workspace — never create or modify it"
-        }
-      ],
-      "context": {
-        "specNodeIds": [
-          "api:BookingCount",
-          "app:BookingAPI",
-          "auth:MainAuth",
-          "crud:Booking",
-          "crud:User",
-          "crud:Venue",
-          "entity:Booking",
-          "entity:User",
-          "entity:Venue",
-          "fastapi:Server"
-        ]
+  "dag": {
+    "edges": [
+      {
+        "from": "project",
+        "to": "database"
       },
-      "id": "fastapi:implement",
-      "input": {
-        "blueprint": {
-          "app": {
-            "name": "BookingAPI",
-            "port": 8000,
-            "prefix": "",
-            "title": "Booking API",
-            "version": "0.1.0"
-          },
-          "auth": {
-            "identityField": "email",
-            "passwordColumn": "password_hash",
-            "principal": "User",
-            "routes": [
-              {
-                "auth": false,
-                "entity": "User",
-                "id": "POST /auth/login",
-                "method": "POST",
-                "operation": "login",
-                "path": "/auth/login",
-                "request": {
-                  "shape": {
-                    "email": "string",
-                    "password": "string"
-                  }
-                },
-                "response": {
-                  "kind": "token"
-                },
-                "status": 200
-              },
-              {
-                "auth": false,
-                "entity": "User",
-                "id": "POST /auth/register",
-                "method": "POST",
-                "operation": "register",
-                "path": "/auth/register",
-                "request": {
-                  "shape": {
-                    "email": "email",
-                    "name": "string",
-                    "password": "string"
-                  }
-                },
-                "response": {
-                  "entity": "User",
-                  "kind": "entity"
-                },
-                "status": 201
-              },
-              {
-                "auth": true,
-                "entity": "User",
-                "id": "GET /auth/me",
-                "method": "GET",
-                "operation": "me",
-                "path": "/auth/me",
-                "response": {
-                  "entity": "User",
-                  "kind": "entity"
-                },
-                "status": 200
-              }
-            ],
-            "strategy": "password-jwt"
-          },
-          "contract": {
-            "auth": {
-              "loginRequest": {
-                "email": "string",
-                "password": "string"
-              },
-              "loginResponse": {
-                "access_token": "string",
-                "token_type": "bearer"
-              },
-              "registerRequest": {
-                "email": "email",
-                "name": "string",
-                "password": "string"
-              },
-              "scheme": "bearer-jwt"
-            },
-            "errors": {
-              "alreadyExists": {
-                "body": {
-                  "detail": "Already exists"
-                },
-                "status": 409
-              },
-              "danglingRef": {
-                "body": {
-                  "detail": "Not found"
-                },
-                "status": 404
-              },
-              "invalidCredentials": {
-                "body": {
-                  "detail": "Invalid credentials"
-                },
-                "status": 401
-              },
-              "notFound": {
-                "body": {
-                  "detail": "Not found"
-                },
-                "status": 404
-              },
-              "unauthenticated": {
-                "body": {
-                  "detail": "Not authenticated"
-                },
-                "status": 401
-              },
-              "validation": {
-                "body": "fastapi-default",
-                "status": 422
-              }
-            },
-            "serialization": {
-              "createDefaults": "omittable-appliesDefault",
-              "entityKeys": "declaredFieldNames",
-              "hiddenColumns": [
-                "password_hash",
-                "created_at"
-              ],
-              "idGeneration": "serverUuid4",
-              "listOrder": "createdAtAscending",
-              "listShape": "bareArray",
-              "refFields": "referencedIdString"
-            }
-          },
-          "database": {
-            "engine": "postgres",
-            "fallback": "sqlite:///./dev.db",
-            "urlEnv": "DATABASE_URL",
-            "urlFormat": "sqlalchemy-url"
-          },
-          "entities": [
-            {
-              "fields": [
-                {
-                  "column": "id",
-                  "name": "id",
-                  "type": "uuid"
-                },
-                {
-                  "column": "notes",
-                  "name": "notes",
-                  "optional": true,
-                  "type": "string"
-                },
-                {
-                  "column": "starts_at",
-                  "name": "startsAt",
-                  "type": "datetime"
-                },
-                {
-                  "column": "user",
-                  "name": "user",
-                  "target": "User",
-                  "type": "ref"
-                },
-                {
-                  "column": "venue",
-                  "name": "venue",
-                  "target": "Venue",
-                  "type": "ref"
-                }
-              ],
-              "name": "Booking",
-              "table": "bookings"
-            },
-            {
-              "fields": [
-                {
-                  "column": "email",
-                  "name": "email",
-                  "type": "email",
-                  "unique": true
-                },
-                {
-                  "column": "id",
-                  "name": "id",
-                  "type": "uuid"
-                },
-                {
-                  "column": "name",
-                  "name": "name",
-                  "type": "string"
-                }
-              ],
-              "name": "User",
-              "passwordColumn": "password_hash",
-              "table": "users"
-            },
-            {
-              "fields": [
-                {
-                  "column": "capacity",
-                  "name": "capacity",
-                  "type": "int"
-                },
-                {
-                  "column": "id",
-                  "name": "id",
-                  "type": "uuid"
-                },
-                {
-                  "column": "name",
-                  "name": "name",
-                  "type": "string",
-                  "unique": true
-                }
-              ],
-              "name": "Venue",
-              "table": "venues"
-            }
-          ],
-          "routes": [
-            {
-              "auth": true,
-              "entity": "Booking",
-              "id": "GET /bookings",
-              "method": "GET",
-              "operation": "list",
-              "path": "/bookings",
-              "response": {
-                "entity": "Booking",
-                "kind": "entityArray"
-              },
-              "status": 200
-            },
-            {
-              "auth": true,
-              "entity": "Booking",
-              "id": "GET /bookings/{id}",
-              "method": "GET",
-              "operation": "get",
-              "path": "/bookings/{id}",
-              "response": {
-                "entity": "Booking",
-                "kind": "entity"
-              },
-              "status": 200
-            },
-            {
-              "auth": true,
-              "entity": "Booking",
-              "id": "POST /bookings",
-              "method": "POST",
-              "operation": "create",
-              "path": "/bookings",
-              "request": {
-                "shape": {
-                  "notes": "string?",
-                  "startsAt": "datetime",
-                  "user": "ref:User",
-                  "venue": "ref:Venue"
-                }
-              },
-              "response": {
-                "entity": "Booking",
-                "kind": "entity"
-              },
-              "status": 201
-            },
-            {
-              "auth": true,
-              "entity": "Booking",
-              "id": "DELETE /bookings/{id}",
-              "method": "DELETE",
-              "operation": "delete",
-              "path": "/bookings/{id}",
-              "response": {
-                "kind": "empty"
-              },
-              "status": 204
-            },
-            {
-              "auth": true,
-              "entity": "User",
-              "id": "GET /users",
-              "method": "GET",
-              "operation": "list",
-              "path": "/users",
-              "response": {
-                "entity": "User",
-                "kind": "entityArray"
-              },
-              "status": 200
-            },
-            {
-              "auth": true,
-              "entity": "User",
-              "id": "GET /users/{id}",
-              "method": "GET",
-              "operation": "get",
-              "path": "/users/{id}",
-              "response": {
-                "entity": "User",
-                "kind": "entity"
-              },
-              "status": 200
-            },
-            {
-              "auth": false,
-              "entity": "Venue",
-              "id": "GET /venues",
-              "method": "GET",
-              "operation": "list",
-              "path": "/venues",
-              "response": {
-                "entity": "Venue",
-                "kind": "entityArray"
-              },
-              "status": 200
-            },
-            {
-              "auth": false,
-              "entity": "Venue",
-              "id": "GET /venues/{id}",
-              "method": "GET",
-              "operation": "get",
-              "path": "/venues/{id}",
-              "response": {
-                "entity": "Venue",
-                "kind": "entity"
-              },
-              "status": 200
-            },
-            {
-              "auth": false,
-              "entity": "Venue",
-              "id": "POST /venues",
-              "method": "POST",
-              "operation": "create",
-              "path": "/venues",
-              "request": {
-                "shape": {
-                  "capacity": "int",
-                  "name": "string"
-                }
-              },
-              "response": {
-                "entity": "Venue",
-                "kind": "entity"
-              },
-              "status": 201
-            },
-            {
-              "auth": false,
-              "entity": "Venue",
-              "id": "PATCH /venues/{id}",
-              "method": "PATCH",
-              "operation": "update",
-              "path": "/venues/{id}",
-              "request": {
-                "partial": true,
-                "shape": {
-                  "capacity": "int",
-                  "name": "string"
-                }
-              },
-              "response": {
-                "entity": "Venue",
-                "kind": "entity"
-              },
-              "status": 200
-            },
-            {
-              "auth": false,
-              "entity": "Venue",
-              "id": "DELETE /venues/{id}",
-              "method": "DELETE",
-              "operation": "delete",
-              "path": "/venues/{id}",
-              "response": {
-                "kind": "empty"
-              },
-              "status": 204
-            },
-            {
-              "auth": true,
-              "entity": "Booking",
-              "id": "GET /bookings/count",
-              "method": "GET",
-              "operation": "count",
-              "path": "/bookings/count",
-              "response": {
-                "kind": "count"
-              },
-              "status": 200
-            },
-            {
-              "auth": false,
-              "entity": "User",
-              "id": "POST /auth/login",
-              "method": "POST",
-              "operation": "login",
-              "path": "/auth/login",
-              "request": {
-                "shape": {
-                  "email": "string",
-                  "password": "string"
-                }
-              },
-              "response": {
-                "kind": "token"
-              },
-              "status": 200
-            },
-            {
-              "auth": false,
-              "entity": "User",
-              "id": "POST /auth/register",
-              "method": "POST",
-              "operation": "register",
-              "path": "/auth/register",
-              "request": {
-                "shape": {
-                  "email": "email",
-                  "name": "string",
-                  "password": "string"
-                }
-              },
-              "response": {
-                "entity": "User",
-                "kind": "entity"
-              },
-              "status": 201
-            },
-            {
-              "auth": true,
-              "entity": "User",
-              "id": "GET /auth/me",
-              "method": "GET",
-              "operation": "me",
-              "path": "/auth/me",
-              "response": {
-                "entity": "User",
-                "kind": "entity"
-              },
-              "status": 200
-            }
-          ]
-        }
+      {
+        "from": "project",
+        "to": "models"
       },
-      "type": "generate"
-    },
-    {
-      "constraints": [
-        {
-          "kind": "golden-rule",
-          "value": "all conformance tests must pass"
-        }
-      ],
-      "context": {
-        "specNodeIds": [
-          "api:BookingCount",
-          "app:BookingAPI",
-          "auth:MainAuth",
-          "crud:Booking",
-          "crud:User",
-          "crud:Venue",
-          "entity:Booking",
-          "entity:User",
-          "entity:Venue",
-          "fastapi:Server"
-        ]
+      {
+        "from": "models",
+        "to": "schemas"
       },
-      "id": "fastapi:conform",
-      "input": {
-        "commands": [
-          "uv venv .venv --clear --quiet",
-          "uv pip install --quiet -e '.[dev]'",
-          ".venv/bin/python -c \"from app.main import app, create_app; assert app.title\"",
-          ".venv/bin/python -m pytest conformance -q"
+      {
+        "from": "models",
+        "to": "security"
+      },
+      {
+        "from": "database",
+        "to": "security"
+      },
+      {
+        "from": "models",
+        "to": "router:Booking"
+      },
+      {
+        "from": "schemas",
+        "to": "router:Booking"
+      },
+      {
+        "from": "database",
+        "to": "router:Booking"
+      },
+      {
+        "from": "security",
+        "to": "router:Booking"
+      },
+      {
+        "from": "models",
+        "to": "router:User"
+      },
+      {
+        "from": "schemas",
+        "to": "router:User"
+      },
+      {
+        "from": "database",
+        "to": "router:User"
+      },
+      {
+        "from": "security",
+        "to": "router:User"
+      },
+      {
+        "from": "models",
+        "to": "router:Venue"
+      },
+      {
+        "from": "schemas",
+        "to": "router:Venue"
+      },
+      {
+        "from": "database",
+        "to": "router:Venue"
+      },
+      {
+        "from": "models",
+        "to": "router:auth"
+      },
+      {
+        "from": "schemas",
+        "to": "router:auth"
+      },
+      {
+        "from": "database",
+        "to": "router:auth"
+      },
+      {
+        "from": "security",
+        "to": "router:auth"
+      },
+      {
+        "from": "router:Booking",
+        "to": "app"
+      },
+      {
+        "from": "router:User",
+        "to": "app"
+      },
+      {
+        "from": "router:Venue",
+        "to": "app"
+      },
+      {
+        "from": "router:auth",
+        "to": "app"
+      },
+      {
+        "from": "database",
+        "to": "app"
+      }
+    ],
+    "tasks": [
+      {
+        "dependsOn": [],
+        "id": "project",
+        "label": "project skeleton",
+        "promptSha256": "75a611c3fbc9c30f013c319c51f92c9996a6cde549a233080b9bf5e8f831c79d",
+        "scope": [
+          "pyproject.toml",
+          "app/__init__.py",
+          ".gitignore"
         ],
-        "suite": [
-          "conformance/conftest.py",
-          "conformance/contract.json",
-          "conformance/helpers.py",
-          "conformance/test_contract.py"
+        "specNodeIds": [
+          "app:BookingAPI"
         ]
       },
-      "type": "verify"
-    }
-  ],
+      {
+        "dependsOn": [
+          "project"
+        ],
+        "id": "database",
+        "label": "database layer",
+        "promptSha256": "a08ed57653f0e53c0bf748c387c469ed1235df24fa045b001b03472fbf89c4b3",
+        "scope": [
+          "app/config.py",
+          "app/database.py"
+        ],
+        "specNodeIds": [
+          "postgres:MainDB"
+        ]
+      },
+      {
+        "dependsOn": [
+          "project"
+        ],
+        "id": "models",
+        "label": "data models",
+        "promptSha256": "5e2dbc087e0966c39f72931c8b7a4d5bddfdb4e201b5e04d770a8f6eb99f101c",
+        "scope": [
+          "app/models.py"
+        ],
+        "specNodeIds": [
+          "entity:Booking",
+          "entity:User",
+          "entity:Venue"
+        ]
+      },
+      {
+        "dependsOn": [
+          "models"
+        ],
+        "id": "schemas",
+        "label": "pydantic schemas",
+        "promptSha256": "4aebefed2ddef027cf333c59d372a5557d834e3621c49cdcc862a78ed4131d05",
+        "scope": [
+          "app/schemas.py"
+        ],
+        "specNodeIds": [
+          "entity:Booking",
+          "entity:User",
+          "entity:Venue"
+        ]
+      },
+      {
+        "dependsOn": [
+          "models",
+          "database"
+        ],
+        "id": "security",
+        "label": "auth security",
+        "promptSha256": "efa981e5ec2d623a7e798f6773de0f53ca13b74e0e090b5c6ec9ee3abfc80b7f",
+        "scope": [
+          "app/security.py",
+          "app/deps.py"
+        ],
+        "specNodeIds": [
+          "auth:MainAuth"
+        ]
+      },
+      {
+        "dependsOn": [
+          "models",
+          "schemas",
+          "database",
+          "security"
+        ],
+        "id": "router:Booking",
+        "label": "router: Booking",
+        "promptSha256": "bfa901d3fc860b5597a52df31e4c603f84fcb641431b4c7f0102729d5399b9fb",
+        "scope": [
+          "app/routers/booking.py"
+        ],
+        "specNodeIds": [
+          "crud:Booking",
+          "api:BookingCount"
+        ]
+      },
+      {
+        "dependsOn": [
+          "models",
+          "schemas",
+          "database",
+          "security"
+        ],
+        "id": "router:User",
+        "label": "router: User",
+        "promptSha256": "ce8edc21c2d8c562913b8c0630558c420ba28170f6115b655e495255e19b9c76",
+        "scope": [
+          "app/routers/user.py"
+        ],
+        "specNodeIds": [
+          "crud:User"
+        ]
+      },
+      {
+        "dependsOn": [
+          "models",
+          "schemas",
+          "database"
+        ],
+        "id": "router:Venue",
+        "label": "router: Venue",
+        "promptSha256": "08f83eb517fa39e637dcdf0279803e5583c8f2e449cb35961bea91da9814efda",
+        "scope": [
+          "app/routers/venue.py"
+        ],
+        "specNodeIds": [
+          "crud:Venue"
+        ]
+      },
+      {
+        "dependsOn": [
+          "models",
+          "schemas",
+          "database",
+          "security"
+        ],
+        "id": "router:auth",
+        "label": "router: auth",
+        "promptSha256": "a0ef360e7d7da1c1434c39c89361f2ddaec1415d7ea02b64bd489065dfb6a14f",
+        "scope": [
+          "app/routers/auth.py"
+        ],
+        "specNodeIds": [
+          "auth:MainAuth"
+        ]
+      },
+      {
+        "dependsOn": [
+          "router:Booking",
+          "router:User",
+          "router:Venue",
+          "router:auth",
+          "database"
+        ],
+        "id": "app",
+        "label": "application wiring",
+        "promptSha256": "7971624f444cbad657a73d50caa0498fe934ed43faa4390c702211c278b153ce",
+        "scope": [
+          "app/main.py"
+        ],
+        "specNodeIds": [
+          "app:BookingAPI",
+          "fastapi:Server"
+        ]
+      }
+    ]
+  },
   "verification": {
     "check": [
       {
@@ -617,9 +290,9 @@
     ],
     "setup": [
       {
-        "command": "uv venv .venv --clear --quiet",
+        "command": "uv venv .venv --clear --quiet --python 3.13",
         "name": "venv",
-        "timeoutMs": 120000
+        "timeoutMs": 180000
       },
       {
         "command": "uv pip install --quiet -e '.[dev]'",

@@ -36,10 +36,21 @@ describe("spec generate (dry-run planning)", () => {
     expect(fs.existsSync(tasksPath)).toBe(true)
 
     const tasks = JSON.parse(fs.readFileSync(tasksPath, "utf8"))
-    expect(tasks.tasks.map((t: { id: string }) => t.id)).toEqual([
-      "fastapi:implement",
-      "fastapi:conform",
+    expect(tasks.dag.tasks.map((t: { id: string }) => t.id)).toEqual([
+      "project",
+      "database",
+      "models",
+      "schemas",
+      "security",
+      "router:Booking",
+      "router:User",
+      "router:Venue",
+      "router:auth",
+      "app",
     ])
+    for (const task of tasks.dag.tasks) {
+      expect(task.promptSha256).toMatch(/^[0-9a-f]{64}$/)
+    }
     expect(tasks.conformanceFiles).toEqual([
       "conformance/conftest.py",
       "conformance/contract.json",

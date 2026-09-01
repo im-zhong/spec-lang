@@ -46,6 +46,7 @@ IR node:
 | `field.email()`      | `email`     |
 | `field.datetime()`   | `datetime`  |
 | `field.ref("User")`  | `ref`       |
+| `field.enum("a", "b")` | `enum` (closed set of states — see [lifecycles](/guide/rest-resources#lifecycles-behavior-which-operations-are-legal-when)) |
 
 ## References (foreign keys)
 
@@ -70,6 +71,19 @@ compile time (`FIELD_REF_TARGET_UNKNOWN` /
 `FIELD_REF_TARGET_INVALID`). For the semantics references get in generated
 backends — id-string serialization, dangling-ref 404s — see
 [REST resources](/guide/rest-resources).
+
+## Enums (state fields)
+
+`field.enum(...)` declares a closed set of states:
+
+```ts
+status: field.enum("pending", "confirmed", "cancelled")
+// IR: { "type": "enum", "states": ["pending", "confirmed", "cancelled"] }
+```
+
+Enum fields are what [lifecycles](/guide/rest-resources#lifecycles-behavior-which-operations-are-legal-when)
+drive; bound to one, the field becomes server-controlled (create assigns
+the initial state, update ignores it, transitions change it).
 
 ## Modifiers
 

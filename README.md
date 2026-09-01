@@ -16,11 +16,11 @@ Specification (.spec.ts)
         ▼
      Spec IR ──► Diagnostics                traditional half (deterministic)
         │
-        ▼  lowering: blueprint + conformance suite + agent tasks
-   Coding agent ──► generated FastAPI app   agentic half (Claude Code)
+        ▼  lowering: blueprint → generation DAG → per-task prompts
+   Agent harness ──► generated FastAPI app  agentic half (Claude Code)
         │
-        ▼  compiler-owned conformance suite + OpenAPI equality
-   Verified, repeatable software            golden rule
+        ▼  compiler-owned conformance suite, ONE attempt + OpenAPI equality
+   Verified, repeatable software            golden rule (no repair)
 ```
 
 ## The golden rule: generation is repeatable
@@ -31,14 +31,20 @@ same features, same responses. `spec generate` enforces this:
 
 1. the compiler derives a **blueprint** — a pure, total function of the IR
    that pins every observable behavior (routes, status codes, response
-   shapes, error bodies, auth flow, list ordering);
-2. the compiler — not the agent — generates a **pytest conformance suite**
+   shapes, error bodies, auth flow, list scope and ordering);
+2. the compiler lowers the blueprint to a **generation DAG**
+   (project → models → schemas/security → routers → app) and an agent
+   harness executes it — one narrowly-scoped agent run per task, in
+   dependency order, with per-task file-scope auditing;
+3. the compiler — not the agent — generates a **pytest conformance suite**
    from that blueprint and drops it into every generated workspace;
-3. N independent generations (shots) each run the *same* suite;
-4. every shot's normalized **OpenAPI interface** must be identical.
+4. every shot must pass it **on the first attempt** (there is no repair),
+   and every shot's normalized **OpenAPI interface** must be identical.
 
-If shots diverge, the spec vocabulary or the compiler pins more of the
-contract — the agent never gets to decide observable behavior.
+If a shot fails or shots diverge, that is a specification defect: the
+spec vocabulary or the compiler pins more of the contract, and all shots
+are regenerated. The agent never gets to decide observable behavior, and
+nothing ever gets patched until it passes.
 
 
 ## Quick start
@@ -63,7 +69,7 @@ Generate a RESTful API server from a backend specification (requires the
 `claude` CLI on PATH):
 
 ```bash
-pnpm spec generate examples/booking/app.spec.ts --shots 2
+pnpm spec generate examples/booking/app.spec.ts --shots 3
 ```
 
 `spec build` writes deterministic artifacts:
@@ -144,8 +150,8 @@ pinned by the compiler — and provably identical across generations.
 | `@spec/web`          | Domain package: `entity`, `field`, `crud`, `count`, `page`, `api` |
 | `@spec/auth`         | Domain package: `auth`, `password` (requires `RelationalStore`) |
 | `@spec/postgres`     | Domain package: `postgres` (provides `RelationalStore`)     |
-| `@spec/fastapi`      | Backend target: blueprint lowering + conformance suite + verification plan |
-| `@spec/agent`        | Coding-agent bridge: headless Claude Code runner, shot orchestration, repeatability harness |
+| `@spec/fastapi`      | Backend target: blueprint + generation DAG + conformance suite + verification plan |
+| `@spec/agent`        | Agent harness: headless Claude Code runner, DAG execution, shot orchestration, repeatability |
 | `@spec/compiler`     | Static compiler: TS AST → Spec IR (deterministic, structured diagnostics) |
 | `@spec/cli`          | `spec check` / `spec build` / `spec inspect` / `spec generate` |
 
@@ -174,14 +180,16 @@ spec generate <file>  compile → blueprint → agent shots → conformance + re
 `spec generate` options:
 
 ```text
---shots <n>         independent generations (default 2) — all must conform
-                    and expose an identical OpenAPI interface
---dry-run           plan only (blueprint + tasks), no agent
+--shots <n>         independent generations (default 3) — all must conform
+                    on the FIRST attempt and expose an identical interface
+--dry-run           plan only (blueprint + DAG), no agent
 --out <dir>         generated-app root (default "out/")
 --model <id>        agent model (default SPEC_AGENT_MODEL)
---repair-rounds <n> verification failures fed back for repair (default 2)
---max-turns <n>     agent turn budget (default 60)
+--max-turns <n>     agent turn budget per DAG task (default 60)
 ```
+
+There is deliberately no repair option: a nonconformant shot is a
+specification defect (see the golden rule above).
 
 Exit codes: `0` success · `1` specification error / generation failed the
 golden rule · `2` compiler/internal error (use `--debug` for stack traces).
@@ -230,10 +238,10 @@ pnpm spec generate examples/inventory/app.spec.ts --shots 2
 pnpm spec generate examples/booking/app.spec.ts --shots 2
 ```
 
-Each run generates independent applications, judges them with the same
-compiler-derived conformance suite, and diffs their OpenAPI interfaces.
-Measured results for all three (2 shots each, all conformant, all
-interface-identical) are recorded in
+Each run generates 3 independent applications via the generation DAG,
+judges each with the same compiler-derived conformance suite on the
+FIRST attempt (no repair exists), and diffs their OpenAPI interfaces.
+Measured results are recorded in
 [`docs/golden-rule-results.md`](docs/golden-rule-results.md), along with
 every divergence the harness caught and the contract pin that fixed it.
 

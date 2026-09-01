@@ -91,13 +91,15 @@ Resources
 ## spec generate
 
 Compiles the specification and then **generates the application** with a
-headless coding agent. Each independent generation (shot) must pass the
-compiler's own conformance suite and expose the same interface as every
-other shot — repeatability is part of the build, not a hope. See
-[agentic generation](./generate) and [the golden rule](./golden-rule).
+headless coding agent executing a generation DAG (project → models →
+schemas/security → routers → app wiring). Each independent generation
+(shot) must pass the compiler's own conformance suite **on the first
+attempt** and expose the same interface as every other shot —
+repeatability is part of the build, not a hope, and there is no repair.
+See [agentic generation](./generate) and [the golden rule](./golden-rule).
 
 ```
-spec generate app.spec.ts --shots 2
+spec generate app.spec.ts --shots 3
 ```
 
 ## Exit codes

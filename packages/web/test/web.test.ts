@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest"
-import { count, crud, defaultCrudPath, entity, field, isFieldSpec, webPackage } from "../src"
+import {
+  count,
+  crud,
+  defaultCrudPath,
+  entity,
+  field,
+  isFieldSpec,
+  lifecycle,
+  transition,
+  webPackage,
+} from "../src"
 
 describe("@spec/web entity/field", () => {
   it("field builders produce chainable immutable specs", () => {
@@ -144,5 +154,43 @@ describe("@spec/web count", () => {
     const c = count(Product, { path: "/catalog/size", auth: false })
     expect(c.attributes.path).toBe("/catalog/size")
     expect(c.attributes.auth).toBe(false)
+  })
+})
+
+describe("@spec/web lifecycle", () => {
+  it("field.enum produces an enum field with its states", () => {
+    const status = field.enum("pending", "confirmed", "cancelled")
+    expect(status.type).toBe("enum")
+    expect(status.states).toEqual(["pending", "confirmed", "cancelled"])
+    const chained = status.optional()
+    expect(chained.states).toEqual(["pending", "confirmed", "cancelled"])
+  })
+
+  it("entity flattens enum states into field attributes", () => {
+    const Booking = entity("Booking", { status: field.enum("a", "b") })
+    expect(Booking.attributes.fields).toEqual({
+      status: { type: "enum", states: ["a", "b"] },
+    })
+  })
+
+  it("lifecycle() references the entity and serializes transitions as data", () => {
+    const Booking = entity("Booking", { status: field.enum("pending", "confirmed") })
+    const Flow = lifecycle(Booking, {
+      field: "status",
+      initial: "pending",
+      transitions: [transition("confirm", { from: ["pending"], to: "confirmed" })],
+    })
+    expect(Flow.kind).toBe("lifecycle")
+    expect(Flow.name).toBe("BookingLifecycle")
+    expect(Flow.attributes).toEqual({
+      entity: { nodeId: "entity:Booking" },
+      field: "status",
+      initial: "pending",
+      transitions: [{ event: "confirm", from: ["pending"], to: "confirmed" }],
+    })
+  })
+
+  it("the package registers the lifecycle node kind and validator", () => {
+    expect(webPackage.nodeKinds?.map((k) => k.kind)).toContain("lifecycle")
   })
 })

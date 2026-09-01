@@ -14,10 +14,10 @@ Specification (.spec.ts)
         ▼
     Spec IR  ──►  structured diagnostics
         │
-        ▼  blueprint + conformance suite (deterministic)
-   Coding agent ──► generated FastAPI backend
+        ▼  blueprint → generation DAG → per-task prompts (deterministic)
+   Agent harness ──► generated FastAPI backend
         │
-        ▼  compiler-owned verification, N repeatable shots
+        ▼  compiler-owned verification, ONE attempt, N repeatable shots
    Verified, repeatable software artifacts
 ```
 
@@ -91,9 +91,11 @@ meaning. See [the language guide](/guide/language) for the allowed subset.
 | ------------------- | ----------------------------------------------------------------------- |
 | `@spec/core`        | Core abstractions: `SpecNode`, `Diagnostic`, `Spec IR`, `defineApp`      |
 | `@spec/package-sdk` | Authoring SDK for writing your own spec packages                        |
-| `@spec/web`         | Web domain: `entity`, `field`, `page`, `api`                             |
+| `@spec/web`         | Web domain: `entity`, `field`, `crud`, `count`, `page`, `api`           |
 | `@spec/auth`        | Authentication: `auth`, `password`                                      |
 | `@spec/postgres`    | Database resource: `postgres` (provides `RelationalStore`)              |
+| `@spec/fastapi`     | Backend target: blueprint, generation DAG, conformance suite            |
+| `@spec/agent`       | Agent harness: DAG execution, verification, repeatability               |
 | `@spec/compiler`    | The static compiler                                                     |
 | `@spec/cli`         | The `spec` command line tool                                            |
 
@@ -101,8 +103,8 @@ Dependency direction is strictly one-way — domain packages never depend on
 the compiler, and the compiler contains zero domain logic:
 
 ```
-core ◄─ package-sdk ◄─ domain packages (web, auth, postgres)
-core ◄─ compiler ◄─ cli
+core ◄─ package-sdk ◄─ domain packages (web, auth, postgres, fastapi)
+core ◄─ compiler ◄─ cli ──► agent (Claude Code harness)
 ```
 
 ## What's next?

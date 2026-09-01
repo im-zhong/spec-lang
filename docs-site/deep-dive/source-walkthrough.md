@@ -4,8 +4,8 @@ This page traces **one specification** — `examples/booking/app.spec.ts` —
 through **every stage of the system at the source level**: which function
 in which file runs, with what input, producing what data. Every JSON
 block, every log line and every piece of Python below is **real output
-captured from an actual run** (2026-09-01, `claude-sonnet-4-5`, 2 shots,
-$3.69 total).
+captured from actual runs** (`claude-sonnet-4-5`; generation is
+DAG-structured, first-attempt-verified and repair-free — see below).
 
 Reproduce everything static yourself:
 
@@ -24,7 +24,8 @@ examples/booking/app.spec.ts --shots 2`.
 // examples/booking/app.spec.ts                       ← line numbers matter:
 import { defineApp } from "@spec/core"                //  1
                                                       //
-import { entity, field, crud, count } from "@spec/web"//  3
+import { entity, field, crud, count,
+         lifecycle, transition } from "@spec/web"//  3
 import { auth, password } from "@spec/auth"           //  4
 import { postgres } from "@spec/postgres"             //  5
 import { fastapi } from "@spec/fastapi"               //  6
@@ -47,6 +48,7 @@ const Booking = entity("Booking", {                   // 21
   venue: field.ref("Venue"),                          // 24
   startsAt: field.datetime(),                         // 25
   notes: field.string().optional(),                   // 26
+  status: field.enum("pending", "confirmed", "cancelled"), // 27
 })                                                    //
                                                       //
 const MainAuth = auth({                               // 29
@@ -59,15 +61,35 @@ const Venues   = crud(Venue,  { auth: false })                         // 35
 const Bookings = crud(Booking, { methods: ["list", "get", "create", "delete"] }) // 36
 const BookingCount = count(Booking)                                    // 37
                                                       //
-const MainDB = postgres({ entities: [User, Venue, Booking] })          // 39
+const BookingFlow = lifecycle(Booking, {              // 39  the state machine:
+  field: "status",                                    // 40  WHEN ops are legal
+  initial: "pending",                                 // 41
+  transitions: [                                      // 42
+    transition("confirm", { from: ["pending"], to: "confirmed" }),      // 43
+    transition("cancel", { from: ["pending", "confirmed"], to: "cancelled" }), // 44
+  ],                                                  // 45
+})                                                    // 46
+                                                      //
+const MainDB = postgres({ entities: [User, Venue, Booking] })          // 48
                                                       //
 const Server = fastapi({                              // 41
   title: "Booking API",                               // 42
-  services: [MainAuth, Users, Venues, Bookings, BookingCount],         // 43
-  resources: [MainDB],                                // 44
+  stack: {                                            // 43  the tech stack is
+    python: "3.13",                                   // 44  PART OF THE SPEC —
+    dependencies: {                                   // 45  exact pins, no
+      fastapi: "0.141.1",                             // 46  floating versions
+      sqlalchemy: "2.0.52",                           // 47
+      pydantic: "2.13.5",                             // 48
+      pyjwt: "2.13.0",                                // 49
+      bcrypt: "5.0.0",                                // 50
+    },                                                // 51
+    dev: { pytest: "9.1.1", httpx: "0.28.1" },        // 52
+  },                                                  // 53
+  services: [MainAuth, Users, Venues, Bookings, BookingCount],         // 54
+  resources: [MainDB],                                // 55
 })                                                    //
                                                       //
-export default defineApp({                            // 47
+export default defineApp({                            // 58
   name: "BookingAPI",                                 // 48
   entities: [User, Venue, Booking],                   // 49
   services: [MainAuth, Users, Venues, Bookings, BookingCount],         // 50
@@ -76,8 +98,9 @@ export default defineApp({                            // 47
 ```
 
 Three entities, one auth service, three CRUD resources with different
-method subsets and visibility, one count endpoint, one database, one
-server — fifteen routes in the end.
+method subsets and visibility, one count endpoint, one lifecycle (the
+behavior model's Phase 1), one database, one server — seventeen routes in
+the end, two of them state-machine transitions.
 
 ---
 
@@ -342,11 +365,27 @@ contract. For our nodes:
 
 - `app` node → `app: { name: "BookingAPI", title: "Booking API", prefix: "", port: 8000 }`
 - `postgres:MainDB` → `database: { engine: "postgres", urlEnv: "DATABASE_URL", fallback: "sqlite:///./dev.db", urlFormat: "sqlalchemy-url" }`
+- `fastapi:Server`'s `stack` overrides → merged with the target's pinned
+  defaults → `stack` (below) — the technology stack is part of the
+  specification, exactly versioned:
 - `entity:*` → table names via `snakeCase` + plural (`Booking` → `bookings`), columns via `snakeCase` per field (`startsAt` → `starts_at`); `User` additionally gets `passwordColumn: "password_hash"` because it is the principal
 - `crud:Venue` with `auth: false` and an **active** auth service → 5 public routes
 - `crud:Booking` methods subset → 4 routes (no `PATCH`)
 - `api:BookingCount` → `GET /bookings/count`
 - `auth:MainAuth` + password strategy → login/register/me
+
+The pinned stack, verbatim from `blueprint.json`:
+
+```json
+"stack": {
+  "python": "3.13",
+  "dependencies": {
+    "bcrypt": "5.0.0", "email-validator": "2.2.0", "fastapi": "0.141.1",
+    "pydantic": "2.13.5", "pydantic-settings": "2.15.0", "pyjwt": "2.13.0",
+    "sqlalchemy": "2.0.52", "uvicorn": "0.52.4" },
+  "dev": { "httpx": "0.28.1", "pytest": "9.1.1" }
+}
+```
 
 One real route object, verbatim from `blueprint.json`:
 
@@ -448,212 +487,142 @@ def test_count_booking(client):
     assert r.json() == {"count": 1}
 ```
 
-## Step 9 — The prompt (`packages/fastapi/src/prompt.ts`)
+## Step 9 — The generation DAG (`packages/fastapi/src/dag.ts`)
 
-`implementPrompt(blueprint)` renders the deterministic markdown. Its
-route table for our spec (real output):
+Code has structure, so generation has structure. `buildTaskDag(blueprint,
+ir)` lowers the contract into a task graph — for booking, ten tasks:
+
+```
+project ──► models ──► schemas ──► router:Booking ─┐
+   │           │  ╲                 router:User  ──┤
+   │           │   ╲► security ───► router:auth ───┤
+   └──► database ──────────────────► router:Venue ─┤  (public: no security dep)
+                                                   ▼
+                                                  app
+```
+
+Each task owns a narrow file scope and a **per-task prompt** — a pure
+function of its blueprint slice. The real prompt for the `project` task
+opens:
 
 ```text
-| method | path                | success | auth   | operation        |
-| ---    | ---                 | ---     | ---    | ---              |
-| GET    | /bookings           | 200     | bearer | list(Booking)    |
-| GET    | /bookings/{id}      | 200     | bearer | get(Booking)     |
-| POST   | /bookings           | 201     | bearer | create(Booking)  |
-| DELETE | /bookings/{id}      | 204     | bearer | delete(Booking)  |
-| GET    | /users              | 200     | bearer | list(User)       |
-| GET    | /users/{id}         | 200     | bearer | get(User)        |
-| GET    | /venues             | 200     | public | list(Venue)      |
-| GET    | /venues/{id}        | 200     | public | get(Venue)       |
-| POST   | /venues             | 201     | public | create(Venue)    |
-| PATCH  | /venues/{id}        | 200     | public | update(Venue)    |
-| DELETE | /venues/{id}        | 204     | public | delete(Venue)    |
-| GET    | /bookings/count     | 200     | bearer | count(Booking)   |
-| POST   | /auth/login         | 200     | public | login(User)      |
-| POST   | /auth/register      | 201     | public | register(User)   |
-| GET    | /auth/me            | 200     | bearer | me(User)         |
+You are executing ONE TASK of a larger, compiler-planned generation.
+
+# Task: project skeleton
+
+- Your scope (create/modify ONLY these): pyproject.toml, app/__init__.py, .gitignore
+- Already generated by previous tasks (read-only for you): —
+
+…requires-python = "==3.13.*", with EXACTLY these pinned dependencies
+(the stack is part of the specification — do not add, remove or float
+any version):
+    "fastapi==0.141.1", "sqlalchemy==2.0.52", "pydantic==2.13.5", …
 ```
 
-followed by the full blueprint JSON, the hard requirements (layout,
-`create_app` signature, SQLAlchemy URLs, REST semantics, the exact error
-bodies) and the definition of done. The prompt is a pure function of the
-blueprint — its SHA-256 lands in `agent.tasks.json`.
+and the `router:Venue` prompt carries only Venue's entity JSON, its five
+public routes, and the shared invariants — not the whole blueprint. The
+DAG and every prompt are fingerprinted (`dagFingerprint`) into
+`agent.tasks.json`; identical specs produce identical DAGs byte-for-byte.
 
-## Step 10 — The agent run (`packages/agent/src/runner.ts`)
+## Step 10 — The agent harness (`packages/agent/src/harness.ts`)
 
-Per shot, `runShot()` prepares a fresh workspace (`out/bookingapi-1/`)
-and `ClaudeCodeAgentRunner` spawns, with the prompt on stdin:
-
-```
-claude -p --output-format json --permission-mode acceptEdits \
-  --max-turns 60 --model claude-sonnet-4-5 \
-  --allowedTools Read Glob Grep LS Edit Write Bash(uv:*) Bash(python:*) \
-                 Bash(pytest:*) Bash(ls:*) Bash(cat:*) …
-```
-
-Real numbers from the two shots: **shot 1 — 39 turns, $1.76**;
-**shot 2 — 33 turns, $1.93**.
-
-Shot 1 wrote this tree (18 artifacts, `conformance/` excluded — that's
-compiler-owned):
+`AgentHarness.execute()` walks the topological order (Kahn, stable by
+id) and runs **one headless agent per task**:
 
 ```
-out/bookingapi-1/
-├── pyproject.toml        ← deps + [dev] extra (pytest, httpx)
-└── app/
-    ├── main.py           ← create_app() factory + module-level app
-    ├── config.py  database.py  deps.py  errors.py  security.py
-    ├── models.py  schemas.py  serializers.py
-    └── routers/  auth.py  bookings.py  users.py  venues.py
+claude -p --output-format json --permission-mode acceptEdits   --max-turns 60 --model claude-sonnet-4-5   --allowedTools Read Glob Grep LS Edit Write Bash(uv:*) Bash(python:*) …
 ```
 
-Two excerpts from the real generated code. The factory the whole
-verification chain depends on:
+The workspace is hashed before and after each task, so the harness can
+attribute every file to the task that produced it and flag anything
+touched outside the declared scope. A real per-task table (from the
+inventory pilot, `agent.result.json`):
+
+| Task | Turns | Cost | Produced |
+| ---- | ----- | ---- | -------- |
+| `project` | 6 | $0.24 | `pyproject.toml`, `app/__init__.py`, `.gitignore` |
+| `database` | 37 | $0.84 | `app/config.py`, `app/database.py` |
+| `models` | 22 | $0.66 | `app/models.py`, `uv.lock` ⚠ |
+| `schemas` | 14 | $0.52 | `app/schemas.py` |
+| `router:Category` | 27 | $0.80 | `app/routers/category.py` |
+| `router:Product` | 14 | $0.30 | `app/routers/product.py` |
+| `app` | 15 | $0.30 | `app/main.py`, `dev.db` ⚠ |
+
+(⚠ = scope-violation warnings: the models task ran `uv lock`, the app
+task imported the app and created the SQLite fallback — benign
+side-effects, recorded but not fatal; conformance is the judge.)
+
+The generated code itself keeps the same shape as before — the factory
+every later step depends on:
 
 ```python
-# app/main.py (generated)
 def create_app(database_url: str | None = None) -> FastAPI:
-    url = database_url or os.environ.get("DATABASE_URL") or _DEFAULT_DATABASE_URL
-    engine, session_factory = create_engine_and_session_factory(url)
-    application = FastAPI(title="Booking API", version="0.1.0", redoc_url=None)
-    application.state.SessionLocal = session_factory
-    application.include_router(auth.router)
-    application.include_router(users.router)
-    application.include_router(venues.router)
-    application.include_router(bookings.router)
+    url = database_url or os.environ.get("DATABASE_URL") or "sqlite:///./dev.db"
+    ...
     Base.metadata.create_all(engine)
     return application
 
 app = create_app()
 ```
 
-The ORM mapping of `entity:Booking` — declared keys stay camelCase in
-JSON, columns go snake_case, plus the two implicit columns:
+## Step 11 — Verification, ONCE (`packages/fastapi/src/verify.ts` + `orchestrate.ts`)
 
-```python
-# app/models.py (generated)
-class Timestamped:
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)  # implicit, orders lists
-
-class Booking(Timestamped, Base):
-    __tablename__ = "bookings"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
-    notes: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    starts_at: Mapped[str] = mapped_column(String(64))          # startsAt
-    user: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"))
-    venue: Mapped[str] = mapped_column(String(36), ForeignKey("venues.id"))
-```
-
-A public route implementing the pinned contract (`409` on unique
-violations, `404 {"detail": "Not found"}`, insertion-ordered lists):
-
-```python
-# app/routers/venues.py (generated)
-@router.get("/venues")
-def list_venues(db: Session = Depends(get_db)) -> list[dict]:
-    venues = db.query(models.Venue).order_by(models.Venue.created_at).all()
-    return [serialize_venue(venue) for venue in venues]
-
-@router.post("/venues", status_code=201)
-def create_venue(payload: VenueCreate, db: Session = Depends(get_db)) -> dict:
-    if db.query(models.Venue).filter(models.Venue.name == payload.name).first() is not None:
-        raise already_exists()
-    ...
-```
-
-## Step 11 — Verification (`packages/fastapi/src/verify.ts` + `orchestrate.ts`)
-
-The compiler drops the suite into the workspace (overwriting anything the
-agent put there) and runs the plan:
+The compiler drops the conformance suite into the workspace and runs:
 
 ```bash
-uv venv .venv --clear --quiet          # idempotent across repair rounds
-uv pip install --quiet -e '.[dev]'
+uv venv .venv --clear --quiet --python 3.13
+uv pip install --quiet -e '.[dev]'        # resolves the pinned stack exactly
 .venv/bin/python -c "from app.main import app, create_app; assert app.title"
 .venv/bin/python -m pytest conformance -q
 ```
 
-Shot 1 passed all of it first try — 21 tests green.
+**There is no second attempt.** If any command fails, the shot reports
+`GENERATION_NONCONFORMANT` — by policy a specification/blueprint defect:
+pin the contract, regenerate all shots.
 
-## Step 12 — Repair (the interesting one)
+## Step 12 — Why there is no repair story
 
-Shot 2's first `pytest conformance` failed **one** test — a textbook
-demonstration of the oracle forcing two independent generations to
-converge.
+An earlier architecture had a bounded repair loop, and a divergence it
+"fixed" is worth remembering. Two shots had read an unpinned behavior —
+does `GET /users` include the requesting principal? — differently:
 
-The scenario: `test_user_list` first calls `auth_token(client)` — which
-*registers* user **A** to obtain a bearer token — then seeds users **B**
-and **C** via the register fallback, then asserts:
+- shot 1 listed *every principal except the requester*;
+- shot 2 listed *everyone* — the suite expected the first reading and
+  failed it;
+- the repair loop patched shot 2 until it matched.
+
+That outcome is exactly what the golden rule forbids: the shots agreed
+only because a patcher forced them to. The **fix belonged in the
+contract**, and is now there:
+
+```jsonc
+// blueprint.contract.serialization
+"listScope": "allRows"   // list returns EVERY row — including the
+                         // requesting principal. No requester filtering.
+```
+
+with matching suite assertions: the principal list test fetches its own
+row via `/auth/me` and expects it **first** in the list:
 
 ```python
 def test_user_list(client):
     token = auth_token(client)
-    first = create_row(client, "User")     # B
-    second = create_row(client, "User")    # C
+    me = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+    first = create_row(client, "User")
+    second = create_row(client, "User")
     r = client.get("/users", headers={"Authorization": f"Bearer {token}"})
-    assert [row["id"] for row in rows] == [first["id"], second["id"]]
+    assert [row["id"] for row in r.json()] == [me.json()["id"], first["id"], second["id"]]
 ```
 
-Three users exist; the suite expects exactly `[B, C]` in creation order.
-The blueprint had **not** pinned whether `list` includes the requesting
-principal — so the two agents read it differently:
-
-- **Shot 1** implemented the list as *every principal except the one
-  making the request* (its router, verbatim):
-
-  ```python
-  # out/bookingapi-1/app/routers/users.py
-  # Pinned contract: the users directory lists every principal except the
-  # one making the request.
-  users = (
-      db.query(models.User)
-      .filter(models.User.id != principal.id)
-      .order_by(models.User.created_at)
-      .all()
-  )
-  ```
-
-  → returns `[B, C]` → passes.
-
-- **Shot 2** implemented the plain reading — *all users* → returned
-  `[A, B, C]` → failed with the real diff:
-
-```
-FAILED conformance/test_contract.py::test_user_list
-AssertionError: assert ['097618ea-97…', 'b5bc0f85-9c…', '0d43325f-da…']
-             == ['b5bc0f85-9c…', '0d43325f-da…']
-At index 0 diff: '097618ea-…' != 'b5bc0f85-…'
-```
-
-The compiler fed that output back via
-`repairPrompt(blueprint, failure)`; the agent converged on the same
-observable behavior as shot 1:
-
-```python
-# out/bookingapi-2/app/routers/users.py — after repair
-users = db.scalars(
-    select(User)
-    .where(User.id != current_user.id)
-    .order_by(User.created_at.asc())
-).all()
-```
-
-Re-verification: **21/21 green**. One repair round, $1.93 for that shot.
-
-Two lessons worth internalizing:
-
-1. **The oracle is the authority, not the prompt.** Even where the
-   blueprint under-specifies, the compiler-owned suite defines the
-   behavior and forces independent generations to converge — or fails
-   the run trying.
-2. **Divergences should become contract pins.** The ideal fix for this
-   one is a blueprint-level pin (e.g. `listScope`) plus an explicit
-   suite assertion, so agents don't need a repair round to discover the
-   intent. That is the golden-rule discipline: every divergence is a
-   specification gap first, an agent failure last.
+The repair loop is gone from the codebase. Same discipline for the stack:
+version drift across install dates used to be luck; the stack is now
+pinned **in the specification** (`fastapi({ stack: {...} })`, merged onto
+`@spec/fastapi`'s validated defaults), so every shot of every future
+generation resolves identical dependencies.
 
 ## Step 13 — Repeatability (`packages/agent/src/repeatability.ts`)
 
-With both shots conformant, each workspace runs the OpenAPI snapshot:
+With all shots conformant, each workspace runs the OpenAPI snapshot:
 
 ```python
 from app.main import app
@@ -666,33 +635,28 @@ norm = {f"{method.upper()} {path}": {
 print(json.dumps(norm, sort_keys=True, indent=2))
 ```
 
-Both snapshots were **byte-identical** → `INTERFACE_IDENTICAL`. The run's
-final lines (real output):
+Every snapshot must be byte-identical → `INTERFACE_IDENTICAL`. The
+verdict line the CLI prints:
 
 ```
-✓ shot-1: conformance passed · $1.76 → out/bookingapi-1
-✓ shot-2: conformance passed (1 repair round(s)) · $1.93 → out/bookingapi-2
-✓ All shots expose an identical OpenAPI interface
-✓ Generation repeatable across 2 shot(s)
+✓ Generation repeatable across 3 shot(s), zero repairs
 ```
 
 ## Step 14 — Artifacts & provenance (`packages/agent/src/artifacts.ts`)
 
-Every workspace file becomes a hashed `Artifact` (real entries from
-`agent.result.json`):
+Every workspace file becomes a hashed `Artifact`; the harness's per-task
+diffs additionally record **which task produced which file**:
 
 ```jsonc
 { "id": "artifact:app/main.py", "type": "source", "path": "app/main.py",
-  "contentHash": "1fa39e026f1a…", "generatedBy": "fastapi:implement",
+  "contentHash": "…", "generatedBy": "fastapi:dag",
   "sourceNodes": ["api:BookingCount", "app:BookingAPI", "auth:MainAuth",
                   "crud:Booking", "crud:User", "crud:Venue", "entity:Booking",
                   "entity:User", "entity:Venue", "fastapi:Server", "postgres:MainDB"] }
 ```
 
-Shot 1 produced 18 artifacts, shot 2 produced 15 — **different file
-counts, different hashes, different code** (shot 2 had an extra
-`serializers.py`, shot 1 an extra `errors.py`) — yet identical behavior.
-That is the golden rule demonstrated at the file level.
+The provenance chain is fully navigable:
+`Artifact → DagTask → SpecNode → SourceLocation (file, line, column)`.
 
 ## Source map
 
@@ -711,13 +675,15 @@ Where everything in this walkthrough lives:
 | `auth` / `password` | `packages/auth/src/builders.ts` |
 | `postgres` | `packages/postgres/src/index.ts` |
 | `fastapi()` builder | `packages/fastapi/src/builder.ts` |
-| Blueprint | `packages/fastapi/src/blueprint.ts` |
+| Blueprint (+ stack pins) | `packages/fastapi/src/blueprint.ts` |
+| Generation DAG | `packages/fastapi/src/dag.ts` |
 | Conformance generator | `packages/fastapi/src/conformance.ts` |
-| Prompts | `packages/fastapi/src/prompt.ts` |
+| Per-task prompts | `packages/fastapi/src/prompt.ts` |
 | Verification plan | `packages/fastapi/src/verify.ts` |
 | Plan assembly | `packages/fastapi/src/lowering.ts` |
 | Claude Code runner | `packages/agent/src/runner.ts` |
-| Shot lifecycle | `packages/agent/src/orchestrate.ts` |
+| Agent harness (DAG executor) | `packages/agent/src/harness.ts` |
+| Shot lifecycle (no repair) | `packages/agent/src/orchestrate.ts` |
 | Repeatability | `packages/agent/src/repeatability.ts` |
 | Artifact scan | `packages/agent/src/artifacts.ts` |
 | `spec generate` | `packages/cli/src/index.ts` |

@@ -25,7 +25,7 @@ export const validateFastApi = defineValidator("fastapi/validate-server", (ctx) 
   const byId = new Map(all.map((n) => [n.id, n]))
 
   for (const server of ctx.findNodes("fastapi")) {
-    const serviceKinds = new Set(["crud", "api", "auth"])
+    const serviceKinds = new Set(["crud", "api", "auth", "lifecycle"])
     const services = server.attributes.services
     if (!Array.isArray(services) || services.length === 0) {
       diagnostics.push(
@@ -66,7 +66,7 @@ export const validateFastApi = defineValidator("fastapi/validate-server", (ctx) 
             diag(
               "FASTAPI_SERVICE_KIND_UNSUPPORTED",
               "error",
-              `FastAPI cannot serve "${target.id}" of kind "${target.kind}" (supported: crud, api, auth).`,
+              `FastAPI cannot serve "${target.id}" of kind "${target.kind}" (supported: crud, api, auth, lifecycle).`,
               { nodeId: server.id, details: { service: ref.nodeId, kind: target.kind } },
             ),
           )

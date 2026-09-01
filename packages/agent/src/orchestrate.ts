@@ -1,26 +1,33 @@
 /**
- * Shot orchestration: one independent generation → deterministic
- * verification → bounded repair → artifact scan.
+ * Shot orchestration — the no-repair generation protocol.
  *
- * A "shot" is a full, independent pass over a generation plan:
+ * One shot = one independent generation, judged once:
  *
  *   1. fresh workspace (marked .spec-generated)
- *   2. agent writes the implementation from the deterministic prompt
- *   3. compiler drops its own conformance suite into the workspace
- *   4. compiler runs the verification plan (setup + check commands)
- *   5. on failure: repair prompts with the failing output, up to N rounds
- *   6. artifacts are hashed and reported with provenance
+ *   2. the agent harness executes the generation DAG (topological order,
+ *      one agent run per task, scope-audited)
+ *   3. the compiler drops its own conformance suite into the workspace
+ *   4. the compiler runs the verification plan — ONE attempt
  *
- * Repeatability (the golden rule) is then measured ACROSS shots — see
- * repeatability.ts.
+ * There is NO repair loop, by policy: if a shot does not conform on its
+ * first verification, the specification/blueprint is under-pinned. The
+ * correct response is to fix the spec (pin the behavior), then regenerate
+ * all shots — never to patch the generated code until it passes.
+ * Failures therefore report as design defects, not agent retry requests.
  */
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { spawn } from "node:child_process"
 import type { Artifact, Diagnostic } from "@spec/core"
 import { diagnostic } from "./diagnostics"
-import { ClaudeCodeAgentRunner, type AgentRunResult } from "./runner"
 import { prepareWorkspace, scanArtifacts } from "./artifacts"
+import {
+  AgentHarness,
+  type HarnessReport,
+  type HarnessTask,
+  type HarnessTaskResult,
+} from "./harness"
+import { ClaudeCodeAgentRunner } from "./runner"
 
 export interface VerificationCommand {
   name: string
@@ -29,14 +36,13 @@ export interface VerificationCommand {
 }
 
 export interface ShotSpec {
-  implementPrompt: string
-  repairPrompt: (failure: CommandResult) => string
+  /** The generation DAG tasks (already topologically sortable). */
+  tasks: HarnessTask[]
   /** Compiler-owned files written into the workspace after generation. */
   conformanceFiles: Record<string, string>
   /** Directories excluded from artifact scanning (compiler-owned). */
   conformanceDirs?: string[]
   verification: { setup: VerificationCommand[]; check: VerificationCommand[] }
-  specNodeIds: string[]
 }
 
 export interface CommandResult {
@@ -52,8 +58,7 @@ export interface ShotReport {
   shot: string
   workspace: string
   ok: boolean
-  generate: AgentRunResult
-  repairs: Array<{ round: number; run: AgentRunResult; failure: CommandResult }>
+  tasks: HarnessTaskResult[]
   verification: { setup: CommandResult[]; check: CommandResult[] }
   artifacts: Artifact[]
   diagnostics: Diagnostic[]
@@ -63,10 +68,6 @@ export interface ShotReport {
 export interface ShotOptions {
   model?: string
   maxTurns?: number
-  repairRounds?: number
-  runner?: ClaudeCodeAgentRunner
-  /** Skip the agent and only re-verify an existing workspace. */
-  verifyOnly?: boolean
 }
 
 const OUTPUT_TAIL = 8000
@@ -112,105 +113,84 @@ export async function runShot(
   spec: ShotSpec,
   options: ShotOptions = {},
 ): Promise<ShotReport> {
-  const runner =
-    options.runner ??
-    new ClaudeCodeAgentRunner({
-      model: options.model,
-      maxTurns: options.maxTurns ?? 60,
-      stderrLogFile: path.join(workspace, ".agent-stderr.log"),
-    })
-  const repairRounds = options.repairRounds ?? 2
+  const runner = new ClaudeCodeAgentRunner({
+    model: options.model,
+    maxTurns: options.maxTurns ?? 60,
+    stderrLogFile: path.join(workspace, ".agent-stderr.log"),
+  })
+  const harness = new AgentHarness({ runner })
   const diagnostics: Diagnostic[] = []
-  const repairs: ShotReport["repairs"] = []
-  let totalCostUsd = 0
 
   prepareWorkspace(workspace)
 
-  /* 1 — agent implements the blueprint */
-  let generate: AgentRunResult
-  if (options.verifyOnly) {
-    generate = { ok: true, resultText: "<verify-only: agent skipped>" }
-  } else {
-    generate = await runner.run(spec.implementPrompt, workspace)
-    totalCostUsd += generate.costUsd ?? 0
-    if (!generate.ok) {
-      diagnostics.push(
-        diagnostic(
-          "AGENT_TASK_FAILED",
-          "error",
-          `Generation agent failed: ${generate.error ?? "unknown error"}`,
-          { details: { shot, task: "fastapi:implement", sessionId: generate.sessionId } },
-        ),
-      )
-      return {
-        shot,
-        workspace,
-        ok: false,
-        generate,
-        repairs,
-        verification: { setup: [], check: [] },
-        artifacts: [],
-        diagnostics,
-        totalCostUsd,
-      }
-    }
-  }
+  /* 1 — the harness executes the generation DAG */
+  const harnessReport: HarnessReport = await harness.execute(workspace, spec.tasks)
+  const totalCostUsd = harnessReport.totalCostUsd
 
-  /* 2 — compiler drops its conformance suite (overwriting any tampering) */
-  const writeSuite = () => {
-    for (const [rel, content] of Object.entries(spec.conformanceFiles)) {
-      const target = path.join(workspace, rel)
-      fs.mkdirSync(path.dirname(target), { recursive: true })
-      fs.writeFileSync(target, content, "utf8")
-    }
-  }
-  writeSuite()
-
-  /* 3 — verification with bounded repair loop */
-  const verify = async (): Promise<{ setup: CommandResult[]; check: CommandResult[]; ok: boolean }> => {
-    const setup: CommandResult[] = []
-    for (const cmd of spec.verification.setup) {
-      setup.push(await runCommand(cmd.command, workspace, cmd.name, cmd.timeoutMs))
-    }
-    const check: CommandResult[] = []
-    for (const cmd of spec.verification.check) {
-      check.push(await runCommand(cmd.command, workspace, cmd.name, cmd.timeoutMs))
-    }
-    return { setup, check, ok: setup.every((c) => c.ok) && check.every((c) => c.ok) }
-  }
-
-  let verification = await verify()
-  let round = 0
-  while (!verification.ok && round < repairRounds && !options.verifyOnly) {
-    round += 1
-    const failure =
-      [...verification.setup, ...verification.check].find((c) => !c.ok) ??
-      verification.check[verification.check.length - 1]
-    const run = await runner.run(spec.repairPrompt(failure), workspace)
-    totalCostUsd += run.costUsd ?? 0
-    writeSuite() // the suite is compiler truth — always restore it
-    verification = await verify()
-    repairs.push({ round, run, failure })
-    if (run.ok && verification.ok) {
-      diagnostics.push(
-        diagnostic(
-          "AGENT_REPAIRED",
-          "info",
-          `Shot "${shot}" repaired after ${round} round(s).`,
-          { details: { shot, round } },
-        ),
-      )
-    }
-  }
-
-  const ok = verification.ok
-  if (!ok) {
-    const failing = [...verification.setup, ...verification.check].filter((c) => !c.ok)
+  if (!harnessReport.ok) {
+    const failed = harnessReport.results.find((r) => !r.ok)
     diagnostics.push(
       diagnostic(
-        "AGENT_VERIFICATION_FAILED",
+        "AGENT_TASK_FAILED",
         "error",
-        `Shot "${shot}" failed verification: ${failing.map((f) => f.name).join(", ")} failed.`,
+        `Generation task "${failed?.id ?? "?"}" failed: ${failed?.run.error ?? "unknown error"}`,
+        { details: { shot, task: failed?.id, sessionId: failed?.run.sessionId } },
+      ),
+    )
+    return {
+      shot,
+      workspace,
+      ok: false,
+      tasks: harnessReport.results,
+      verification: { setup: [], check: [] },
+      artifacts: [],
+      diagnostics,
+      totalCostUsd,
+    }
+  }
+
+  // Scope audit: informative, not fatal — conformance is the judge.
+  for (const result of harnessReport.results) {
+    if (result.scopeViolations.length > 0) {
+      diagnostics.push(
+        diagnostic(
+          "SCOPE_VIOLATION",
+          "warning",
+          `Task "${result.id}" modified files outside its declared scope: ${result.scopeViolations.join(", ")}.`,
+          { details: { shot, task: result.id, files: result.scopeViolations } },
+        ),
+      )
+    }
+  }
+
+  /* 2 — the compiler drops its conformance suite (compiler truth) */
+  for (const [rel, content] of Object.entries(spec.conformanceFiles)) {
+    const target = path.join(workspace, rel)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, content, "utf8")
+  }
+
+  /* 3 — verification. ONE attempt. No repair. */
+  const setup: CommandResult[] = []
+  for (const cmd of spec.verification.setup) {
+    setup.push(await runCommand(cmd.command, workspace, cmd.name, cmd.timeoutMs))
+  }
+  const check: CommandResult[] = []
+  for (const cmd of spec.verification.check) {
+    check.push(await runCommand(cmd.command, workspace, cmd.name, cmd.timeoutMs))
+  }
+  const verification = { setup, check }
+  const ok = setup.every((c) => c.ok) && check.every((c) => c.ok)
+
+  if (!ok) {
+    const failing = [...setup, ...check].filter((c) => !c.ok)
+    diagnostics.push(
+      diagnostic(
+        "GENERATION_NONCONFORMANT",
+        "error",
+        `Shot "${shot}" failed verification on its FIRST (and only) attempt: ${failing
+          .map((f) => f.name)
+          .join(", ")}. By the golden rule this is a specification/blueprint defect — pin the diverging behavior in the spec or the compiler, then regenerate all shots. Do not repair the generated code.`,
         {
           details: {
             shot,
@@ -218,7 +198,7 @@ export async function runShot(
               name: f.name,
               command: f.command,
               exitCode: f.exitCode,
-              output: f.output.slice(-2000),
+              output: f.output.slice(-3000),
             })),
           },
         },
@@ -229,8 +209,8 @@ export async function runShot(
       diagnostic(
         "AGENT_VERIFIED",
         "info",
-        `Shot "${shot}" passed conformance verification.`,
-        { details: { shot, checks: verification.check.map((c) => c.name) } },
+        `Shot "${shot}" passed conformance on the first attempt.`,
+        { details: { shot, checks: check.map((c) => c.name) } },
       ),
     )
   }
@@ -238,16 +218,15 @@ export async function runShot(
   /* 4 — artifacts with provenance */
   const artifacts = scanArtifacts(workspace, {
     excludeDirs: spec.conformanceDirs ?? ["conformance"],
-    generatedBy: "fastapi:implement",
-    sourceNodes: spec.specNodeIds,
+    generatedBy: "fastapi:dag",
+    sourceNodes: [...new Set(spec.tasks.flatMap((t) => t.specNodeIds ?? []))].sort(),
   })
 
   return {
     shot,
     workspace,
     ok,
-    generate,
-    repairs,
+    tasks: harnessReport.results,
     verification,
     artifacts,
     diagnostics,

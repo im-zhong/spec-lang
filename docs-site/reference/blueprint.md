@@ -67,15 +67,39 @@ interface BlueprintRoute {
   id: string                    // "PATCH /api/v1/posts/{id}"
   method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"
   path: string                  // prefix included, {id} path params
-  operation: "list" | "get" | "create" | "update" | "delete"
+  operation: "list" | "get" | "create" | "update" | "delete" | "transition"
             | "login" | "register" | "me" | "count"
   entity?: string
   status: number                // success status code
   auth: boolean                 // bearer token required
   request?: { shape: Record<string, string>; partial?: boolean }
   response: { kind: "entity" | "entityArray" | "empty" | "token" | "count"; entity?: string }
+  /** For transition routes: the state machine edge being lowered. */
+  transition?: { field: string; event: string; from: string[]; to: string }
 }
 ```
+
+### `lifecycles`
+
+Behavior Phase 1 (`docs/behavior-model.md`): each served lifecycle
+becomes one entry, and each transition an operation:
+
+```ts
+interface BlueprintLifecycle {
+  entity: string
+  field: string          // the enum field driving the machine
+  initial: string        // assigned on create
+  transitions: Array<{ event: string; from: string[]; to: string }>
+}
+```
+
+Lowering (pinned): one route per transition —
+`POST <crudPath>/{id}/<event>` — implemented as an ATOMIC guarded update
+(`UPDATE … WHERE id = :id AND <field> IN (<from>)`); the state field is
+excluded from create/update shapes (server-controlled); outcomes are
+`200` (updated row), `409 {"detail": "Invalid state"}` (guard failure),
+`404 {"detail": "Not found"}` (unknown id). The conformance suite derives
+the full legal/illegal matrix from this same data.
 
 Derivation rules (deterministic):
 
@@ -112,6 +136,9 @@ interface BackendContract {
     hiddenColumns: ["password_hash", "created_at"]
     listShape: "bareArray"             // list endpoints return a plain array
     listOrder: "createdAtAscending"    // insertion order via created_at
+    listScope: "allRows"               // every row, including the
+                                       // requesting principal; no
+                                       // requester filtering of any kind
     idGeneration: "serverUuid4"        // server-side uuid4; body id ignored
     createDefaults: "omittable-appliesDefault"
                                        // defaulted fields omittable; default
@@ -124,6 +151,7 @@ interface BackendContract {
     notFound:           { status: 404; body: { detail: "Not found" } }
     danglingRef:        { status: 404; body: { detail: "Not found" } }
     alreadyExists:      { status: 409; body: { detail: "Already exists" } }
+    guardFailed:        { status: 409; body: { detail: "Invalid state" } }
     validation:         { status: 422; body: "fastapi-default" }
   }
   auth: {
@@ -147,6 +175,8 @@ same spec differently:
 | `createDefaults` | one echoed sent values, another applied declared defaults |
 | `alreadyExists` 409 body | unique-violation status/shape varied by shot |
 | `listOrder` | unordered storage made list responses differ |
+| `listScope: "allRows"` | one shot excluded the requesting principal from `list`, another listed everyone |
+| lifecycle transitions as data | "when it is allowed" used to live in prompt prose — re-interpreted on every shot |
 | `refFields` | refs as id strings vs nested objects |
 
 When generation diverges, the fix is a new pin here plus suite assertions

@@ -64,6 +64,18 @@ const MainDB = postgres({ entities: [User, Venue, Booking] })
 
 const Server = fastapi({
   title: "Booking API",
+  // the tech stack is part of the specification — exact pins
+  stack: {
+    python: "3.13",
+    dependencies: {
+      fastapi: "0.141.1",
+      sqlalchemy: "2.0.52",
+      pydantic: "2.13.5",
+      pyjwt: "2.13.0",
+      bcrypt: "5.0.0",
+    },
+    dev: { pytest: "9.1.1", httpx: "0.28.1" },
+  },
   services: [MainAuth, Users, Venues, Bookings, BookingCount],
   resources: [MainDB],
 })
@@ -89,7 +101,7 @@ pnpm spec generate examples/booking/app.spec.ts --dry-run
 ```
 
 ```
-✓ Plan derived: 15 routes, 3 entities, auth
+✓ Plan derived: 15 routes, 3 entities, auth, 10 DAG tasks
 ✓ Dry run complete — artifacts in .spec (no agent run)
 ```
 
@@ -98,34 +110,37 @@ status codes, its request shape, the exact error bodies, the auth flow.
 If anything there is not what you meant, fix the **spec**: the blueprint
 is a pure function of it, and the agent has no say.
 
-`.spec/agent.tasks.json` records the lowering — the two agent tasks, the
-verification commands, and a SHA-256 fingerprint of the prompt. Running
-the dry-run twice produces byte-identical files.
+`.spec/agent.tasks.json` records the lowering — the generation DAG
+(tasks, dependency edges, per-task prompt hashes) and the verification
+commands. Running the dry-run twice produces byte-identical files.
 
 ## 3. Generate
 
 ```bash
-pnpm spec generate examples/booking/app.spec.ts --shots 2
+pnpm spec generate examples/booking/app.spec.ts --shots 3
 ```
 
 For each shot the compiler creates a fresh workspace
-(`out/bookingapi-1/`, `out/bookingapi-2/`), the agent implements the
-blueprint, then the compiler drops its own conformance suite into the
-workspace and verifies:
+(`out/bookingapi-1/`, `out/bookingapi-2/`, …) and the agent harness
+executes the generation DAG task by task, then the compiler drops its
+own conformance suite into the workspace and verifies — once:
 
 ```
-✓ Plan derived: 15 routes, 3 entities, auth
-⟳ Generating 2 independent shot(s) with the coding agent (this takes a while)…
-✓ shot-1: conformance passed · $1.76 → out/bookingapi-1
-✓ shot-2: conformance passed (1 repair round(s)) · $1.93 → out/bookingapi-2
+✓ Plan derived: 15 routes, 3 entities, auth, 10 DAG tasks
+⟳ Generating 3 independent shot(s), 10 DAG tasks each (this takes a while)…
+✓ shot-1: conformance passed (first attempt, no repair) · $…  → out/bookingapi-1
+✓ shot-2: conformance passed (first attempt, no repair) · $…  → out/bookingapi-2
+✓ shot-3: conformance passed (first attempt, no repair) · $…  → out/bookingapi-3
 ✓ All shots expose an identical OpenAPI interface
-✓ Generation repeatable across 2 shot(s)
+✓ Generation repeatable across 3 shot(s), zero repairs
 ```
 
-A **repair round** means the first verification failed and the failing
-output was fed back to the agent — bounded by `--repair-rounds` (default
-2). The suite is re-dropped before every re-check, so the agent cannot
-grade itself by editing the tests.
+Every shot must pass **on the first attempt**. A failed verification is
+not retried and not repaired — it is reported as
+`GENERATION_NONCONFORMANT`, a specification/blueprint defect: pin the
+diverging behavior in the spec or the compiler, then regenerate all
+shots. (See [the golden rule](/guide/golden-rule) for why repair is
+deliberately absent.)
 
 ## 4. Run the generated server
 
@@ -142,10 +157,11 @@ token.
 
 ## 5. Read the report
 
-`.spec/agent.result.json` holds the evidence: per-shot verification
-results, every repair round (which step failed, the output tail, what it
-cost), the artifact manifest with SHA-256 content hashes and the spec
-nodes each file derives from, and the interface-equality verdict.
+`.spec/agent.result.json` holds the evidence: per-shot **per-task runs**
+(session, turns, cost, files produced, scope violations), the one-shot
+verification results, the artifact manifest with SHA-256 content hashes
+and the spec nodes each file derives from, and the interface-equality
+verdict.
 
 ## What happens
 
@@ -156,55 +172,61 @@ nodes each file derives from, and the interface-equality verdict.
 Spec IR
   │  @spec/fastapi lowering (pure function)
   ▼
-BackendBlueprint ──► agent tasks (prompts, deterministic)
+BackendBlueprint ──► generation DAG (tasks, edges, prompts — deterministic)
   │                        │
-  │                        ▼  claude -p (headless, tool-restricted)
+  │                        ▼  agent harness: claude -p per task,
+  │                           topological order, scope-audited
   │                   generated FastAPI app in out/<app>-<n>/
   ▼
-conformance suite (compiler-owned pytest) ──► verification
-  │                                            │ failure → repair prompt
-  ▼                                            ▼ (bounded rounds)
-repeatability report (.spec/agent.result.json)
+conformance suite (compiler-owned pytest) ──► verification (ONE attempt)
+  │
+  ▼
+repeatability report (.spec/agent.result.json) — no repair, ever
 ```
 
-1. **Plan** — the compiler lowers the IR to a *blueprint*: a complete,
-   pinned description of the backend (entities, routes, status codes,
-   request/response shapes, error bodies, auth flow). `--dry-run` stops
-   here and writes `blueprint.json` + `agent.tasks.json`.
+1. **Plan** — the compiler lowers the IR to a *blueprint* (a complete,
+   pinned description of the backend) and then to a **generation DAG**:
+   code has structure, so generation has structure —
+   `project → models → schemas/security → per-entity routers → app
+   wiring`, each task owning a narrow file scope and reading its
+   dependencies' artifacts. `--dry-run` stops here and writes
+   `blueprint.json` + `agent.tasks.json` (task graph + prompt hashes).
 2. **Generate** — for each shot, a fresh workspace (`out/<app>-<n>/`) is
-   created and the agent implements the blueprint with its file tools.
-   The prompt is a pure function of the blueprint.
-3. **Verify** — the compiler drops its own pytest conformance suite into
-   the workspace and runs the verification plan
+   created and the **agent harness** executes the DAG: one headless
+   agent run per task, in topological order, with a per-task audit of
+   produced files and scope violations.
+3. **Verify — once** — the compiler drops its own pytest conformance
+   suite into the workspace and runs the verification plan
    (`uv venv --clear`, `uv pip install -e '.[dev]'`, import check,
-   `pytest conformance` — all idempotent across repair rounds).
-   Failures are fed back to the agent for repair (bounded rounds).
-4. **Repeat** — N independent shots must all pass the *same* suite and
-   expose the *same* normalized OpenAPI interface (see
-   [the golden rule](/guide/golden-rule)).
+   `pytest conformance`). **There is no repair**: a failed first
+   verification is a specification defect — pin the contract and
+   regenerate (see [the golden rule](/guide/golden-rule)).
+4. **Repeat** — N independent shots (default 3) must all pass the
+   *same* suite on the first attempt and expose the *same* normalized
+   OpenAPI interface.
 
 ## CLI options
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
-| `--shots <n>` | independent generations per spec | `2` |
-| `--dry-run` | plan only, no agent | — |
+| `--shots <n>` | independent generations per spec | `3` |
+| `--dry-run` | plan only (blueprint + DAG), no agent | — |
 | `--out <dir>` | generated-app root | `out/` |
-| `--model <id>` | agent model | `SPEC_AGENT_MODEL` or `claude-sonnet-4-5` |
-| `--repair-rounds <n>` | verification failures fed back for repair | `2` |
-| `--max-turns <n>` | agent turn budget per run | `60` |
+| `--model <id>` | agent model | `SPEC_AGENT_MODEL` or `glm-5.3-flash` |
+| `--max-turns <n>` | agent turn budget per task | `60` |
 
-Exit code `1` means a shot failed conformance or shots diverged — the
-golden rule was not satisfied.
+Exit code `1` means a shot failed its first verification or shots
+diverged — the golden rule was not satisfied. There is deliberately no
+repair option: fix the spec/blueprint and regenerate.
 
 ## Artifacts
 
 | File | Content |
 | --- | --- |
 | `.spec/blueprint.json` | the pinned behavioral contract |
-| `.spec/agent.tasks.json` | the agentic lowering (tasks + prompt hash) |
-| `.spec/agent.result.json` | per-shot verification, repairs, artifacts, repeatability |
+| `.spec/agent.tasks.json` | the generation DAG (tasks, edges, prompt hashes) |
+| `.spec/agent.result.json` | per-shot per-task runs, verification, artifacts, repeatability |
 | `out/<app>-<n>/` | the generated application (runnable) |
 
 The agent never grades itself: verification commands and the conformance
-suite are produced by the compiler and re-dropped before every check.
+suite are produced by the compiler and dropped after generation.

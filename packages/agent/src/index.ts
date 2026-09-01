@@ -6,6 +6,14 @@ export {
   type AgentRunResult,
 } from "./runner"
 export {
+  AgentHarness,
+  schedule,
+  type HarnessTask,
+  type HarnessTaskResult,
+  type HarnessReport,
+  type HarnessOptions,
+} from "./harness"
+export {
   runShot,
   runCommand,
   type ShotSpec,

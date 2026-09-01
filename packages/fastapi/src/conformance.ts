@@ -15,7 +15,13 @@
  * Same spec ⇒ same suite ⇒ all generations behave identically.
  */
 import { stableStringify } from "@spec/core"
-import type { BackendBlueprint, BlueprintEntity, BlueprintField, BlueprintRoute } from "./blueprint"
+import type {
+  BackendBlueprint,
+  BlueprintEntity,
+  BlueprintField,
+  BlueprintLifecycle,
+  BlueprintRoute,
+} from "./blueprint"
 
 export interface ConformanceFiles {
   /** path (relative to workspace) → file content */
@@ -42,6 +48,8 @@ function sampleValue(field: BlueprintField): string {
       return JSON.stringify("2026-01-01T12:00:00")
     case "ref":
       return JSON.stringify(`REF:${field.target ?? ""}`)
+    case "enum":
+      return JSON.stringify((field.states ?? [])[0] ?? "state")
   }
 }
 
@@ -64,6 +72,8 @@ function updateSample(field: BlueprintField): string {
       return JSON.stringify("2026-02-02T12:00:00")
     case "ref":
       return "str(uuid.uuid4())"
+    case "enum":
+      return JSON.stringify((field.states ?? ["state"])[Math.min(1, (field.states ?? []).length - 1)])
   }
 }
 
@@ -103,6 +113,28 @@ function lifecyclableEntities(bp: BackendBlueprint): BlueprintEntity[] {
         return resolvable(targetEntity, new Set([...seen, target]))
       })
   return bp.entities.filter((e) => canCreate(e.name) && resolvable(e, new Set([e.name])))
+}
+
+/** Shortest event chain from `initial` to any of `targets`; null if unreachable. */
+function pathToState(
+  lifecycle: BlueprintLifecycle,
+  targets: string[],
+): string[] | null {
+  if (targets.includes(lifecycle.initial)) return []
+  const queue: Array<{ state: string; path: string[] }> = [{ state: lifecycle.initial, path: [] }]
+  const seen = new Set([lifecycle.initial])
+  while (queue.length > 0) {
+    const { state, path } = queue.shift()!
+    for (const t of lifecycle.transitions) {
+      if (!t.from.includes(state)) continue
+      if (seen.has(t.to)) continue
+      const next = { state: t.to, path: [...path, t.event] }
+      if (targets.includes(t.to)) return next.path
+      seen.add(t.to)
+      queue.push(next)
+    }
+  }
+  return null
 }
 
 /** Python expression for a route path with {id} filled from a variable. */
@@ -387,8 +419,13 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
       if (keys.includes("id")) {
         t.push('    assert isinstance(stored["id"], str) and stored["id"]')
       }
+      const lifecycle = bp.lifecycles.find((l) => l.entity === entity.name)
       for (const field of entity.fields) {
         if (field.name === "id") continue
+        if (lifecycle && field.name === lifecycle.field) {
+          t.push(`    assert stored[${JSON.stringify(field.name)}] == ${JSON.stringify(lifecycle.initial)}`)
+          continue
+        }
         if (field.type === "ref") {
           t.push(`    assert stored[${JSON.stringify(field.name)}] == body[${JSON.stringify(field.name)}]`)
           continue
@@ -428,13 +465,28 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
           t.push("")
           t.push(`def test_${lower}_list(client):`)
           if (needsToken) t.push("    token = auth_token(client)")
-          t.push(`    first = create_row(client, ${JSON.stringify(entity.name)}${tokenArg})`)
-          t.push(`    second = create_row(client, ${JSON.stringify(entity.name)}${tokenArg})`)
-          t.push(`    r = client.get(${JSON.stringify(route.path)}${suffix})`)
-          t.push("    assert r.status_code == 200, r.text")
-          t.push("    rows = r.json()")
-          t.push("    assert isinstance(rows, list)")
-          t.push('    assert [row["id"] for row in rows] == [first["id"], second["id"]]')
+          // listScope: "allRows" — when the listed entity IS the auth
+          // principal, the token's own row is part of the list (created
+          // first, so it leads the createdAt ordering).
+          if (needsToken && hasAuth && bp.auth!.principal === entity.name) {
+            t.push(`    me = client.get(${JSON.stringify(mePath(bp))}, headers={"Authorization": f"Bearer {token}"})`)
+            t.push("    assert me.status_code == 200, me.text")
+            t.push(`    first = create_row(client, ${JSON.stringify(entity.name)}${tokenArg})`)
+            t.push(`    second = create_row(client, ${JSON.stringify(entity.name)}${tokenArg})`)
+            t.push(`    r = client.get(${JSON.stringify(route.path)}${suffix})`)
+            t.push("    assert r.status_code == 200, r.text")
+            t.push("    rows = r.json()")
+            t.push("    assert isinstance(rows, list)")
+            t.push('    assert [row["id"] for row in rows] == [me.json()["id"], first["id"], second["id"]]')
+          } else {
+            t.push(`    first = create_row(client, ${JSON.stringify(entity.name)}${tokenArg})`)
+            t.push(`    second = create_row(client, ${JSON.stringify(entity.name)}${tokenArg})`)
+            t.push(`    r = client.get(${JSON.stringify(route.path)}${suffix})`)
+            t.push("    assert r.status_code == 200, r.text")
+            t.push("    rows = r.json()")
+            t.push("    assert isinstance(rows, list)")
+            t.push('    assert [row["id"] for row in rows] == [first["id"], second["id"]]')
+          }
           t.push(`    assert set(rows[0].keys()) == ${pythonSetLiteral(keys)}`)
           break
         case "update": {
@@ -514,6 +566,70 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
     }
   }
 
+  // ---- lifecycle transitions (behavior Phase 1) ----
+  for (const lifecycle of bp.lifecycles) {
+    const entity = bp.entities.find((e) => e.name === lifecycle.entity)
+    if (!entity || !lifecycles.includes(entity)) continue
+    const lower = lifecycle.entity.toLowerCase()
+    const withAuth = hasAuth
+    const tokenLine = withAuth ? '    token = auth_token(client)' : ""
+    const headers = withAuth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
+    const tokenArg = withAuth ? ", token=token" : ""
+
+    for (const route of bp.routes.filter(
+      (r) => r.operation === "transition" && r.entity === lifecycle.entity && r.transition?.event,
+    )) {
+      const event = route.transition!.event
+      const chain = pathToState(lifecycle, route.transition!.from)
+      if (chain !== null) {
+        t.push("")
+        t.push("")
+        t.push(`def test_transition_${event}(client):`)
+        if (withAuth) t.push(tokenLine)
+        t.push(`    row = create_row(client, ${JSON.stringify(lifecycle.entity)}${tokenArg})`)
+        // pre-apply the chain that brings the row into a from-state
+        for (const step of chain) {
+          const stepRoute = bp.routes.find(
+            (r) => r.operation === "transition" && r.entity === lifecycle.entity && r.transition?.event === step,
+          )
+          if (stepRoute) {
+            t.push(`    client.post(${pathExpr(stepRoute, 'row["id"]')}${headers})`)
+          }
+        }
+        t.push(`    r = client.post(${pathExpr(route, 'row["id"]')}${headers})`)
+        t.push("    assert r.status_code == 200, r.text")
+        t.push(`    assert r.json()[${JSON.stringify(lifecycle.field)}] == ${JSON.stringify(route.transition!.to)}`)
+        t.push('    assert r.json()["id"] == row["id"]')
+        t.push(`    assert set(r.json().keys()) == ${pythonSetLiteral(entity.fields.map((f) => f.name))}`)
+        // applying again from the to-state is illegal (unless self-loop)
+        if (!route.transition!.from.includes(route.transition!.to)) {
+          t.push(`    r = client.post(${pathExpr(route, 'row["id"]')}${headers})`)
+          t.push("    assert r.status_code == 409, r.text")
+          t.push('    assert r.json() == {"detail": "Invalid state"}')
+        }
+        t.push(`    r = client.post(${pathExpr(route, "str(uuid.uuid4())")}${headers})`)
+        t.push("    assert r.status_code == 404, r.text")
+        t.push('    assert r.json() == {"detail": "Not found"}')
+      }
+    }
+
+    // create assigns the initial state; update ignores the state field
+    const updateRoute = bp.routes.find((r) => r.operation === "update" && r.entity === lifecycle.entity)
+    if (updateRoute) {
+      t.push("")
+      t.push("")
+      t.push(`def test_${lower}_update_ignores_${lifecycle.field}(client):`)
+      if (withAuth) t.push(tokenLine)
+      t.push(`    row = create_row(client, ${JSON.stringify(lifecycle.entity)}${tokenArg})`)
+      const otherState = (entity.fields.find((f) => f.name === lifecycle.field)?.states ?? [])
+        .filter((s) => s !== lifecycle.initial)
+      const probeState = otherState[0] ?? lifecycle.initial
+      t.push(`    r = client.patch(${pathExpr(updateRoute, 'row["id"]')}, json={${JSON.stringify(lifecycle.field)}: ${JSON.stringify(probeState)}}${headers})`)
+      t.push("    assert r.status_code == 200, r.text")
+      t.push(`    assert r.json()[${JSON.stringify(lifecycle.field)}] == row[${JSON.stringify(lifecycle.field)}]`)
+    }
+  }
+
   // ---- count endpoints ----
   for (const route of bp.routes.filter((r) => r.operation === "count")) {
     const entityName = route.entity!
@@ -521,18 +637,22 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
     const needsToken = hasAuth && route.auth
     const suffix = needsToken ? ', headers={"Authorization": f"Bearer {token}"}' : ""
     const tokenArg = needsToken ? ", token=token" : ""
+    // The token itself is created via register: when counting the
+    // principal entity, that row is already present (listScope allRows).
+    const principalOffset =
+      needsToken && hasAuth && bp.auth!.principal === entityName ? 1 : 0
     t.push("")
     t.push("")
     t.push(`def test_count_${entityName.toLowerCase()}(client):`)
     if (needsToken) t.push("    token = auth_token(client)")
     t.push(`    r = client.get(${JSON.stringify(route.path)}${suffix})`)
     t.push("    assert r.status_code == 200, r.text")
-    t.push('    assert r.json() == {"count": 0}')
+    t.push(`    assert r.json() == {"count": ${principalOffset}}`)
     if (create) {
       t.push(`    create_row(client, ${JSON.stringify(entityName)}${tokenArg})`)
       t.push(`    r = client.get(${JSON.stringify(route.path)}${suffix})`)
       t.push("    assert r.status_code == 200, r.text")
-      t.push('    assert r.json() == {"count": 1}')
+      t.push(`    assert r.json() == {"count": ${principalOffset + 1}}`)
     }
   }
 
@@ -576,4 +696,9 @@ function pythonInterfaceLiteral(
 
 function pythonSetLiteral(values: string[]): string {
   return `{${values.map((v) => JSON.stringify(v)).join(", ")}}`
+}
+
+/** Path of the GET /auth/me route (asserted to exist when auth is active). */
+function mePath(bp: BackendBlueprint): string {
+  return bp.auth!.routes.find((r) => r.operation === "me")!.path
 }
