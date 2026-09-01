@@ -35,6 +35,17 @@ export interface ExprCountOf {
   entity: string
   filter: Record<string, string>
 }
+/**
+ * The request's receipt time — a RUNTIME term. Deliberately distinct from
+ * compile-time `Date.now()` (which `SPEC_FORBIDDEN_ACCESS` rejects): no
+ * timestamp is baked into the IR; the spec pins only THAT the comparison
+ * happens against request receipt time (naive UTC). Allowed in
+ * transition guards and effect values, never in invariants (an invariant
+ * holding "at all times" cannot depend on the clock).
+ */
+export interface ExprRequestTime {
+  readonly __expr: "requestTime"
+}
 export interface ExprCmp {
   readonly __expr: "cmp"
   op: ComparisonOp
@@ -47,7 +58,13 @@ export interface ExprAnd {
   right: ExprNode
 }
 
-export type ExprNode = ExprField | ExprConst | ExprCountOf | ExprCmp | ExprAnd
+export type ExprNode =
+  | ExprField
+  | ExprConst
+  | ExprCountOf
+  | ExprRequestTime
+  | ExprCmp
+  | ExprAnd
 
 export function isExprNode(value: unknown): value is ExprNode {
   return (
@@ -107,6 +124,13 @@ export const expr = {
   field: (name: string) => chain<ExprField>({ __expr: "field", name }),
   /** A literal constant. */
   const: (value: string | number | boolean) => ({ __expr: "const", value }) as ExprConst,
+  /**
+   * The request's receipt time (naive UTC) — a runtime term for guards
+   * and effect values. The spec pins the comparison, never a timestamp.
+   */
+  request: {
+    time: () => chain<ExprRequestTime>({ __expr: "requestTime" }),
+  },
   /**
    * Cardinality across a `field.ref` edge: the number of `entity` rows
    * whose ref field points at the invariant's own entity.

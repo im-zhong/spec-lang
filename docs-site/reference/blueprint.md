@@ -89,7 +89,14 @@ interface BlueprintLifecycle {
   entity: string
   field: string          // the enum field driving the machine
   initial: string        // assigned on create
-  transitions: Array<{ event: string; from: string[]; to: string }>
+  transitions: Array<{
+    event: string
+    from: string[]
+    to: string
+    guard?: unknown      // expr tree; may use requestTime (runtime term)
+    effects?: Array<{ __effect: "set"; field: string; value: unknown }
+                  | { __effect: "emit"; event: string; fields: string[] }>
+  }>
 }
 ```
 

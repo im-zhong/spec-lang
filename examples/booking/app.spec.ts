@@ -1,5 +1,8 @@
 import { defineApp } from "@spec/core"
-import { entity, field, crud, count, lifecycle, transition, invariant, expr } from "@spec/web"
+import {
+  entity, field, crud, count,
+  lifecycle, transition, invariant, expr, effect,
+} from "@spec/web"
 import { auth, password } from "@spec/auth"
 import { postgres } from "@spec/postgres"
 import { fastapi } from "@spec/fastapi"
@@ -32,6 +35,7 @@ const Booking = entity("Booking", {
   startsAt: field.datetime(),
   notes: field.string().optional(),
   status: field.enum("pending", "confirmed", "cancelled"),
+  cancelledAt: field.datetime().optional(),
 })
 
 const MainAuth = auth({
@@ -45,12 +49,23 @@ const Bookings = crud(Booking, { methods: ["list", "get", "create", "delete"] })
 const BookingCount = count(Booking)
 
 // Which operations are legal WHEN: transitions are operations, not prose.
+// Guards may compare against the REQUEST's time (a runtime term — no
+// timestamp is ever baked into the IR); effects run in-transaction.
 const BookingFlow = lifecycle(Booking, {
   field: "status",
   initial: "pending",
   transitions: [
-    transition("confirm", { from: ["pending"], to: "confirmed" }),
-    transition("cancel", { from: ["pending", "confirmed"], to: "cancelled" }),
+    transition("confirm", {
+      from: ["pending"],
+      to: "confirmed",
+      guard: expr.field("startsAt").gt(expr.request.time()),
+      effects: [effect.emit("booking.confirmed", ["id", "venue", "startsAt"])],
+    }),
+    transition("cancel", {
+      from: ["pending", "confirmed"],
+      to: "cancelled",
+      effects: [effect.set("cancelledAt", expr.request.time())],
+    }),
   ],
 })
 

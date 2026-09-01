@@ -42,7 +42,7 @@
       "source": {
         "column": 22,
         "file": "app.spec.ts",
-        "line": 45
+        "line": 49
       }
     },
     {
@@ -74,7 +74,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 85
+        "line": 100
       }
     },
     {
@@ -102,7 +102,7 @@
           "source": {
             "column": 13,
             "file": "app.spec.ts",
-            "line": 39
+            "line": 43
           }
         }
       ],
@@ -113,7 +113,7 @@
       "source": {
         "column": 18,
         "file": "app.spec.ts",
-        "line": 37
+        "line": 41
       }
     },
     {
@@ -137,7 +137,7 @@
       "source": {
         "column": 18,
         "file": "app.spec.ts",
-        "line": 44
+        "line": 48
       }
     },
     {
@@ -159,7 +159,7 @@
       "source": {
         "column": 15,
         "file": "app.spec.ts",
-        "line": 42
+        "line": 46
       }
     },
     {
@@ -177,12 +177,16 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 43
+        "line": 47
       }
     },
     {
       "attributes": {
         "fields": {
+          "cancelledAt": {
+            "optional": true,
+            "type": "datetime"
+          },
           "id": {
             "type": "uuid"
           },
@@ -218,7 +222,7 @@
       "source": {
         "column": 17,
         "file": "app.spec.ts",
-        "line": 28
+        "line": 31
       }
     },
     {
@@ -243,7 +247,7 @@
       "source": {
         "column": 14,
         "file": "app.spec.ts",
-        "line": 16
+        "line": 19
       }
     },
     {
@@ -268,7 +272,7 @@
       "source": {
         "column": 15,
         "file": "app.spec.ts",
-        "line": 22
+        "line": 25
       }
     },
     {
@@ -330,7 +334,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 66
+        "line": 81
       }
     },
     {
@@ -361,7 +365,7 @@
       "source": {
         "column": 23,
         "file": "app.spec.ts",
-        "line": 59
+        "line": 74
       }
     },
     {
@@ -373,13 +377,44 @@
         "initial": "pending",
         "transitions": [
           {
+            "effects": [
+              {
+                "__effect": "emit",
+                "event": "booking.confirmed",
+                "fields": [
+                  "id",
+                  "venue",
+                  "startsAt"
+                ]
+              }
+            ],
             "event": "confirm",
             "from": [
               "pending"
             ],
+            "guard": {
+              "__expr": "cmp",
+              "left": {
+                "__expr": "field",
+                "name": "startsAt"
+              },
+              "op": "gt",
+              "right": {
+                "__expr": "requestTime"
+              }
+            },
             "to": "confirmed"
           },
           {
+            "effects": [
+              {
+                "__effect": "set",
+                "field": "cancelledAt",
+                "value": {
+                  "__expr": "requestTime"
+                }
+              }
+            ],
             "event": "cancel",
             "from": [
               "pending",
@@ -396,7 +431,7 @@
       "source": {
         "column": 21,
         "file": "app.spec.ts",
-        "line": 48
+        "line": 54
       }
     },
     {
@@ -423,7 +458,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 64
+        "line": 79
       }
     }
   ],

@@ -1,6 +1,6 @@
 # Behavior Model — Design Plan
 
-Status: **Phase 1 + Phase 2 implemented** (2026-09-01):
+Status: **all phases implemented** (2026-09-01):
 - Phase 1 — `field.enum`, `lifecycle`/`transition`, §5 validators, §6
   lowering (action routes, atomic guarded updates, pinned 409), §7
   conformance matrix.
@@ -10,9 +10,14 @@ Status: **Phase 1 + Phase 2 implemented** (2026-09-01):
   validators, lowering to transactional re-checks with the pinned
   `409 {"detail": "Invariant violated"}`, and conformance via minimally
   violating worlds.
-Phase 3 (`effect`) remains a proposal. See
-`docs-site/guide/rest-resources.md` § "Lifecycles" and § "Invariants" for
-the shipped surface.
+- Phase 3 — transition **guards** (incl. the `request.time()` runtime
+  term: the spec pins the comparison, never a timestamp) and **effects**:
+  `effect.set` assignments plus `effect.emit` writing to the generated
+  `events` outbox table in-transaction, with the columns pinned to
+  (id, event, payload JSON, created_at) and conformance reading the
+  outbox through the workspace database to assert exact payloads.
+See `docs-site/guide/rest-resources.md` § "Lifecycles" (incl. "Guards and
+effects") and § "Invariants" for the shipped surface.
 
 This document specifies how behavioral semantics —
 *what an API does*, not just *what it looks like* — enters the specification

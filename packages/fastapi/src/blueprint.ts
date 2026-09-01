@@ -71,7 +71,16 @@ export interface BlueprintRoute {
   /** Response semantics. */
   response: { kind: "entity" | "entityArray" | "empty" | "token" | "count"; entity?: string }
   /** For transition routes: the state machine edge being lowered. */
-  transition?: { field: string; event: string; from: string[]; to: string }
+  transition?: {
+    field: string
+    event: string
+    from: string[]
+    to: string
+    /** Extra predicate beyond the state guard (may use requestTime). */
+    guard?: unknown
+    /** Ordered causal tail: set / emit. */
+    effects?: Array<{ __effect: "set"; field: string; value: unknown } | { __effect: "emit"; event: string; fields: string[] }>
+  }
   /** Invariants this operation must preserve (ids into blueprint.invariants). */
   invariantIds?: string[]
 }
@@ -99,7 +108,13 @@ export interface BlueprintLifecycle {
   entity: string
   field: string
   initial: string
-  transitions: Array<{ event: string; from: string[]; to: string }>
+  transitions: Array<{
+    event: string
+    from: string[]
+    to: string
+    guard?: unknown
+    effects?: unknown[]
+  }>
 }
 
 export interface BlueprintAuth {
@@ -172,6 +187,11 @@ export interface BackendBlueprint {
   routes: BlueprintRoute[]
   lifecycles: BlueprintLifecycle[]
   invariants: BlueprintInvariant[]
+  /** Present iff any transition emits: the generated outbox table. */
+  effects?: {
+    eventsTable: string
+    columns: { id: "uuid"; event: "text"; payload: "json"; created_at: "datetime" }
+  }
   auth?: BlueprintAuth
   database: {
     engine: "postgres" | "sqlite"
@@ -520,6 +540,8 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
           (s): s is string => typeof s === "string",
         ),
         to: String(raw.to),
+        ...(isPlainObject(raw.guard) ? { guard: raw.guard } : {}),
+        ...(Array.isArray(raw.effects) ? { effects: raw.effects } : {}),
       }))
     if (declared.length > 0 && typeof node.attributes.initial === "string") {
       blueprintLifecycles.push({
@@ -555,7 +577,14 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
         status: 200,
         auth: authActive,
         response: { kind: "entity", entity: entityName },
-        transition: { field, event, from: [...from].sort(), to },
+        transition: {
+          field,
+          event,
+          from: [...from].sort(),
+          to,
+          ...(isPlainObject(raw.guard) ? { guard: raw.guard } : {}),
+          ...(Array.isArray(raw.effects) ? { effects: raw.effects as never } : {}),
+        },
       })
     }
   }
@@ -741,6 +770,19 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
     routes,
     lifecycles: blueprintLifecycles,
     invariants: blueprintInvariants,
+    ...(blueprintLifecycles.some((l) =>
+      l.transitions.some((t) =>
+        Array.isArray(t.effects) &&
+        t.effects.some((e) => isPlainObject(e) && e.__effect === "emit"),
+      ),
+    )
+      ? {
+          effects: {
+            eventsTable: "events",
+            columns: { id: "uuid", event: "text", payload: "json", created_at: "datetime" } as const,
+          },
+        }
+      : {}),
     ...(auth ? { auth } : {}),
     database: { engine, urlEnv: "DATABASE_URL", fallback: "sqlite:///./dev.db", urlFormat: "sqlalchemy-url" },
     stack,

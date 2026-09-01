@@ -42,6 +42,7 @@
           "User",
           "Post",
           "Comment",
+          "PostLifecycle",
           "no-empty-title"
         ]
       },
@@ -52,7 +53,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 59
+        "line": 81
       }
     },
     {
@@ -80,7 +81,7 @@
           "source": {
             "column": 13,
             "file": "app.spec.ts",
-            "line": 38
+            "line": 43
           }
         }
       ],
@@ -91,7 +92,7 @@
       "source": {
         "column": 18,
         "file": "app.spec.ts",
-        "line": 36
+        "line": 41
       }
     },
     {
@@ -109,7 +110,7 @@
       "source": {
         "column": 18,
         "file": "app.spec.ts",
-        "line": 43
+        "line": 48
       }
     },
     {
@@ -127,7 +128,7 @@
       "source": {
         "column": 15,
         "file": "app.spec.ts",
-        "line": 42
+        "line": 47
       }
     },
     {
@@ -145,7 +146,7 @@
       "source": {
         "column": 15,
         "file": "app.spec.ts",
-        "line": 41
+        "line": 46
       }
     },
     {
@@ -174,7 +175,7 @@
       "source": {
         "column": 17,
         "file": "app.spec.ts",
-        "line": 29
+        "line": 34
       }
     },
     {
@@ -195,6 +196,17 @@
             "default": false,
             "type": "boolean"
           },
+          "publishedAt": {
+            "optional": true,
+            "type": "datetime"
+          },
+          "status": {
+            "states": [
+              "draft",
+              "published"
+            ],
+            "type": "enum"
+          },
           "title": {
             "type": "string"
           }
@@ -207,7 +219,7 @@
       "source": {
         "column": 14,
         "file": "app.spec.ts",
-        "line": 21
+        "line": 24
       }
     },
     {
@@ -232,7 +244,7 @@
       "source": {
         "column": 14,
         "file": "app.spec.ts",
-        "line": 15
+        "line": 18
       }
     },
     {
@@ -261,6 +273,9 @@
             "nodeId": "crud:Comment"
           },
           {
+            "nodeId": "lifecycle:PostLifecycle"
+          },
+          {
             "nodeId": "invariant:no-empty-title"
           }
         ],
@@ -274,7 +289,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 53
+        "line": 75
       }
     },
     {
@@ -302,7 +317,52 @@
       "source": {
         "column": 22,
         "file": "app.spec.ts",
-        "line": 46
+        "line": 68
+      }
+    },
+    {
+      "attributes": {
+        "entity": {
+          "nodeId": "entity:Post"
+        },
+        "field": "status",
+        "initial": "draft",
+        "transitions": [
+          {
+            "effects": [
+              {
+                "__effect": "set",
+                "field": "publishedAt",
+                "value": {
+                  "__expr": "requestTime"
+                }
+              },
+              {
+                "__effect": "emit",
+                "event": "post.published",
+                "fields": [
+                  "id",
+                  "title",
+                  "author"
+                ]
+              }
+            ],
+            "event": "publish",
+            "from": [
+              "draft"
+            ],
+            "to": "published"
+          }
+        ]
+      },
+      "id": "lifecycle:PostLifecycle",
+      "kind": "lifecycle",
+      "name": "PostLifecycle",
+      "package": "@spec/web",
+      "source": {
+        "column": 18,
+        "file": "app.spec.ts",
+        "line": 52
       }
     },
     {
@@ -329,7 +389,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 51
+        "line": 73
       }
     }
   ],

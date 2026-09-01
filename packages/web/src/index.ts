@@ -30,9 +30,11 @@ export {
   type ExprField,
   type ExprConst,
   type ExprCountOf,
+  type ExprRequestTime,
   type ExprCmp,
   type ExprAnd,
   type ComparisonOp,
 } from "./expr"
+export { effect, isEffectSpec, type EffectSpec, type EffectSet, type EffectEmit } from "./effects"
 export { page, api, type PageInput, type ApiInput } from "./routes"
 export { default as webPackage } from "./spec-package"

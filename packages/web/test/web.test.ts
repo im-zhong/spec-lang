@@ -3,6 +3,7 @@ import {
   count,
   crud,
   defaultCrudPath,
+  effect,
   entity,
   expr,
   field,
@@ -243,5 +244,37 @@ describe("@spec/web invariant", () => {
 
   it("the package registers the invariant node kind and validator", () => {
     expect(webPackage.nodeKinds?.map((k) => k.kind)).toContain("invariant")
+  })
+})
+
+describe("@spec/web guards and effects (Phase 3)", () => {
+  it("expr.request.time() is a chainable runtime term", () => {
+    const guard = expr.field("startsAt").gt(expr.request.time())
+    expect(guard.__expr).toBe("cmp")
+    expect(guard.op).toBe("gt")
+    expect(guard.left).toMatchObject({ __expr: "field", name: "startsAt" })
+    expect(guard.right).toMatchObject({ __expr: "requestTime" })
+  })
+
+  it("transitions carry guards and effects as data", () => {
+    const tr = transition("confirm", {
+      from: ["pending"],
+      to: "confirmed",
+      guard: expr.field("startsAt").gt(expr.request.time()),
+      effects: [
+        effect.set("cancelledAt", expr.request.time()),
+        effect.emit("booking.confirmed", ["id", "venue"]),
+      ],
+    })
+    expect(tr.guard).toEqual({
+      __expr: "cmp",
+      op: "gt",
+      left: { __expr: "field", name: "startsAt" },
+      right: { __expr: "requestTime" },
+    })
+    expect(tr.effects).toEqual([
+      { __effect: "set", field: "cancelledAt", value: { __expr: "requestTime" } },
+      { __effect: "emit", event: "booking.confirmed", fields: ["id", "venue"] },
+    ])
   })
 })

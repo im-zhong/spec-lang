@@ -259,6 +259,40 @@ bodies (create assigns `initial`; PATCH ignores it), so state changes only
 through transitions — the compiler enforces what prose usually only asks
 for.
 
+### Guards and effects (Phase 3)
+
+Transitions may carry a **guard** — an extra predicate beyond the state
+check — and **effects**, their causal tail:
+
+```ts
+transition("confirm", {
+  from: ["pending"], to: "confirmed",
+  guard: expr.field("startsAt").gt(expr.request.time()),
+  effects: [effect.emit("booking.confirmed", ["id", "venue", "startsAt"])],
+}),
+transition("cancel", {
+  from: ["pending", "confirmed"], to: "cancelled",
+  effects: [effect.set("cancelledAt", expr.request.time())],
+}),
+```
+
+- `expr.request.time()` is a **runtime term**: the request's receipt
+  time (naive UTC), evaluated once per request and bound into the SQL
+  comparison. No timestamp is ever baked into the IR — compile-time
+  `Date.now()` remains forbidden; the spec pins *that* the comparison
+  happens against the clock, not *when*.
+- A failed guard answers like a failed state check:
+  `409 {"detail": "Invalid state"}`.
+- `effect.set(field, value)` assigns within the same atomic update
+  (value: a constant or the request time).
+- `effect.emit(event, fields)` inserts a row into the generated `events`
+  **outbox** table — columns pinned to `(id, event, payload JSON,
+  created_at)` — inside the transaction, all-or-nothing. Event
+  sourcing's audit benefit as plain data, without its architecture.
+- Effects run in **declared order**; the conformance suite reads the
+  outbox through the workspace database and asserts the exact payload
+  keys and values.
+
 The compiler validates the machine itself, before any generation:
 
 | Diagnostic | Meaning |
@@ -268,13 +302,19 @@ The compiler validates the machine itself, before any generation:
 | `LIFECYCLE_TRANSITION_TARGET_UNKNOWN` | a `from`/`to` state is misspelled |
 | `LIFECYCLE_TRANSITION_DUPLICATE` | the same `(event, from-state)` leads to two states — nondeterminism is unrepresentable |
 | `LIFECYCLE_STATE_UNREACHABLE` | warning: no path from `initial` reaches the state |
+| `LIFECYCLE_GUARD_TERM_UNKNOWN` / `LIFECYCLE_GUARD_SHAPE_UNSUPPORTED` | guard references a missing field or leaves the closed vocabulary |
+| `EFFECT_TARGET_UNKNOWN` / `EFFECT_PAYLOAD_FIELD_UNKNOWN` | effect sets/emits a missing field |
+| `EFFECT_VALUE_UNSUPPORTED` / `EFFECT_VALUE_TYPE_MISMATCH` | set values must be consts or request.time (datetime fields only) |
+| `LIFECYCLE_FIELD_IMMUTABLE` | an effect writes the id or the lifecycle state field |
+| `EFFECT_KIND_UNKNOWN` | only `set` and `emit` exist |
 
 And the conformance suite derives the full matrix from the same data:
 every legal transition (200 + new state echoed), every illegal re-apply
 (409 with the exact body), unknown ids (404), create-assigns-initial, and
-update-ignores-state. Roadmap (Phase 2/3 of the behavior model):
-`invariant` for cross-entity truths and `effect.set`/`effect.emit` —
-every new expression must pass the SQL litmus test to enter the language.
+update-ignores-state. All three phases of the behavior model are implemented — lifecycle
+(when), invariant (what always holds), effects (what follows). The
+vocabulary grows strictly by demand, and every new term must pass the
+SQL litmus test to enter the language.
 
 ## Invariants (behavior: what must hold at all times)
 

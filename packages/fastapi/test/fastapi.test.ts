@@ -102,15 +102,31 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
   it("booking: lifecycle lowers to transition operations with pinned outcomes", async () => {
     const result = await compileExample("booking")
     const plan = planGeneration(result.ir)
-    // the state machine itself
+    // the state machine itself (guards/effects asserted in the Phase-3 test)
     expect(plan.blueprint.lifecycles).toEqual([
       {
         entity: "Booking",
         field: "status",
         initial: "pending",
         transitions: [
-          { event: "confirm", from: ["pending"], to: "confirmed" },
-          { event: "cancel", from: ["pending", "confirmed"], to: "cancelled" },
+          {
+            event: "confirm",
+            from: ["pending"],
+            to: "confirmed",
+            guard: {
+              __expr: "cmp",
+              op: "gt",
+              left: { __expr: "field", name: "startsAt" },
+              right: { __expr: "requestTime" },
+            },
+            effects: [{ __effect: "emit", event: "booking.confirmed", fields: ["id", "venue", "startsAt"] }],
+          },
+          {
+            event: "cancel",
+            from: ["pending", "confirmed"],
+            to: "cancelled",
+            effects: [{ __effect: "set", field: "cancelledAt", value: { __expr: "requestTime" } }],
+          },
         ],
       },
     ])
@@ -172,6 +188,40 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
     expect(testFile).toContain("def test_invariant_no_overbooking(client):")
     expect(testFile).toContain('overrides={"capacity": 0}')
     expect(testFile).toContain('assert r.json() == {"detail": "Invariant violated"}')
+  })
+
+  it("booking: Phase-3 guards and effects lower with pinned observables", async () => {
+    const result = await compileExample("booking")
+    const plan = planGeneration(result.ir)
+    const confirm = plan.blueprint.routes.find((r) => r.id === "POST /bookings/{id}/confirm")!
+    expect(confirm.transition!.guard).toEqual({
+      __expr: "cmp",
+      op: "gt",
+      left: { __expr: "field", name: "startsAt" },
+      right: { __expr: "requestTime" },
+    })
+    expect(confirm.transition!.effects).toEqual([
+      { __effect: "emit", event: "booking.confirmed", fields: ["id", "venue", "startsAt"] },
+    ])
+    const cancel = plan.blueprint.routes.find((r) => r.id === "POST /bookings/{id}/cancel")!
+    expect(cancel.transition!.effects).toEqual([
+      { __effect: "set", field: "cancelledAt", value: { __expr: "requestTime" } },
+    ])
+    // the outbox table is declared iff some transition emits
+    expect(plan.blueprint.effects).toEqual({
+      eventsTable: "events",
+      columns: { id: "uuid", event: "text", payload: "json", created_at: "datetime" },
+    })
+    const inventory = planGeneration((await compileExample("inventory")).ir)
+    expect(inventory.blueprint.effects).toBeUndefined()
+    // the suite tests the guard both ways and inspects the outbox
+    const testFile = plan.conformance.files["conformance/test_contract.py"]
+    expect(testFile).toContain('overrides={"startsAt": "2100-01-01T00:00:00"}')
+    expect(testFile).toContain('overrides={"startsAt": "2000-01-01T00:00:00"}')
+    expect(testFile).toContain("SELECT event, payload FROM events")
+    expect(testFile).toContain('rw[0] == "booking.confirmed"')
+    expect(testFile).toContain('assert payload["venue"] == row["venue"]')
+    expect(testFile).toContain('assert r.json()["cancelledAt"] is not None')
   })
 
   it("cblog: the row-local invariant lowers and is asserted", async () => {

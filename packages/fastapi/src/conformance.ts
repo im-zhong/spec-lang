@@ -137,6 +137,42 @@ function pathToState(
   return null
 }
 
+/** If a guard compares a datetime field against request.time(), return
+ * the field plus far-future/far-past values that pass/fail the guard. */
+function requestTimeGuard(
+  guard: unknown,
+): { field: string; passValue: string; failValue: string } | undefined {
+  const visit = (node: unknown): { field: string; passValue: string; failValue: string } | undefined => {
+    if (!node || typeof node !== "object") return undefined
+    const n = node as Record<string, unknown>
+    if (n.__expr === "cmp") {
+      const left = n.left as Record<string, unknown> | undefined
+      const right = n.right as Record<string, unknown> | undefined
+      const op = String(n.op)
+      const fieldOnLeft = left?.__expr === "field" && right?.__expr === "requestTime"
+      const fieldOnRight = right?.__expr === "field" && left?.__expr === "requestTime"
+      if (fieldOnLeft || fieldOnRight) {
+        const fieldName = String((fieldOnLeft ? left : right)!.name)
+        // normalize: "field OP requestTime"; mirror when reversed
+        const mirror: Record<string, string> = { lt: "gt", lte: "gte", gt: "lt", gte: "lte", eq: "eq", neq: "neq" }
+        const effOp = fieldOnLeft ? op : mirror[op]
+        const futurePasses = effOp === "gt" || effOp === "gte"
+        return {
+          field: fieldName,
+          passValue: futurePasses ? "2100-01-01T00:00:00" : "2000-01-01T00:00:00",
+          failValue: futurePasses ? "2000-01-01T00:00:00" : "2100-01-01T00:00:00",
+        }
+      }
+      return visit(left) ?? visit(right)
+    }
+    if (n.__expr === "and") {
+      return visit(n.left) ?? visit(n.right)
+    }
+    return undefined
+  }
+  return visit(guard)
+}
+
 /** First comparison in a check tree (DFS), if any. */
 function findFirstCmp(check: unknown): Record<string, unknown> | undefined {
   if (!check || typeof check !== "object") return undefined
@@ -231,8 +267,10 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
   conf.push("@pytest.fixture()")
   conf.push("def client(tmp_path):")
   conf.push('    """Fresh app + isolated SQLite database per test."""')
-  conf.push('    application = create_app(database_url=f"sqlite:///{tmp_path}/test.db")')
+  conf.push('    db_path = str(tmp_path / "test.db")')
+  conf.push('    application = create_app(database_url=f"sqlite:///{db_path}")')
   conf.push("    with TestClient(application) as test_client:")
+  conf.push("        test_client.db_path = db_path")
   conf.push("        yield test_client")
   const conftest = conf.join("\n") + "\n"
 
@@ -662,12 +700,19 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
     )) {
       const event = route.transition!.event
       const chain = pathToState(lifecycle, route.transition!.from)
+      const guardInfo = requestTimeGuard(route.transition!.guard)
       if (chain !== null) {
         t.push("")
         t.push("")
         t.push(`def test_transition_${event}(client):`)
         if (withAuth) t.push(tokenLine)
-        t.push(`    row = create_row(client, ${JSON.stringify(lifecycle.entity)}${tokenArg})`)
+        t.push(
+          `    row = create_row(client, ${JSON.stringify(lifecycle.entity)}${tokenArg}` +
+            (guardInfo
+              ? `, overrides={${JSON.stringify(guardInfo.field)}: ${JSON.stringify(guardInfo.passValue)}}`
+              : "") +
+            ")",
+        )
         // pre-apply the chain that brings the row into a from-state
         for (const step of chain) {
           const stepRoute = bp.routes.find(
@@ -682,6 +727,49 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
         t.push(`    assert r.json()[${JSON.stringify(lifecycle.field)}] == ${JSON.stringify(route.transition!.to)}`)
         t.push('    assert r.json()["id"] == row["id"]')
         t.push(`    assert set(r.json().keys()) == ${pythonSetLiteral(entity.fields.map((f) => f.name))}`)
+
+        // set effects: constants are exact; request.time() is non-null
+        for (const eff of route.transition!.effects ?? []) {
+          const e = eff as Record<string, unknown>
+          if (e.__effect === "set") {
+            const value = e.value as Record<string, unknown> | undefined
+            if (value?.__expr === "const") {
+              t.push(`    assert r.json()[${JSON.stringify(String(e.field))}] == ${pythonLiteral(value.value)}`)
+            } else {
+              t.push(`    assert r.json()[${JSON.stringify(String(e.field))}] is not None`)
+            }
+          }
+        }
+
+        // emit effects: an outbox row with the pinned payload shape
+        for (const eff of route.transition!.effects ?? []) {
+          const e = eff as Record<string, unknown>
+          if (e.__effect !== "emit") continue
+          const fields = Array.isArray(e.fields) ? (e.fields as string[]) : []
+          const eventName = String(e.event)
+          t.push("    import json as _json, sqlite3")
+          t.push("    conn = sqlite3.connect(client.db_path)")
+          t.push('    rows = conn.execute("SELECT event, payload FROM events").fetchall()')
+          t.push("    conn.close()")
+          t.push(`    matching = [rw for rw in rows if rw[0] == ${JSON.stringify(eventName)}]`)
+          t.push("    assert len(matching) >= 1, rows")
+          t.push("    payload = _json.loads(matching[-1][1])")
+          t.push(`    assert set(payload.keys()) == ${pythonSetLiteral(fields)}`)
+          for (const pf of fields) {
+            t.push(`    assert payload[${JSON.stringify(pf)}] == row[${JSON.stringify(pf)}]`)
+          }
+        }
+
+        // guard fail-direction: the mirrored datetime value must 409
+        if (guardInfo) {
+          t.push(
+            `    bad = create_row(client, ${JSON.stringify(lifecycle.entity)}${tokenArg}, overrides={${JSON.stringify(guardInfo.field)}: ${JSON.stringify(guardInfo.failValue)}})`,
+          )
+          t.push(`    r = client.post(${pathExpr(route, 'bad["id"]')}${headers})`)
+          t.push("    assert r.status_code == 409, r.text")
+          t.push('    assert r.json() == {"detail": "Invalid state"}')
+        }
+
         // applying again from the to-state is illegal (unless self-loop)
         if (!route.transition!.from.includes(route.transition!.to)) {
           t.push(`    r = client.post(${pathExpr(route, 'row["id"]')}${headers})`)

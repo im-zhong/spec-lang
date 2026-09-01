@@ -119,7 +119,16 @@ ${bp.auth ? `- The principal \`${bp.auth.principal}\` additionally gets the impl
 - \`ref\` fields become string(36) columns with ForeignKey("<target table>.id").
 - \`enum\` fields become string columns validated against their \`states\`;
   a lifecycle-bound enum column defaults to the lifecycle's initial state.
-- Unique constraints for \`unique\` fields; nullable for \`optional\` fields.`
+- Unique constraints for \`unique\` fields; nullable for \`optional\` fields.${
+    bp.effects
+      ? `
+- ALSO generate the outbox table \`${bp.effects.eventsTable}\` with EXACTLY
+  these columns: id (string uuid pk), event (string), payload (string
+  holding a JSON object), created_at (naive-UTC datetime). Transitions
+  with emit effects insert into it in-transaction; expose NO routes
+  for it.`
+      : ""
+  }`
 }
 
 export function databasePrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
@@ -248,13 +257,28 @@ function invariantSection(bp: BackendBlueprint, entityName: string): string {
 
 /** The lifecycle section of a router prompt (empty when no transitions). */
 function transitionSection(
-  transitions: Array<{ event: string; path: string; field: string; from: string[]; to: string }>,
+  transitions: Array<{
+    event: string
+    path: string
+    field: string
+    from: string[]
+    to: string
+    guard?: unknown
+    effects?: unknown[]
+  }>,
 ): string {
   if (transitions.length === 0) return ""
+  const hasEmits = transitions.some((tr) =>
+    Array.isArray(tr.effects) &&
+    tr.effects.some((e) => { const o = e as Record<string, unknown>; return o?.__effect === "emit" }),
+  )
   const rows = transitions
-    .map((tr) => `| ${tr.event} | POST ${tr.path} | ${tr.field} ∈ {${tr.from.join(", ")}} | ${tr.field} = ${tr.to} |`)
+    .map(
+      (tr) =>
+        `| ${tr.event} | POST ${tr.path} | ${tr.field} ∈ {${tr.from.join(", ")}}${tr.guard ? " + guard" : ""} | ${tr.field} = ${tr.to}${Array.isArray(tr.effects) && tr.effects.length > 0 ? " + effects" : ""} |`,
+    )
     .join("\n")
-  return [
+  const lines = [
     "",
     "### Lifecycle transitions (state machine — the \"when it is allowed\" contract)",
     "",
@@ -273,13 +297,49 @@ function transitionSection(
     "",
     "Pinned outcomes (exact bodies):",
     "- success → 200 with the updated row",
-    "- row exists but wrong current state → 409 `{\"detail\": \"Invalid state\"}`",
+    "- row exists but wrong current state (or a failed guard) → 409 `{\"detail\": \"Invalid state\"}`",
     "- unknown id → 404 `{\"detail\": \"Not found\"}`",
     "",
     "The state field is server-controlled: it must NOT appear in create or",
     "update schemas (create assigns the initial state; update ignores it).",
-    "",
-  ].join("\n")
+  ]
+  if (transitions.some((tr) => tr.guard)) {
+    lines.push(
+      "",
+      "Guards (beyond the state check) are expression trees over row fields,",
+      "constants and `requestTime` (the request's receipt time, naive UTC —",
+      "evaluate it ONCE per request and bind it into the SQL comparison;",
+      "never bake a timestamp into code). Guard data:",
+      "",
+      "```json",
+      stableStringify(transitions.filter((tr) => tr.guard).map((tr) => ({ event: tr.event, guard: tr.guard }))),
+      "```",
+    )
+  }
+  if (transitions.some((tr) => Array.isArray(tr.effects) && tr.effects.length > 0)) {
+    lines.push(
+      "",
+      "Effects run inside the transition's transaction, in declared order,",
+      "all-or-nothing:",
+      "- `set`: assign the field in the same UPDATE (value: a constant or",
+      "  requestTime, naive UTC).",
+      hasEmits
+        ? "- `emit`: INSERT a row into the generated outbox table `events` —\n  columns EXACTLY (id TEXT uuid pk, event TEXT, payload TEXT holding a\n  JSON object, created_at datetime). The payload object's keys are the\n  effect's declared field names with the post-transition row's values."
+        : "- (this entity emits no events)",
+      "",
+      "Effects data:",
+      "",
+      "```json",
+      stableStringify(
+        transitions
+          .filter((tr) => Array.isArray(tr.effects) && tr.effects.length > 0)
+          .map((tr) => ({ event: tr.event, effects: tr.effects })),
+      ),
+      "```",
+    )
+  }
+  lines.push("")
+  return lines.join("\n")
 }
 
 export function routerPrompt(
@@ -291,7 +351,12 @@ export function routerPrompt(
   const routes = bp.routes.filter((r) => r.entity === entityName)
   const transitions = bp.routes
     .filter((r) => r.operation === "transition" && r.entity === entityName && r.transition)
-    .map((r) => ({ ...r.transition!, path: r.path }))
+    .map((r) => ({
+      ...r.transition!,
+      path: r.path,
+      ...(r.transition!.guard !== undefined ? { guard: r.transition!.guard } : {}),
+      ...(r.transition!.effects !== undefined ? { effects: r.transition!.effects } : {}),
+    }))
   return `${taskHeader(`router: ${entityName}`, ctx.scope, ctx.context)}
 
 Implement the API router for the **${entityName}** entity.

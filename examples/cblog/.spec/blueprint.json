@@ -150,6 +150,15 @@
     "urlEnv": "DATABASE_URL",
     "urlFormat": "sqlalchemy-url"
   },
+  "effects": {
+    "columns": {
+      "created_at": "datetime",
+      "event": "text",
+      "id": "uuid",
+      "payload": "json"
+    },
+    "eventsTable": "events"
+  },
   "entities": [
     {
       "fields": [
@@ -205,6 +214,21 @@
           "type": "boolean"
         },
         {
+          "column": "published_at",
+          "name": "publishedAt",
+          "optional": true,
+          "type": "datetime"
+        },
+        {
+          "column": "status",
+          "name": "status",
+          "states": [
+            "draft",
+            "published"
+          ],
+          "type": "enum"
+        },
+        {
           "column": "title",
           "name": "title",
           "type": "string"
@@ -257,7 +281,40 @@
       "shape": "rowCheck"
     }
   ],
-  "lifecycles": [],
+  "lifecycles": [
+    {
+      "entity": "Post",
+      "field": "status",
+      "initial": "draft",
+      "transitions": [
+        {
+          "effects": [
+            {
+              "__effect": "set",
+              "field": "publishedAt",
+              "value": {
+                "__expr": "requestTime"
+              }
+            },
+            {
+              "__effect": "emit",
+              "event": "post.published",
+              "fields": [
+                "id",
+                "title",
+                "author"
+              ]
+            }
+          ],
+          "event": "publish",
+          "from": [
+            "draft"
+          ],
+          "to": "published"
+        }
+      ]
+    }
+  ],
   "routes": [
     {
       "auth": true,
@@ -379,6 +436,7 @@
           "author": "ref:User",
           "body": "string?",
           "published": "boolean",
+          "publishedAt": "datetime?",
           "title": "string"
         }
       },
@@ -404,6 +462,7 @@
           "author": "ref:User",
           "body": "string?",
           "published": "boolean",
+          "publishedAt": "datetime?",
           "title": "string"
         }
       },
@@ -501,6 +560,45 @@
         "kind": "empty"
       },
       "status": 204
+    },
+    {
+      "auth": true,
+      "entity": "Post",
+      "id": "POST /posts/{id}/publish",
+      "method": "POST",
+      "operation": "transition",
+      "path": "/posts/{id}/publish",
+      "response": {
+        "entity": "Post",
+        "kind": "entity"
+      },
+      "status": 200,
+      "transition": {
+        "effects": [
+          {
+            "__effect": "set",
+            "field": "publishedAt",
+            "value": {
+              "__expr": "requestTime"
+            }
+          },
+          {
+            "__effect": "emit",
+            "event": "post.published",
+            "fields": [
+              "id",
+              "title",
+              "author"
+            ]
+          }
+        ],
+        "event": "publish",
+        "field": "status",
+        "from": [
+          "draft"
+        ],
+        "to": "published"
+      }
     },
     {
       "auth": false,

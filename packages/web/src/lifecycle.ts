@@ -24,26 +24,46 @@ import {
   toReference,
   type SpecNodeBuilder,
 } from "@spec/core"
+import { isExprNode, stripExpr } from "./expr"
+import { isEffectSpec } from "./effects"
 
 export interface TransitionInput {
   /** States the row must currently be in (any of). */
   from: string[]
   /** The state the transition moves the row to. */
   to: string
+  /** Extra predicate beyond the state guard (closed expr vocabulary;
+   * may use expr.request.time()). Fails like the state guard: pinned 409. */
+  guard?: unknown
+  /** Causal tail: effect.set / effect.emit, declared order. */
+  effects?: unknown[]
+  [key: string]: unknown
 }
 
 export interface TransitionSpec {
   event: string
   from: string[]
   to: string
+  guard?: unknown
+  effects?: unknown[]
 }
 
-/** One named state change: `transition("confirm", { from, to })`. */
+/** One named state change: `transition("confirm", { from, to, guard?, effects? })`. */
 export function transition(event: string, input: TransitionInput): TransitionSpec {
   return {
     event,
     from: Array.isArray(input?.from) ? [...input.from] : [],
     to: input?.to,
+    ...(isExprNode(input?.guard) ? { guard: stripExpr(input.guard) } : {}),
+    ...(Array.isArray(input?.effects)
+      ? {
+          effects: input.effects
+            .filter(isEffectSpec)
+            .map((eff) =>
+              eff.__effect === "set" ? { ...eff, value: stripExpr(eff.value) } : eff,
+            ),
+        }
+      : {}),
   }
 }
 

@@ -412,6 +412,142 @@ export const validateLifecycles = defineValidator("web/validate-lifecycles", (ct
       }
     }
     void declaredEvents
+
+    // Phase 3: guards and effects on each transition
+    const entityFieldsAll = isPlainObject(fields) ? fields : {}
+    for (const raw of transitions) {
+      if (!isPlainObject(raw)) continue
+      const event = String(raw.event)
+
+      // guard: row-check shape over entity fields, consts and request.time
+      const guard = raw.guard
+      if (guard !== undefined) {
+        const checkGuard = (tree: unknown, depth: number): boolean => {
+          if (!isPlainObject(tree) || depth > 8) return false
+          const kind = tree.__expr
+          if (kind === "field") {
+            const fname = String(tree.name)
+            const fdef = entityFieldsAll[fname]
+            if (!isPlainObject(fdef)) {
+              diagnostics.push(
+                diag(
+                  "LIFECYCLE_GUARD_TERM_UNKNOWN",
+                  "error",
+                  `transition "${event}" guard references field "${fname}" which does not exist on "${entity.name}".`,
+                  { nodeId: node.id, details: { field: fname } },
+                ),
+              )
+              return false
+            }
+            return true
+          }
+          if (kind === "const" || kind === "requestTime") return true
+          if (kind === "cmp" || kind === "and") {
+            return (
+              checkGuard(tree.left, depth + 1) && checkGuard(tree.right, depth + 1)
+            )
+          }
+          diagnostics.push(
+            diag(
+              "LIFECYCLE_GUARD_SHAPE_UNSUPPORTED",
+              "error",
+              `transition "${event}" guard uses unsupported expression "${String(kind)}" (allowed in guards: field, const, request.time, comparisons, and).`,
+              { nodeId: node.id, details: { kind: String(kind) } },
+            ),
+          )
+          return false
+        }
+        checkGuard(guard, 0)
+      }
+
+      // effects: set (existing writable field, const/requestTime value)
+      //          emit (event name + existing payload fields)
+      const effects = raw.effects
+      if (effects !== undefined && !Array.isArray(effects)) {
+        diagnostics.push(
+          diag("LIFECYCLE_EFFECTS_INVALID", "error", `transition "${event}" effects must be an array.`, {
+            nodeId: node.id,
+          }),
+        )
+      }
+      for (const eff of Array.isArray(effects) ? effects : []) {
+        if (!isPlainObject(eff)) continue
+        const kind = eff.__effect
+        if (kind === "set") {
+          const fname = String(eff.field)
+          const fdef = entityFieldsAll[fname]
+          if (!isPlainObject(fdef)) {
+            diagnostics.push(
+              diag(
+                "EFFECT_TARGET_UNKNOWN",
+                "error",
+                `transition "${event}" sets field "${fname}" which does not exist on "${entity.name}".`,
+                { nodeId: node.id, details: { field: fname } },
+              ),
+            )
+            continue
+          }
+          if (fname === "id" || fname === String(fieldName)) {
+            diagnostics.push(
+              diag(
+                "LIFECYCLE_FIELD_IMMUTABLE",
+                "error",
+                `transition "${event}" effect sets "${fname}" — ids and the lifecycle state field are server-controlled; the state changes via "to".`,
+                { nodeId: node.id, details: { field: fname } },
+              ),
+            )
+            continue
+          }
+          const value = eff.value
+          const vkind = isPlainObject(value) ? String(value.__expr) : undefined
+          if (vkind !== "const" && vkind !== "requestTime") {
+            diagnostics.push(
+              diag(
+                "EFFECT_VALUE_UNSUPPORTED",
+                "error",
+                `transition "${event}" sets "${fname}" to an unsupported value (use expr.const(...) or expr.request.time()).`,
+                { nodeId: node.id, details: { field: fname } },
+              ),
+            )
+          } else if (
+            vkind === "requestTime" &&
+            isPlainObject(fdef) &&
+            fdef.type !== "datetime"
+          ) {
+            diagnostics.push(
+              diag(
+                "EFFECT_VALUE_TYPE_MISMATCH",
+                "error",
+                `transition "${event}" sets "${fname}" (${String(fdef.type)}) to request.time() — only datetime fields accept the clock.`,
+                { nodeId: node.id, details: { field: fname } },
+              ),
+            )
+          }
+        } else if (kind === "emit") {
+          for (const pf of Array.isArray(eff.fields) ? eff.fields : []) {
+            if (!isPlainObject(entityFieldsAll[String(pf)])) {
+              diagnostics.push(
+                diag(
+                  "EFFECT_PAYLOAD_FIELD_UNKNOWN",
+                  "error",
+                  `transition "${event}" emits field "${String(pf)}" which does not exist on "${entity.name}".`,
+                  { nodeId: node.id, details: { field: String(pf) } },
+                ),
+              )
+            }
+          }
+        } else {
+          diagnostics.push(
+            diag(
+              "EFFECT_KIND_UNKNOWN",
+              "error",
+              `transition "${event}" uses unknown effect "${String(kind)}" (supported: set, emit).`,
+              { nodeId: node.id, details: { kind: String(kind) } },
+            ),
+          )
+        }
+      }
+    }
   }
   return diagnostics
 })

@@ -150,9 +150,24 @@
     "urlEnv": "DATABASE_URL",
     "urlFormat": "sqlalchemy-url"
   },
+  "effects": {
+    "columns": {
+      "created_at": "datetime",
+      "event": "text",
+      "id": "uuid",
+      "payload": "json"
+    },
+    "eventsTable": "events"
+  },
   "entities": [
     {
       "fields": [
+        {
+          "column": "cancelled_at",
+          "name": "cancelledAt",
+          "optional": true,
+          "type": "datetime"
+        },
         {
           "column": "id",
           "name": "id",
@@ -265,13 +280,44 @@
       "initial": "pending",
       "transitions": [
         {
+          "effects": [
+            {
+              "__effect": "emit",
+              "event": "booking.confirmed",
+              "fields": [
+                "id",
+                "venue",
+                "startsAt"
+              ]
+            }
+          ],
           "event": "confirm",
           "from": [
             "pending"
           ],
+          "guard": {
+            "__expr": "cmp",
+            "left": {
+              "__expr": "field",
+              "name": "startsAt"
+            },
+            "op": "gt",
+            "right": {
+              "__expr": "requestTime"
+            }
+          },
           "to": "confirmed"
         },
         {
+          "effects": [
+            {
+              "__effect": "set",
+              "field": "cancelledAt",
+              "value": {
+                "__expr": "requestTime"
+              }
+            }
+          ],
           "event": "cancel",
           "from": [
             "pending",
@@ -321,6 +367,7 @@
       "path": "/bookings",
       "request": {
         "shape": {
+          "cancelledAt": "datetime?",
           "notes": "string?",
           "startsAt": "datetime",
           "user": "ref:User",
@@ -476,11 +523,33 @@
       },
       "status": 200,
       "transition": {
+        "effects": [
+          {
+            "__effect": "emit",
+            "event": "booking.confirmed",
+            "fields": [
+              "id",
+              "venue",
+              "startsAt"
+            ]
+          }
+        ],
         "event": "confirm",
         "field": "status",
         "from": [
           "pending"
         ],
+        "guard": {
+          "__expr": "cmp",
+          "left": {
+            "__expr": "field",
+            "name": "startsAt"
+          },
+          "op": "gt",
+          "right": {
+            "__expr": "requestTime"
+          }
+        },
         "to": "confirmed"
       }
     },
@@ -497,6 +566,15 @@
       },
       "status": 200,
       "transition": {
+        "effects": [
+          {
+            "__effect": "set",
+            "field": "cancelledAt",
+            "value": {
+              "__expr": "requestTime"
+            }
+          }
+        ],
         "event": "cancel",
         "field": "status",
         "from": [

@@ -144,7 +144,7 @@
         ],
         "id": "models",
         "label": "data models",
-        "promptSha256": "5e2dbc087e0966c39f72931c8b7a4d5bddfdb4e201b5e04d770a8f6eb99f101c",
+        "promptSha256": "167998839ebc925eb87f1d8ffcdb6233e25a5f97dc64d4762b60fd21991a965a",
         "scope": [
           "app/models.py"
         ],
@@ -160,7 +160,7 @@
         ],
         "id": "schemas",
         "label": "pydantic schemas",
-        "promptSha256": "4aebefed2ddef027cf333c59d372a5557d834e3621c49cdcc862a78ed4131d05",
+        "promptSha256": "c09ae5cc2c3ca5c91808c28266c8bb93f876463e15d84ee7f145bf33aad7b642",
         "scope": [
           "app/schemas.py"
         ],
@@ -195,7 +195,7 @@
         ],
         "id": "router:Booking",
         "label": "router: Booking",
-        "promptSha256": "923908b793097fba3847d4396a20d99a9ef617b0d32f43c75aa51b364ff692c0",
+        "promptSha256": "9b0065bc0df516ee07ca52d7f474dab14edee8ffda147f872021e5191ed5d878",
         "scope": [
           "app/routers/booking.py"
         ],
