@@ -35,6 +35,8 @@ export interface HarnessTaskResult {
   /** Files touched outside the declared scope (harness audit). */
   scopeViolations: string[]
   durationMs: number
+  /** Agent runs issued for this task (1 = first try; retries add more). */
+  attempts: number
 }
 
 export interface HarnessReport {
@@ -47,6 +49,13 @@ export interface HarnessOptions {
   runner: ClaudeCodeAgentRunner
   /** Max concurrently running tasks. Default 1 (sequential, deterministic). */
   concurrency?: number
+  /**
+   * Retries for agent-RUN failures (CLI crash, turn-budget exhaustion).
+   * This is infrastructure tolerance, NOT repair: the identical prompt is
+   * re-issued when a run itself fails — conformance failures are never
+   * retried or patched (see the golden rule). Default 1.
+   */
+  taskRetries?: number
   onTaskStart?: (task: HarnessTask) => void
   onTaskEnd?: (result: HarnessTaskResult) => void
 }
@@ -73,7 +82,16 @@ export class AgentHarness {
       this.options.onTaskStart?.(task)
       const before = snapshotWorkspace(workspace)
       const started = Date.now()
-      const run = await this.options.runner.run(task.prompt, workspace)
+      let attempts = 0
+      let run = await this.options.runner.run(task.prompt, workspace)
+      attempts++
+      const maxAttempts = 1 + (this.options.taskRetries ?? 1)
+      while (!run.ok && attempts < maxAttempts) {
+        // the run itself failed (crash / turn budget), not the conformance
+        // check — re-issue the identical prompt
+        run = await this.options.runner.run(task.prompt, workspace)
+        attempts++
+      }
       const after = snapshotWorkspace(workspace)
 
       const produced: HarnessTaskResult["produced"] = []
@@ -91,6 +109,7 @@ export class AgentHarness {
         produced,
         scopeViolations,
         durationMs: Date.now() - started,
+        attempts,
       }
       results.push(result)
       totalCostUsd += run.costUsd ?? 0

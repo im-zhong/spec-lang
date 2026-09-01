@@ -100,6 +100,10 @@ verification is compiler-side.
   reported as `SCOPE_VIOLATION` warnings).
 - **failure semantics** — a failed task stops the chain immediately
   (`AGENT_TASK_FAILED`); dependents never run on a broken foundation.
+- **infrastructure retries (not repair)** — if an agent *run itself*
+  fails (CLI crash, turn-budget exhaustion), the harness re-issues the
+  identical prompt once. This tolerates transport flakiness; it is not
+  repair: conformance failures are never retried or patched.
 
 ## The shot lifecycle
 
