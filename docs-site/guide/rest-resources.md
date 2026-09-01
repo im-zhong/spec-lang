@@ -181,9 +181,20 @@ const BookingFlow = lifecycle(Booking, {                 // state machine
   field: "status",
   initial: "pending",
   transitions: [
-    transition("confirm", { from: ["pending"], to: "confirmed" }),
-    transition("cancel", { from: ["pending", "confirmed"], to: "cancelled" }),
+    transition("confirm", {
+      from: ["pending"], to: "confirmed",
+      guard: expr.field("startsAt").gt(expr.request.time()),
+      effects: [effect.emit("booking.confirmed", ["id", "venue", "startsAt"])],
+    }),
+    transition("cancel", {
+      from: ["pending", "confirmed"], to: "cancelled",
+      effects: [effect.set("cancelledAt", expr.request.time())],
+    }),
   ],
+})
+const NoOverbooking = invariant("no-overbooking", {
+  on: Venue,
+  check: expr.countOf(Booking, { venue: "self" }).lte(expr.field("capacity")),
 })
 ```
 
@@ -219,8 +230,8 @@ and every legal state change — decided by the specification. Continue with
 
 REST resources pin *what* exists. A **lifecycle** pins *when* operations
 are legal — the "line" facet of behavior from
-the behavior model plan in `docs/behavior-model.md` (Phase 1:
-transitions without guards/effects):
+the behavior model in `docs/behavior-model.md`. The base state machine is
+Phase 1; guards and effects extend the same transition data in Phase 3:
 
 ```ts
 import { lifecycle, transition } from "@spec/web"
@@ -373,6 +384,7 @@ row was not created.
 | `INVARIANT_TERM_UNKNOWN` | a field/entity in the tree does not resolve |
 | `INVARIANT_SHAPE_UNSUPPORTED` | outside the Phase-2 shapes (row check; countOf ≤ field/const) — rejected, never agent-interpreted |
 
-Roadmap (Phase 3 of the behavior model): `effect.set` / `effect.emit`
-with an outbox `events` table; guard vocabulary grows strictly by
-demand, every new term passing the SQL litmus test.
+Guards and effects are implemented, not roadmap items. The remaining
+extension rule is intentionally strict: guard/invariant vocabulary grows
+only when a new term can be validated and lowered mechanically, preserving
+the SQL litmus test and the golden rule.

@@ -17,8 +17,9 @@ This builds all workspace packages (`@spec/core`, `@spec/web`,
 `@spec/compiler`, `@spec/cli`).
 
 ::: tip
-Run `pnpm test` to verify the installation — 70+ unit, golden,
-determinism, conformance-syntax and integration tests should pass.
+Run `pnpm test` to verify the installation. The current suite has 89 local
+tests plus 3 opt-in live-agent E2E tests; the latter run only when
+`SPEC_AGENT_E2E=1`.
 :::
 
 ## 2. Inspect the example app
@@ -133,9 +134,11 @@ pnpm spec generate examples/inventory/app.spec.ts --shots 2
 ```
 
 The coding agent writes a complete FastAPI backend per shot
-(`out/inventoryapi-1/`, `out/inventoryapi-2/`); the compiler drops its own
-pytest conformance suite into each and requires **identical behavior and
-identical OpenAPI interfaces** — the [golden rule](/guide/golden-rule).
+(`out/inventoryapi-1/`, `out/inventoryapi-2/`). The compiler then starts
+each generated app through FastAPI `TestClient`, sends real HTTP requests
+against an isolated database, and checks exact responses and state changes.
+Every shot must pass that same suite once; normalized OpenAPI interfaces
+must also match — the [golden rule](/guide/golden-rule).
 Run the result:
 
 ```bash

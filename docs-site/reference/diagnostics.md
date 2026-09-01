@@ -63,6 +63,28 @@ compiler core emits structural codes; each package owns its domain codes.
 | `API_TARGET_INVALID`        | error  | `count(...)` target is not an entity builder       |
 | `API_ENTITY_NOT_FOUND`      | error  | `count(...)` references an undefined entity        |
 | `API_INVALID_PATH`          | error  | `count(...)` path is invalid                       |
+| `LIFECYCLE_TARGET_INVALID`  | error  | `lifecycle(...)` target is not an entity            |
+| `LIFECYCLE_ENTITY_NOT_FOUND`| error  | Lifecycle entity is absent from the IR              |
+| `LIFECYCLE_FIELD_INVALID`   | error  | State field is not an enum on the target entity     |
+| `LIFECYCLE_INITIAL_NOT_STATE` | error | Initial state is outside the enum                   |
+| `LIFECYCLE_NO_TRANSITIONS`  | error  | Lifecycle declares no transitions                   |
+| `LIFECYCLE_TRANSITION_TARGET_UNKNOWN` | error | Transition state is outside the enum       |
+| `LIFECYCLE_TRANSITION_DUPLICATE` | error | Event/from transition is duplicated             |
+| `LIFECYCLE_STATE_UNREACHABLE` | error | An enum state cannot be reached from the initial state |
+| `LIFECYCLE_GUARD_TERM_UNKNOWN` | error | Guard references an unsupported term             |
+| `LIFECYCLE_GUARD_SHAPE_UNSUPPORTED` | error | Guard expression cannot be lowered            |
+| `LIFECYCLE_EFFECTS_INVALID` | error  | Transition effects value is not an array            |
+| `LIFECYCLE_FIELD_IMMUTABLE` | error  | A `set` effect tries to change the lifecycle field  |
+| `EFFECT_KIND_UNKNOWN`       | error  | Effect is neither `set` nor `emit`                  |
+| `EFFECT_TARGET_UNKNOWN`     | error  | `set` targets an unknown entity field               |
+| `EFFECT_PAYLOAD_FIELD_UNKNOWN` | error | `emit` payload names an unknown entity field     |
+| `EFFECT_VALUE_UNSUPPORTED`  | error  | `set` value cannot be statically lowered            |
+| `EFFECT_VALUE_TYPE_MISMATCH`| error  | `set` value is incompatible with the target field   |
+| `INVARIANT_TARGET_INVALID`  | error  | `invariant({ on })` does not target an entity       |
+| `INVARIANT_ENTITY_NOT_FOUND`| error  | Invariant entity is absent from the IR              |
+| `INVARIANT_CHECK_INVALID`   | error  | Invariant has no valid check expression             |
+| `INVARIANT_TERM_UNKNOWN`    | error  | Invariant references an unsupported term            |
+| `INVARIANT_SHAPE_UNSUPPORTED` | error | Invariant is outside row-check/cross-row-count lowering |
 
 ## @spec/fastapi
 

@@ -16,8 +16,9 @@ pnpm spec build examples/basic-web-app/app.spec.ts
 
 ## spec check
 
-Runs parse → resolve → validate → link — the full semantic pipeline, but
-writes nothing.
+Runs parse → resolve → normalize → validate → link → lower — the full
+semantic pipeline, but writes nothing. The current `lower` pass is a
+no-op extension point.
 
 ```bash
 spec check app.spec.ts
@@ -55,12 +56,13 @@ Runs the complete pipeline and writes artifacts to the output directory
 ```
 .spec/
 ├── spec.ir.json      # the Spec IR (deterministic)
-├── diagnostics.json  # all diagnostics, even when the build fails
+├── diagnostics.json  # sorted diagnostics from a successful build
 └── manifest.json     # versions for reproducibility
 ```
 
-If the specification has errors, nothing is written and the diagnostics
-are printed instead.
+If the specification has errors, this invocation writes nothing and
+prints the diagnostics instead; artifacts from an older successful build
+are not rewritten.
 
 ## spec inspect
 
@@ -94,7 +96,8 @@ Compiles the specification and then **generates the application** with a
 headless coding agent executing a generation DAG (project → models →
 schemas/security → routers → app wiring). Each independent generation
 (shot) must pass the compiler's own conformance suite **on the first
-attempt** and expose the same interface as every other shot —
+attempt** and expose the same normalized OpenAPI interface as every other
+shot —
 repeatability is part of the build, not a hope, and there is no repair.
 See [agentic generation](./generate) and [the golden rule](./golden-rule).
 
@@ -110,9 +113,9 @@ spec generate app.spec.ts --shots 3
 | `1`  | Specification error (structured diagnostics emitted) |
 | `2`  | Compiler / internal error, or usage error            |
 
-This separation is deliberate: `1` means *your spec has a problem an
-agent could fix*; `2` means *the tool has a problem a human should look
-at*.
+This separation is deliberate: `1` means an input or generated result did
+not satisfy the compiler-owned contract; `2` means the compiler or CLI
+itself failed.
 
 ## --debug
 

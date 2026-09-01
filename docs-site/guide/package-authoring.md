@@ -201,11 +201,11 @@ const plan = planGeneration(ir)   // Spec IR → deterministic plan
 | **Target node** | `fastapi({ services, resources, title, prefix, port })` builder + `FASTAPI_*` validators | ordinary builders/validators as above |
 | **Blueprint** | `buildBlueprint(ir)` — pins every observable behavior | pure function of the IR |
 | **Conformance oracle** | `buildConformanceSuite(blueprint)` — a compiler-owned test suite for generated apps | deterministic, agent-independent |
-| **Prompts + verification** | `implementPrompt/repairPrompt`, `fastApiVerification()` (idempotent commands) | prompts pure functions of the blueprint |
+| **DAG prompts + verification** | per-task prompt builders, `fastApiVerification()` | prompts pure functions of blueprint slices; verification compiler-owned |
 
 The orchestration itself is target-agnostic and lives in `@spec/agent`:
-workspace lifecycle, the headless Claude Code runner, the
-generate → conformance → verify → repair loop, and the multi-shot
+workspace lifecycle, the headless Claude Code runner, DAG execution,
+one-shot conformance verification, and the parallel multi-shot
 repeatability harness (see the
 [generation reference](/reference/generation)). Wiring a target into the
 CLI is a thin adapter that maps the plan onto the agent's `ShotSpec`.

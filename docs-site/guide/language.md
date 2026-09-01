@@ -113,7 +113,7 @@ const MainDB = postgres({ ... })      // id: "postgres:MainDB"
 Nested anonymous nodes (e.g. the password strategy inside an auth node)
 derive their id from the parent id plus an index. Node ids are stable
 across compilations — they are the join key between the IR, diagnostics
-and future artifacts.
+and generated artifacts.
 
 ## What's in a name?
 

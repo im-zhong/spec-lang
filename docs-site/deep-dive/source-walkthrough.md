@@ -1,689 +1,780 @@
-# Source-code walkthrough: one spec, end to end
+<script setup>
+import TaskPrompts from "../.vitepress/theme/components/TaskPrompts.vue"
+</script>
 
-This page traces **one specification** — `examples/booking/app.spec.ts` —
-through **every stage of the system at the source level**: which function
-in which file runs, with what input, producing what data. Every JSON
-block, every log line and every piece of Python below is **real output
-captured from actual runs** (`claude-sonnet-4-5`; generation is
-DAG-structured, first-attempt-verified and repair-free — see below).
+# Source-code walkthrough: Booking, end to end
 
-Reproduce everything static yourself:
+This page traces `examples/booking/app.spec.ts` through the current
+implementation, from TypeScript source to two independently generated and
+verified FastAPI applications. It follows the actual call graph and uses
+artifacts captured from the 2026-09-01 repeatability run.
+
+The reference run used Claude Code with `deepseek-v4-flash[1m]` selected by
+Claude Code's own configuration. Two Booking shots ran in parallel. Each shot
+executed ten sequential DAG tasks and received one final conformance attempt,
+with no repair.
 
 ```bash
-pnpm spec check   examples/booking/app.spec.ts
-pnpm spec build   examples/booking/app.spec.ts
+pnpm spec check examples/booking/app.spec.ts
 pnpm spec generate examples/booking/app.spec.ts --dry-run
+pnpm spec generate examples/booking/app.spec.ts --shots 2
 ```
 
-The dynamic steps (agent, verification) are `pnpm spec generate
-examples/booking/app.spec.ts --shots 2`.
+The last command normally accepts `--model <id>`. When the runner is launched
+without a model override, Claude Code resolves the model from its settings.
 
-## The example
+## System map
+
+```text
+app.spec.ts
+    |
+    | Parse -> Resolve -> Normalize -> Validate -> Link -> Lower(no-op) -> Emit
+    v
+Spec IR
+    |
+    | buildBlueprint() -> buildTaskDag() -> buildConformanceSuite()
+    v
+FastApiGenerationPlan
+    |
+    | runRepeatability()
+    +------ shot-1: 10 agent tasks -> verify once ----+
+    +------ shot-2: 10 agent tasks -> verify once ----+  parallel
+                                                        |
+                                                        v
+                                    functional conformance + OpenAPI equality
+```
+
+The static half is deterministic and executes no user specification code. The
+agentic half is nondeterministic in implementation, but every result is judged
+against compiler-owned behavior.
+
+## The current Booking specification
+
+The example exercises all three implemented behavior facets:
+
+- point behavior: CRUD, count, auth, request/response and error contracts;
+- line behavior: a lifecycle with state transitions and a runtime guard;
+- plane behavior: a cross-row no-overbooking invariant;
+- causal effects: a field assignment and an outbox event.
 
 ```ts
-// examples/booking/app.spec.ts                       ← line numbers matter:
-import { defineApp } from "@spec/core"                //  1
-                                                      //
-import { entity, field, crud, count,
-         lifecycle, transition } from "@spec/web"//  3
-import { auth, password } from "@spec/auth"           //  4
-import { postgres } from "@spec/postgres"             //  5
-import { fastapi } from "@spec/fastapi"               //  6
-                                                      //
-const User = entity("User", {                         //  9
-  id: field.uuid(),                                   // 10
-  email: field.email().unique(),                      // 11
-  name: field.string(),                               // 12
-})                                                    //
-                                                      //
-const Venue = entity("Venue", {                       // 15
-  id: field.uuid(),                                   // 16
-  name: field.string().unique(),                      // 17
-  capacity: field.int(),                              // 18
-})                                                    //
-                                                      //
-const Booking = entity("Booking", {                   // 21
-  id: field.uuid(),                                   // 22
-  user: field.ref("User"),                            // 23
-  venue: field.ref("Venue"),                          // 24
-  startsAt: field.datetime(),                         // 25
-  notes: field.string().optional(),                   // 26
-  status: field.enum("pending", "confirmed", "cancelled"), // 27
-})                                                    //
-                                                      //
-const MainAuth = auth({                               // 29
-  principal: User,                                    // 30
-  strategy: password({ identity: User.fields.email }),// 31
-})                                                    //
-                                                      //
-const Users    = crud(User,   { methods: ["list", "get"] })            // 34
-const Venues   = crud(Venue,  { auth: false })                         // 35
-const Bookings = crud(Booking, { methods: ["list", "get", "create", "delete"] }) // 36
-const BookingCount = count(Booking)                                    // 37
-                                                      //
-const BookingFlow = lifecycle(Booking, {              // 39  the state machine:
-  field: "status",                                    // 40  WHEN ops are legal
-  initial: "pending",                                 // 41
-  transitions: [                                      // 42
-    transition("confirm", { from: ["pending"], to: "confirmed" }),      // 43
-    transition("cancel", { from: ["pending", "confirmed"], to: "cancelled" }), // 44
-  ],                                                  // 45
-})                                                    // 46
-                                                      //
-const MainDB = postgres({ entities: [User, Venue, Booking] })          // 48
-                                                      //
-const Server = fastapi({                              // 41
-  title: "Booking API",                               // 42
-  stack: {                                            // 43  the tech stack is
-    python: "3.13",                                   // 44  PART OF THE SPEC —
-    dependencies: {                                   // 45  exact pins, no
-      fastapi: "0.141.1",                             // 46  floating versions
-      sqlalchemy: "2.0.52",                           // 47
-      pydantic: "2.13.5",                             // 48
-      pyjwt: "2.13.0",                                // 49
-      bcrypt: "5.0.0",                                // 50
-    },                                                // 51
-    dev: { pytest: "9.1.1", httpx: "0.28.1" },        // 52
-  },                                                  // 53
-  services: [MainAuth, Users, Venues, Bookings, BookingCount],         // 54
-  resources: [MainDB],                                // 55
-})                                                    //
-                                                      //
-export default defineApp({                            // 58
-  name: "BookingAPI",                                 // 48
-  entities: [User, Venue, Booking],                   // 49
-  services: [MainAuth, Users, Venues, Bookings, BookingCount],         // 50
-  resources: [MainDB, Server],                        // 51
-})                                                    // 52
+import { defineApp } from "@spec/core"
+import {
+  entity, field, crud, count,
+  lifecycle, transition, invariant, expr, effect,
+} from "@spec/web"
+import { auth, password } from "@spec/auth"
+import { postgres } from "@spec/postgres"
+import { fastapi } from "@spec/fastapi"
+
+const User = entity("User", {
+  id: field.uuid(),
+  email: field.email().unique(),
+  name: field.string(),
+})
+
+const Venue = entity("Venue", {
+  id: field.uuid(),
+  name: field.string().unique(),
+  capacity: field.int(),
+})
+
+const Booking = entity("Booking", {
+  id: field.uuid(),
+  user: field.ref("User"),
+  venue: field.ref("Venue"),
+  startsAt: field.datetime(),
+  notes: field.string().optional(),
+  status: field.enum("pending", "confirmed", "cancelled"),
+  cancelledAt: field.datetime().optional(),
+})
+
+const MainAuth = auth({
+  principal: User,
+  strategy: password({ identity: User.fields.email }),
+})
+
+const Users = crud(User, { methods: ["list", "get"] })
+const Venues = crud(Venue, { auth: false })
+const Bookings = crud(Booking, {
+  methods: ["list", "get", "create", "delete"],
+})
+const BookingCount = count(Booking)
+
+const BookingFlow = lifecycle(Booking, {
+  field: "status",
+  initial: "pending",
+  transitions: [
+    transition("confirm", {
+      from: ["pending"],
+      to: "confirmed",
+      guard: expr.field("startsAt").gt(expr.request.time()),
+      effects: [
+        effect.emit("booking.confirmed", ["id", "venue", "startsAt"]),
+      ],
+    }),
+    transition("cancel", {
+      from: ["pending", "confirmed"],
+      to: "cancelled",
+      effects: [effect.set("cancelledAt", expr.request.time())],
+    }),
+  ],
+})
+
+const NoOverbooking = invariant("no-overbooking", {
+  on: Venue,
+  check: expr.countOf(Booking, { venue: "self" })
+    .lte(expr.field("capacity")),
+})
+
+const MainDB = postgres({ entities: [User, Venue, Booking] })
+
+const Server = fastapi({
+  title: "Booking API",
+  stack: {
+    python: "3.13",
+    dependencies: {
+      fastapi: "0.141.1",
+      sqlalchemy: "2.0.52",
+      pydantic: "2.13.5",
+      pyjwt: "2.13.0",
+      bcrypt: "5.0.0",
+    },
+    dev: { pytest: "9.1.1", httpx: "0.28.1" },
+  },
+  services: [
+    MainAuth, Users, Venues, Bookings, BookingCount,
+    BookingFlow, NoOverbooking,
+  ],
+  resources: [MainDB],
+})
+
+export default defineApp({
+  name: "BookingAPI",
+  entities: [User, Venue, Booking],
+  services: [
+    MainAuth, Users, Venues, Bookings, BookingCount,
+    BookingFlow, NoOverbooking,
+  ],
+  resources: [MainDB, Server],
+})
 ```
 
-Three entities, one auth service, three CRUD resources with different
-method subsets and visibility, one count endpoint, one lifecycle (the
-behavior model's Phase 1), one database, one server — seventeen routes in
-the end, two of them state-machine transitions.
+This lowers to 3 entities, 17 routes, 1 lifecycle, 1 invariant, an outbox
+table, auth, a relational store and a fully pinned Python stack.
 
----
+## Step 1: parse the TypeScript AST
 
-## Step 1 — Parse (`packages/compiler/src/parse.ts`)
-
-Entry: `parsePass(compilation)` → `parseSpecFile(entryPath, displayPath)`.
+Entry: `packages/compiler/src/pipeline.ts` -> `parsePass()` ->
+`packages/compiler/src/parse.ts` -> `parseSpecFile()`.
 
 ```ts
-const content = fs.readFileSync(file, "utf8")
-const sourceFile = ts.createSourceFile(file, content, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS)
+const sourceFile = ts.createSourceFile(
+  file,
+  content,
+  ts.ScriptTarget.ES2022,
+  true,
+  ts.ScriptKind.TS,
+)
 ```
 
-The file becomes a TypeScript `SourceFile` — **syntax tree only, never
-executed**. Two things happen to it:
+The source becomes a TypeScript `SourceFile`; it is never transpiled or
+executed. The parser reports TypeScript syntax errors and scans the tree for
+the restricted language rules. Loops, `let`, `await`, functions, classes,
+dynamic imports, filesystem/network imports, `eval`, `process.env`,
+`Date.now()` and `Math.random()` are rejected before evaluation.
 
-1. **Layer 1** — TS parse diagnostics become `SPEC_SYNTAX_ERROR`
-   diagnostics. Ours: none.
-2. **Layer 2** — `scanRestrictions()` walks every node rejecting loops,
-   `await`, function/class/enum declarations, `let`, dynamic `import()`,
-   `eval`/`Function`, `process.env`, `Date.now`, `Math.random`, and
-   filesystem/network imports. Our file: nothing forbidden.
+The parser also extracts named imports. For example:
 
-Then the import statements are collected into `ParsedSpec.imports`. For
-our file the result is exactly:
-
-```jsonc
-[
-  { "moduleSpecifier": "@spec/core",     "named": [{ "imported": "defineApp", "local": "defineApp" }] },
-  { "moduleSpecifier": "@spec/web",      "named": [
-      { "imported": "entity", "local": "entity" }, { "imported": "field", "local": "field" },
-      { "imported": "crud", "local": "crud" },     { "imported": "count", "local": "count" } ] },
-  { "moduleSpecifier": "@spec/auth",     "named": [
-      { "imported": "auth", "local": "auth" },     { "imported": "password", "local": "password" } ] },
-  { "moduleSpecifier": "@spec/postgres", "named": [{ "imported": "postgres", "local": "postgres" }] },
-  { "moduleSpecifier": "@spec/fastapi",  "named": [{ "imported": "fastapi", "local": "fastapi" }] }
-]
+```json
+{
+  "moduleSpecifier": "@spec/web",
+  "named": [
+    { "imported": "entity", "local": "entity" },
+    { "imported": "lifecycle", "local": "lifecycle" },
+    { "imported": "invariant", "local": "invariant" },
+    { "imported": "expr", "local": "expr" },
+    { "imported": "effect", "local": "effect" }
+  ]
+}
 ```
 
-## Step 2 — Resolve (`packages/compiler/src/loader.ts`)
+## Step 2: resolve trusted packages
 
-`resolvePass` builds a `PackageLoader` rooted at the spec file's directory
-(`examples/booking/`) and loads each module specifier. For `@spec/web`:
+Entry: `resolvePass()` -> `packages/compiler/src/loader.ts`.
+
+`PackageLoader` resolves every imported module from the spec file's directory,
+reads its `package.json`, requires `spec.package: true`, then loads two trusted
+surfaces:
 
 ```ts
-const pkgJsonPath = nodeRequire.resolve(`@spec/web/package.json`)
-// pnpm workspace link → packages/web/package.json
-if (!pkgJson.spec?.package) return new Error("not a spec package")
-const entry = require(path.resolve(pkgRoot, pkgJson.spec.entry)) // dist/spec-package.js
-definition = entry.default   // definePackage({ name: "@spec/web", validators: [...] })
-const exports = nodeRequire("@spec/web")  // { entity, field, crud, count, ... }
+const definition = require(specEntry).default // validators, kinds, inspectors
+const exports = nodeRequire(moduleSpecifier)  // DSL builder functions
 ```
 
-Each imported name becomes an `ImportedBinding` — local name → the actual
-trusted function:
+For Booking, the sorted package set is:
 
-```ts
-{ packageName: "@spec/web", imported: "crud", value: <the crud function> }
-```
-
-Loaded packages are deduplicated and sorted by name, so later artifact
-order is stable:
-
-```
+```text
 @spec/auth  @spec/core  @spec/fastapi  @spec/postgres  @spec/web
 ```
 
-This is the security boundary in action: **the only executable code from
-here on is these five packages' builders and validators.** The user's
-file remains data.
+This is the execution boundary. Package builders and validators execute;
+`app.spec.ts` remains AST data.
 
-## Step 3 — Normalize (`packages/compiler/src/evaluate.ts` + `pipeline.ts`)
+## Step 3: statically evaluate expressions
 
-The heart of the static compiler. `evaluateSpec(parsed, imports)` walks
-every top-level statement and **statically evaluates** it.
+Entry: `normalizePass()` -> `packages/compiler/src/evaluate.ts` ->
+`evaluateSpec()`.
 
-### Const `User` (line 9)
+The evaluator supports only literals, arrays, object literals, identifiers,
+property access and calls on trusted imported values or on values produced by
+those calls.
 
-`entity("User", {...})` is a `CallExpression` with an identifier callee →
-`evaluateCall` finds `entity` in the imports map → evaluates the
-arguments: the string literal `"User"`, then the object literal — each
-property value is itself a call, e.g. `field.email().unique()`:
-
-1. `evaluateExpression` on `field.email()` → `evaluateCall` → receiver
-   `field` (imported value) → member `email` exists → invoke → a
-   `FieldSpec` (`{ __specFieldSpec: true, type: "email", ... }`)
-2. `.unique()` → call on a property access of that FieldSpec → `makeField({...uniqueFlag: true})`
-
-The `entity` builder (`packages/web/src/entity.ts`) receives the fully
-evaluated object and returns a builder — plain data plus a `.fields` map
-of `FieldRef`s for cross-references:
-
-```ts
-User.fields.email   //  { __specFieldRef: true, entity: "User", field: "email",
-                    //    ownerNodeId: "entity:User", unique: true }
-```
-
-The evaluator then records `consts.set("User", builder)` and — because
-the result `isNodeBuilder` — pushes it onto `nodes`. **Name adoption**:
-the anonymous builder gets `name = "User"`… here the entity already has
-its explicit name; for anonymous builders like `auth({...})` this is how
-`MainAuth` becomes the node's name.
-
-### Const `MainAuth` (line 29) → ref chain (line 31)
-
-`User.fields.email` is a `PropertyAccessExpression`: evaluate `User`
-(from consts) → read member `fields` → then `.email` → the `FieldRef`
-above. The `password` builder serializes it into its attributes.
-`toReference(User)` turns the principal builder into
-`{ nodeId: "entity:User" }`.
-
-### Const `Bookings` (line 36)
-
-`crud(Booking, { methods: [...] })` — the second argument is evaluated to
-a plain array/objects, then `crud()` (`packages/web/src/crud.ts`)
-computes the default path via `pluralize` + `kebabCase` (`"Booking"` →
-`"bookings"`) and stores the methods subset.
-
-### Const `Server` (line 41)
-
-`fastapi({...})` (`packages/fastapi/src/builder.ts`) — the services array
-items are node builders, serialized via `toReference`:
-`MainAuth → { nodeId: "auth:MainAuth" }`, `Users → { nodeId: "crud:User" }`,
-… and because the served set contains crud **and** auth nodes, the
-builder adds `requires: ["RelationalStore"]`.
-
-### `export default defineApp(...)` (line 47)
-
-Evaluated the same way; the result is the root builder. Statements that
-are neither imports, consts nor `export default` would produce
-`SPEC_UNSUPPORTED_SYNTAX` right here.
-
-### Materialization (`normalizePass` → `materialize`)
-
-Root builders are collected: the app node plus every const-bound node,
-**deduplicated by identity** — `Booking` appears in `defineApp.entities`,
-in `postgres.entities` and in `crud(Booking)` but is one object, so it
-materializes once (`sharedRoots`). Deterministic ids are assigned:
-
-| Const | Node id | Why |
-| ----- | ------- | --- |
-| `User` | `entity:User` | `nodeId("entity", name)` |
-| `Booking` | `entity:Booking` | same scheme |
-| `MainAuth` | `auth:MainAuth` | anonymous → adopts const name |
-| `Bookings` | `crud:Booking` | crud adopts the **entity's** name |
-| `password(...)` | `passwordStrategy:auth:MainAuth#0` | nested anonymous → parent + index |
-| `MainDB` | `postgres:MainDB` | adopts const name |
-| `Server` | `fastapi:Server` | adopts const name |
-
-Sorted by id, the node list is:
-
-```
-api:BookingCount  app:BookingAPI  auth:MainAuth  crud:Booking  crud:User
-crud:Venue  entity:Booking  entity:User  entity:Venue  fastapi:Server  postgres:MainDB
-```
-
-Here are three real nodes from the emitted IR — note the `source`
-locations pointing at the file lines above, and how field specs were
-flattened to plain data:
-
-```jsonc
-// entity:Booking — from line 21 (evaluateCall captured the source position)
-{
-  "id": "entity:Booking", "kind": "entity", "package": "@spec/web", "name": "Booking",
-  "attributes": { "fields": {
-      "id":       { "type": "uuid" },
-      "notes":    { "optional": true, "type": "string" },
-      "startsAt": { "type": "datetime" },
-      "user":     { "target": "User",  "type": "ref" },
-      "venue":    { "target": "Venue", "type": "ref" } } },
-  "source": { "file": "examples/booking/app.spec.ts", "line": 21, "column": 17 }
-}
-
-// crud:Booking — from line 36; methods subset preserved, path derived
-{
-  "id": "crud:Booking", "kind": "crud", "package": "@spec/web", "name": "Booking",
-  "attributes": {
-    "auth": true,
-    "entity": { "nodeId": "entity:Booking" },
-    "methods": ["list", "get", "create", "delete"],
-    "path": "/bookings" },
-  "source": { "file": "examples/booking/app.spec.ts", "line": 36, "column": 18 }
-}
-
-// fastapi:Server — from line 41; refs + the derived capability requirement
-{
-  "id": "fastapi:Server", "kind": "fastapi", "package": "@spec/fastapi", "name": "Server",
-  "attributes": {
-    "port": 8000, "prefix": "", "title": "Booking API", "version": "0.1.0",
-    "requires": ["RelationalStore"],
-    "resources": [{ "nodeId": "postgres:MainDB" }],
-    "services": [
-      { "nodeId": "auth:MainAuth" }, { "nodeId": "crud:User" },
-      { "nodeId": "crud:Venue" },    { "nodeId": "crud:Booking" },
-      { "nodeId": "api:BookingCount" } ] },
-  "source": { "file": "examples/booking/app.spec.ts", "line": 41, "column": 15 }
-}
-```
-
-## Step 4 — Validate (`pipeline.ts` `validatePass`)
-
-The flattened node list is handed to every validator registered by the
-loaded packages, in package order. For our spec:
-
-| Order | Validator (package) | What it did here |
-| ----- | ------------------- | ---------------- |
-| 1 | `web/validate-entities` | 3 entities, no duplicate names; every field has a known type; both `ref` targets (`User`, `Venue`) exist → no `FIELD_REF_TARGET_UNKNOWN` |
-| 2 | `web/validate-crud` | every crud `entity` ref resolves; paths valid and unique; method subsets contain no unknowns or duplicates |
-| 3 | `web/validate-count-apis` | `api:BookingCount` targets `entity:Booking` ✓ |
-| 4 | `auth/validate-*` | principal `entity:User` exists; identity `User.email` belongs to the principal and is unique |
-| 5 | `fastapi/validate-server` | all 5 `services` refs resolve to crud/api/auth nodes; the resource ref resolves; no generic `api()` without pinned operation; principal has no `ref` fields |
-
-Validators only see the structural `ValidationContext`
-(`findNodes`/`getNode`/`report`) — no domain knowledge leaks into the
-compiler core. Result: **zero diagnostics**.
-
-## Step 5 — Link (`pipeline.ts` `linkPass`)
-
-Scans every node's `attributes.provides` / `attributes.requires` arrays:
-
-- `postgres:MainDB` → `provides: ["RelationalStore"]`
-- `auth:MainAuth`   → `requires: ["RelationalStore"]`
-- `fastapi:Server`  → `requires: ["RelationalStore"]`
-
-Two requirements, one provider each → no `MISSING_CAPABILITY_PROVIDER`,
-no `DUPLICATE_CAPABILITY_PROVIDER`. The IR records (real output):
-
-```json
-"capabilities": {
-  "required": [
-    { "capability": "RelationalStore", "requester": "auth:MainAuth" },
-    { "capability": "RelationalStore", "requester": "fastapi:Server" } ],
-  "provided": [
-    { "capability": "RelationalStore", "provider": "postgres:MainDB" } ]
-}
-```
-
-Note what happened here: `@spec/fastapi` demanded storage, `@spec/postgres`
-supplies it, and neither package knows the other exists. The compiler
-core connected them.
-
-## Step 6 — Emit (`compiler.ts` `emitPass` + `writeArtifacts`)
-
-`lowerPass` is a no-op for the static IR (the agentic lowering happens in
-`spec generate`). `emitPass` assembles the `SpecIR`
-(`version: "spec-ir/0.1"`), and `writeArtifacts` serializes it through
-`stableStringify` — keys sorted recursively, no timestamps — into
-`.spec/spec.ir.json`, `manifest.json` (all five package versions) and
-`diagnostics.json`. Same input ⇒ identical bytes, verified by the
-100-compile SHA-256 test.
-
----
-
-# The agentic half (`spec generate`)
-
-Everything below runs only on a **valid** IR. Entry:
-`packages/cli/src/index.ts` → `planGeneration(result.ir)`.
-
-## Step 7 — Blueprint (`packages/fastapi/src/blueprint.ts`)
-
-`buildBlueprint(ir)` flattens the IR once and derives the backend
-contract. For our nodes:
-
-- `app` node → `app: { name: "BookingAPI", title: "Booking API", prefix: "", port: 8000 }`
-- `postgres:MainDB` → `database: { engine: "postgres", urlEnv: "DATABASE_URL", fallback: "sqlite:///./dev.db", urlFormat: "sqlalchemy-url" }`
-- `fastapi:Server`'s `stack` overrides → merged with the target's pinned
-  defaults → `stack` (below) — the technology stack is part of the
-  specification, exactly versioned:
-- `entity:*` → table names via `snakeCase` + plural (`Booking` → `bookings`), columns via `snakeCase` per field (`startsAt` → `starts_at`); `User` additionally gets `passwordColumn: "password_hash"` because it is the principal
-- `crud:Venue` with `auth: false` and an **active** auth service → 5 public routes
-- `crud:Booking` methods subset → 4 routes (no `PATCH`)
-- `api:BookingCount` → `GET /bookings/count`
-- `auth:MainAuth` + password strategy → login/register/me
-
-The pinned stack, verbatim from `blueprint.json`:
-
-```json
-"stack": {
-  "python": "3.13",
-  "dependencies": {
-    "bcrypt": "5.0.0", "email-validator": "2.2.0", "fastapi": "0.141.1",
-    "pydantic": "2.13.5", "pydantic-settings": "2.15.0", "pyjwt": "2.13.0",
-    "sqlalchemy": "2.0.52", "uvicorn": "0.52.4" },
-  "dev": { "httpx": "0.28.1", "pytest": "9.1.1" }
-}
-```
-
-One real route object, verbatim from `blueprint.json`:
-
-```json
-{
-  "id": "GET /venues/{id}", "method": "GET", "path": "/venues/{id}",
-  "operation": "get", "entity": "Venue", "status": 200, "auth": false,
-  "response": { "kind": "entity", "entity": "Venue" }
-}
-```
-
-And the auth block (truncated):
-
-```jsonc
-"auth": {
-  "strategy": "password-jwt", "principal": "User",
-  "identityField": "email", "passwordColumn": "password_hash",
-  "routes": [
-    { "id": "POST /auth/login", "method": "POST", "operation": "login",
-      "status": 200, "auth": false,
-      "request": { "shape": { "email": "string", "password": "string" } },
-      "response": { "kind": "token" } },
-    { "id": "POST /auth/register", "...": "201, body = email+name+password" },
-    { "id": "GET /auth/me", "...": "200, auth: true" } ]
-}
-```
-
-15 routes total. The `contract` section pins the observable behavior —
-see the [blueprint reference](/reference/blueprint) for the full shape.
-
-## Step 8 — Conformance suite (`packages/fastapi/src/conformance.ts`)
-
-`buildConformanceSuite(blueprint)` emits four Python files. The
-interesting generated logic is **reference seeding** in `helpers.py` —
-for our Booking entity (real generated code):
-
-```python
-def body_for(client, entity, overrides=None, token=None):
-    if entity == "Booking":
-        _user = create_row(client, "User", token=token)     # User has NO create route…
-        _venue = create_row(client, "Venue", token=token)   # …so seed via /auth/register
-        base = {"user": _user["id"], "venue": _venue["id"], "startsAt": "2026-01-01T12:00:00"}
-        if overrides:
-            base.update(overrides)
-        r = client.post("/bookings", json=base, headers={"Authorization": f"Bearer {token}"})
-        assert r.status_code == 201, r.text
-        return base, r.json()
-    if entity == "User":                                    # ← the register fallback
-        identity = f"{uuid.uuid4()}@example.com"
-        body = {"email": identity, "name": "sample-name", "password": "secret123"}
-        r = client.post("/auth/register", json=body)
-        assert r.status_code == 201, r.text
-        return body, r.json()
-    if entity == "Venue":
-        base = {"capacity": 42, "name": f"{uuid.uuid4()}-sample-name"}   # unique sample!
-        ...
-```
-
-Why the `User` branch differs: `crud(User, { methods: ["list", "get"] })`
-exposes no `POST /users`, so user rows can only be created through
-`/auth/register` — the generator knows this and emits the fallback. And
-`name` gets a uuid prefix because the spec declared it `unique` — a
-constant sample would 409 on the second create.
-
-`test_contract.py` opens with the interface oracle (real output):
-
-```python
-EXPECTED_INTERFACE = {
-    "GET /bookings":         {"statuses": ["200"], "pathParams": []},
-    "GET /bookings/{id}":    {"statuses": ["200"], "pathParams": ["id"]},
-    "POST /bookings":        {"statuses": ["201"], "pathParams": []},
-    "DELETE /bookings/{id}": {"statuses": ["204"], "pathParams": ["id"]},
-    "GET /users":            {"statuses": ["200"], "pathParams": []},
-    "GET /users/{id}":       {"statuses": ["200"], "pathParams": ["id"]},
-    "GET /venues":           {"statuses": ["200"], "pathParams": []},
-    "GET /venues/{id}":      {"statuses": ["200"], "pathParams": ["id"]},
-    "POST /venues":          {"statuses": ["201"], "pathParams": []},
-    "PATCH /venues/{id}":    {"statuses": ["200"], "pathParams": ["id"]},
-    "DELETE /venues/{id}":   {"statuses": ["204"], "pathParams": ["id"]},
-    "GET /bookings/count":   {"statuses": ["200"], "pathParams": []},
-    "POST /auth/login":      {"statuses": ["200"], "pathParams": []},
-    "POST /auth/register":   {"statuses": ["201"], "pathParams": []},
-    "GET /auth/me":          {"statuses": ["200"], "pathParams": []},
-}
-```
-
-…asserted with **strict set equality** against the app's own
-`/openapi.json`. And a generated count test:
-
-```python
-def test_count_booking(client):
-    token = auth_token(client)
-    r = client.get("/bookings/count", headers={"Authorization": f"Bearer {token}"})
-    assert r.status_code == 200, r.text
-    assert r.json() == {"count": 0}
-    create_row(client, "Booking", token=token)
-    r = client.get("/bookings/count", headers={"Authorization": f"Bearer {token}"})
-    assert r.status_code == 200, r.text
-    assert r.json() == {"count": 1}
-```
-
-## Step 9 — The generation DAG (`packages/fastapi/src/dag.ts`)
-
-Code has structure, so generation has structure. `buildTaskDag(blueprint,
-ir)` lowers the contract into a task graph — for booking, ten tasks:
-
-```
-project ──► models ──► schemas ──► router:Booking ─┐
-   │           │  ╲                 router:User  ──┤
-   │           │   ╲► security ───► router:auth ───┤
-   └──► database ──────────────────► router:Venue ─┤  (public: no security dep)
-                                                   ▼
-                                                  app
-```
-
-Each task owns a narrow file scope and a **per-task prompt** — a pure
-function of its blueprint slice. The real prompt for the `project` task
-opens:
+For `field.email().unique()`:
 
 ```text
-You are executing ONE TASK of a larger, compiler-planned generation.
-
-# Task: project skeleton
-
-- Your scope (create/modify ONLY these): pyproject.toml, app/__init__.py, .gitignore
-- Already generated by previous tasks (read-only for you): —
-
-…requires-python = "==3.13.*", with EXACTLY these pinned dependencies
-(the stack is part of the specification — do not add, remove or float
-any version):
-    "fastapi==0.141.1", "sqlalchemy==2.0.52", "pydantic==2.13.5", …
+field.email()       -> trusted method call -> FieldSpec(type=email)
+.unique()           -> trusted method call -> immutable FieldSpec(unique=true)
+entity("User", ...) -> trusted builder     -> SpecNodeBuilder
 ```
 
-and the `router:Venue` prompt carries only Venue's entity JSON, its five
-public routes, and the shared invariants — not the whole blueprint. The
-DAG and every prompt are fingerprinted (`dagFingerprint`) into
-`agent.tasks.json`; identical specs produce identical DAGs byte-for-byte.
+For `User.fields.email`, property access resolves a `FieldRef`:
 
-## Step 10 — The agent harness (`packages/agent/src/harness.ts`)
-
-`AgentHarness.execute()` walks the topological order (Kahn, stable by
-id) and runs **one headless agent per task**:
-
-```
-claude -p --output-format json --permission-mode acceptEdits   --max-turns 60 --model claude-sonnet-4-5   --allowedTools Read Glob Grep LS Edit Write Bash(uv:*) Bash(python:*) …
+```ts
+{
+  __specFieldRef: true,
+  entity: "User",
+  field: "email",
+  ownerNodeId: "entity:User",
+  unique: true,
+}
 ```
 
-The workspace is hashed before and after each task, so the harness can
-attribute every file to the task that produced it and flag anything
-touched outside the declared scope. A real per-task table (from the
-inventory pilot, `agent.result.json`):
+For the guard and effects, the evaluator builds pure expression trees. It does
+not evaluate the clock:
 
-| Task | Turns | Cost | Produced |
-| ---- | ----- | ---- | -------- |
-| `project` | 6 | $0.24 | `pyproject.toml`, `app/__init__.py`, `.gitignore` |
-| `database` | 37 | $0.84 | `app/config.py`, `app/database.py` |
-| `models` | 22 | $0.66 | `app/models.py`, `uv.lock` ⚠ |
-| `schemas` | 14 | $0.52 | `app/schemas.py` |
-| `router:Category` | 27 | $0.80 | `app/routers/category.py` |
-| `router:Product` | 14 | $0.30 | `app/routers/product.py` |
-| `app` | 15 | $0.30 | `app/main.py`, `dev.db` ⚠ |
+```json
+{
+  "__expr": "cmp",
+  "left": { "__expr": "field", "name": "startsAt" },
+  "op": "gt",
+  "right": { "__expr": "requestTime" }
+}
+```
 
-(⚠ = scope-violation warnings: the models task ran `uv lock`, the app
-task imported the app and created the SQLite fallback — benign
-side-effects, recorded but not fatal; conformance is the judge.)
+`requestTime` means "evaluate once when the request starts"; it is distinct
+from forbidden compile-time nondeterminism such as `Date.now()`.
 
-The generated code itself keeps the same shape as before — the factory
-every later step depends on:
+Anonymous builders adopt their `const` names. Consequently `auth({...})`,
+`postgres({...})` and `fastapi({...})` become `MainAuth`, `MainDB` and
+`Server` without executing user assignments.
+
+## Step 4: materialize deterministic IR nodes
+
+Entry: `normalizePass()` -> `materialize()` in
+`packages/compiler/src/pipeline.ts`.
+
+Root builders are deduplicated by identity, recursively serialized, assigned
+stable ids and sorted. Important Booking ids include:
+
+| Source binding | IR id |
+| --- | --- |
+| `Booking` | `entity:Booking` |
+| `Bookings` | `crud:Booking` |
+| `BookingCount` | `api:BookingCount` |
+| `BookingFlow` | `lifecycle:Booking` |
+| `NoOverbooking` | `invariant:no-overbooking` |
+| `MainAuth` | `auth:MainAuth` |
+| nested `password(...)` | `passwordStrategy:auth:MainAuth#0` |
+| `MainDB` | `postgres:MainDB` |
+| `Server` | `fastapi:Server` |
+
+Field specs flatten to JSON data; builder references become `{ nodeId }`;
+functions and internal markers do not enter the IR. Every node carries its
+project-relative source location.
+
+The lifecycle and invariant remain data, not prompt prose:
+
+```json
+{
+  "id": "lifecycle:Booking",
+  "kind": "lifecycle",
+  "attributes": {
+    "entity": { "nodeId": "entity:Booking" },
+    "field": "status",
+    "initial": "pending",
+    "transitions": [
+      {
+        "event": "confirm",
+        "from": ["pending"],
+        "to": "confirmed",
+        "guard": { "__expr": "cmp", "...": "request-time comparison" },
+        "effects": [
+          {
+            "__effect": "emit",
+            "event": "booking.confirmed",
+            "fields": ["id", "venue", "startsAt"]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+## Step 5: validate domain semantics
+
+Entry: `validatePass()` plus validators registered by each `SpecPackage`.
+
+The compiler supplies only `findNodes`, `getNode` and `report`; all domain
+knowledge stays in packages. Booking exercises these checks:
+
+| Package | Checks used by this spec |
+| --- | --- |
+| `@spec/web` | entity names, field types, ref targets, CRUD methods/paths, count target |
+| `@spec/web` lifecycle | enum field, initial state, transition targets, duplicate edges, reachability |
+| `@spec/web` expressions | guard field/type, SQL-lowerable shape, request-time use |
+| `@spec/web` effects | set target/type, event name, payload fields, immutable fields |
+| `@spec/web` invariant | target resolution, count-ref edge, bound field/type, supported shape |
+| `@spec/auth` | principal, strategy, identity membership and uniqueness |
+| `@spec/fastapi` | served service/resource references and supported target surface |
+
+The closed behavior vocabulary is deliberate. A guard or invariant is accepted
+only when the target can lower it mechanically; otherwise the compiler emits a
+diagnostic instead of asking the agent to interpret prose.
+
+## Step 6: link capabilities and emit
+
+`linkPass()` scans generic `attributes.provides` and `attributes.requires`:
+
+```text
+postgres:MainDB  provides RelationalStore
+auth:MainAuth    requires RelationalStore
+fastapi:Server   requires RelationalStore
+```
+
+No package-specific branch exists in the compiler. The resulting capability
+edges are sorted into the IR.
+
+The static `lowerPass()` is currently a no-op. `emitPass()` writes
+`spec-ir/0.1`; target-specific lowering starts later from `spec generate`.
+`stableStringify()` recursively sorts keys, and generated timestamps are
+omitted, so repeated static builds are byte-identical.
+
+## Step 7: build the backend blueprint
+
+Entry: `packages/cli/src/index.ts` -> `planGeneration(ir)` ->
+`packages/fastapi/src/lowering.ts` -> `buildBlueprint(ir)`.
+
+The blueprint is the boundary between deterministic compilation and agentic
+implementation. For Booking it contains:
+
+```text
+3 entities
+17 routes
+1 password-JWT auth contract
+1 lifecycle with 2 transitions
+1 cross-row invariant
+1 events outbox table
+1 exact dependency stack
+```
+
+The confirm route shows how behavior is carried as structured data:
+
+```json
+{
+  "id": "POST /bookings/{id}/confirm",
+  "method": "POST",
+  "path": "/bookings/{id}/confirm",
+  "operation": "transition",
+  "entity": "Booking",
+  "status": 200,
+  "auth": true,
+  "response": { "kind": "entity", "entity": "Booking" },
+  "transition": {
+    "field": "status",
+    "event": "confirm",
+    "from": ["pending"],
+    "to": "confirmed",
+    "guard": {
+      "__expr": "cmp",
+      "left": { "__expr": "field", "name": "startsAt" },
+      "op": "gt",
+      "right": { "__expr": "requestTime" }
+    },
+    "effects": [
+      {
+        "__effect": "emit",
+        "event": "booking.confirmed",
+        "fields": ["id", "venue", "startsAt"]
+      }
+    ]
+  }
+}
+```
+
+The invariant is separately normalized and attached by id to the operations
+that must preserve it:
+
+```json
+{
+  "id": "invariant:no-overbooking",
+  "entity": "Venue",
+  "shape": "crossRowCount",
+  "count": {
+    "entity": "Booking",
+    "refField": "venue",
+    "op": "lte",
+    "bound": { "kind": "field", "name": "capacity" }
+  }
+}
+```
+
+`POST /bookings` and `PATCH /venues/{id}` carry
+`invariantIds: ["invariant:no-overbooking"]`. The blueprint also pins exact
+errors (`401`, `404`, `409`, `422`), list scope/order, defaults, UUID creation,
+reference serialization and the SQLAlchemy URL format.
+
+The emitted outbox shape is equally explicit:
+
+```json
+{
+  "eventsTable": "events",
+  "columns": {
+    "id": "uuid",
+    "event": "text",
+    "payload": "json",
+    "created_at": "datetime"
+  }
+}
+```
+
+## Step 8: generate the functional oracle
+
+Entry: `packages/fastapi/src/conformance.ts` ->
+`buildConformanceSuite(blueprint)`.
+
+The compiler emits four files:
+
+| File | Purpose |
+| --- | --- |
+| `conformance/conftest.py` | fresh `create_app()` plus isolated SQLite database per test |
+| `conformance/helpers.py` | valid bodies, recursive ref seeding, registration/login helpers |
+| `conformance/test_contract.py` | HTTP behavior assertions derived from the blueprint |
+| `conformance/contract.json` | the exact blueprint used as the oracle |
+
+This is runtime functional testing, not a static schema check. `TestClient`
+starts the generated application and sends real requests against a fresh
+database. The Booking suite contains 24 tests covering:
+
+- strict route/interface shape;
+- register, login, `/auth/me`, invalid credentials and missing tokens;
+- protected and public routes;
+- Booking create/list/get/delete and request validation;
+- User list/get and Venue full CRUD;
+- count before and after a create;
+- confirm/cancel legal and illegal state transitions;
+- the `startsAt > request.time` guard;
+- `cancelledAt` assignment and the exact outbox event payload;
+- no-overbooking rejection, rollback and boundary behavior.
+
+For example, each test gets a fresh database:
 
 ```python
-def create_app(database_url: str | None = None) -> FastAPI:
-    url = database_url or os.environ.get("DATABASE_URL") or "sqlite:///./dev.db"
-    ...
-    Base.metadata.create_all(engine)
-    return application
-
-app = create_app()
+@pytest.fixture()
+def client(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    application = create_app(database_url=f"sqlite:///{db_path}")
+    with TestClient(application) as test_client:
+        test_client.db_path = db_path
+        yield test_client
 ```
 
-## Step 11 — Verification, ONCE (`packages/fastapi/src/verify.ts` + `orchestrate.ts`)
+The suite is generated once from the blueprint and copied byte-for-byte into
+every shot. The agent cannot edit the final oracle: orchestration writes it
+after generation.
 
-The compiler drops the conformance suite into the workspace and runs:
+## Step 9: lower code structure to a DAG
+
+Entry: `packages/fastapi/src/dag.ts` -> `buildTaskDag()`.
+
+Booking produces ten tasks in stable topological order:
+
+```text
+project
+  +-> database ------------------------------+
+  +-> models -> schemas ---------------------+
+            +-> security --------------------+
+
+models + schemas + database + security -> router:Booking
+models + schemas + database + security -> router:User
+models + schemas + database            -> router:Venue
+models + schemas + database + security -> router:auth
+
+all routers + database -> app
+```
+
+`buildTaskDag(blueprint, ir)` does not ask the model to invent this graph.
+It applies fixed structural rules:
+
+1. Always create `project`, `models`, `database` and `schemas` tasks.
+2. Add `security` and `router:auth` only when the blueprint contains auth.
+3. Collect every entity named by a blueprint route, sort the names, and add
+   one router task per entity. CRUD, count and transition routes for the same
+   entity are merged into that router.
+4. Give every entity router `models`, `schemas` and `database` dependencies.
+   Add `security` when any of its routes is protected, or when the entity is
+   the auth principal.
+5. Make `app` depend on every router plus `database` so wiring is the sink.
+6. Run stable Kahn topological sorting: all currently ready task ids are
+   sorted lexicographically before being appended.
+
+The result is deterministic because the inputs are deterministic Blueprint/IR
+data and every conditional above is pinned compiler code. The DAG fingerprint
+includes ids, edges, scopes, provenance ids and the full prompt bytes.
+
+The public Venue router deliberately has no security dependency. Every task
+owns an explicit file scope and names the dependency files it should read:
+
+| Task | Depends on | Writable scope | Named read-only context |
+| --- | --- | --- | --- |
+| `project` | - | `pyproject.toml`, `app/__init__.py`, `.gitignore` | - |
+| `database` | `project` | `app/config.py`, `app/database.py` | `app/__init__.py` |
+| `models` | `project` | `app/models.py` | `app/__init__.py` |
+| `schemas` | `models` | `app/schemas.py` | `app/models.py` |
+| `security` | `models`, `database` | `app/security.py`, `app/deps.py` | models, database |
+| `router:Booking` | models, schemas, database, security | `app/routers/booking.py` | all four dependency outputs |
+| `router:User` | models, schemas, database, security | `app/routers/user.py` | all four dependency outputs |
+| `router:Venue` | models, schemas, database | `app/routers/venue.py` | all three dependency outputs |
+| `router:auth` | models, schemas, database, security | `app/routers/auth.py` | models, schemas, security |
+| `app` | all routers, database | `app/main.py` | every router plus database/config |
+
+Prompts and dependency edges are deterministic. `agent.tasks.json` stores
+each prompt's SHA-256 instead of duplicating the prompt text.
+
+## Step 10: construct narrow prompts
+
+Entry: `packages/fastapi/src/prompt.ts`.
+
+Each prompt is a pure function of the relevant blueprint slice. It contains:
+
+- the single task name and owned file list;
+- dependency files that may be read but not modified;
+- global pinned invariants;
+- only the entities, routes, transitions and invariants needed by that task;
+- explicit request, response, error and transaction behavior.
+
+The Booking router prompt receives the lifecycle and invariant data. The Venue
+router receives the invariant but no auth implementation requirements. The app
+task receives wiring information, not permission to redesign routes.
+
+The agent is choosing Python implementation details. It is not choosing API or
+behavior semantics.
+
+### Are task contexts independent?
+
+There are two different kinds of context:
+
+```text
+task N Claude process                  task N+1 Claude process
+fresh conversation                     fresh conversation
+prompt N                               prompt N+1
+      |                                      |
+      +---------- same workspace ------------+
+                   files persist
+```
+
+- **Conversation context is independent.** Every DAG node calls
+  `claude -p` as a new process. The runner does not pass `--resume`, a session
+  id, the previous response or previous conversation tokens.
+- **Artifact context is integrated.** All tasks in one shot use the same
+  workspace. A task sees files written by earlier tasks and its prompt tells it
+  which dependency files to read and treat as read-only.
+- **Writes are narrow and audited.** The task may modify only its `scope`.
+  Workspace hashes before and after the run identify produced files and report
+  out-of-scope writes.
+- **Execution is sequential within a shot.** Even DAG nodes that are mutually
+  independent currently run one at a time in stable topological order. Separate
+  shots have separate workspaces and run in parallel.
+
+The important nuance is that an edge is both a scheduling dependency and an
+artifact dependency, not a shared model chat. For example, `schemas` starts a
+fresh Claude session but reads `app/models.py`; `app` starts another fresh
+session and reads all completed routers. Also, the explicit read-only context
+list can be narrower than `dependsOn`: `router:auth` depends on `database` for
+ordering, while its prompt names models, schemas and security as its primary
+read context.
+
+### All Booking task prompts
+
+These are the complete prompt bytes produced from the current Booking
+Blueprint, not abbreviated examples. They are stored without a timestamp, and
+each displayed SHA-256 matches the corresponding value in
+`examples/booking/.spec/agent.tasks.json`. Expand one task at a time, or use the
+controls to open or close the full set.
+
+<TaskPrompts />
+
+## Step 11: run Claude Code and audit every task
+
+Entry: `packages/agent/src/runner.ts` and
+`packages/agent/src/harness.ts`.
+
+The runner launches Claude Code headlessly:
+
+```text
+claude -p --output-format json --permission-mode acceptEdits
+       --max-turns 60
+       --allowedTools Read Glob Grep LS Edit Write Bash(uv:*) Bash(python:*) ...
+```
+
+`--model` is appended only when the runner receives a non-empty model override.
+In the measured run it was omitted, and Claude Code resolved
+`deepseek-v4-flash[1m]` from its settings. Each workspace log contained ten
+model-resolution entries, exactly one for each DAG task.
+
+Within a shot, tasks are sequential because they share a workspace. Before and
+after every task, the harness hashes visible artifacts and records:
+
+- files created or modified;
+- content SHA-256 values;
+- scope violations;
+- session id, turns, duration and cost.
+
+Independent shots use separate workspaces and run concurrently through
+`Promise.all`. An agent-run infrastructure failure may repeat the identical
+prompt once. That retry is transport tolerance, not repair. In the measured
+Booking run every log had ten entries for ten tasks, so no task retry occurred.
+
+The measured scope warnings were non-source side effects:
+
+- `.agent-stderr.log`, appended by the runner itself;
+- one `uv.lock`, created while an agent inspected the environment;
+- one `dev.db`, created when a task imported the module-level app.
+
+They were recorded but did not alter the compiler-owned oracle. Conformance,
+not the agent's own testing, determines the verdict.
+
+## Step 12: verify each shot once
+
+Entry: `packages/fastapi/src/verify.ts` and
+`packages/agent/src/orchestrate.ts`.
+
+After all ten tasks succeed, orchestration writes the compiler-owned suite and
+runs this plan exactly once:
 
 ```bash
 uv venv .venv --clear --quiet --python 3.13
-uv pip install --quiet -e '.[dev]'        # resolves the pinned stack exactly
+uv pip install --quiet -e '.[dev]'
 .venv/bin/python -c "from app.main import app, create_app; assert app.title"
 .venv/bin/python -m pytest conformance -q
 ```
 
-**There is no second attempt.** If any command fails, the shot reports
-`GENERATION_NONCONFORMANT` — by policy a specification/blueprint defect:
-pin the contract, regenerate all shots.
+There is no conformance repair and no second verification attempt. A failure
+produces `GENERATION_NONCONFORMANT`; the correct response is to pin missing
+behavior in the spec, IR, blueprint or suite, then regenerate every shot.
 
-## Step 12 — Why there is no repair story
+## Step 13: compare independent results
 
-An earlier architecture had a bounded repair loop, and a divergence it
-"fixed" is worth remembering. Two shots had read an unpinned behavior —
-does `GET /users` include the requesting principal? — differently:
+Entry: `packages/agent/src/repeatability.ts` -> `runRepeatability()`.
 
-- shot 1 listed *every principal except the requester*;
-- shot 2 listed *everyone* — the suite expected the first reading and
-  failed it;
-- the repair loop patched shot 2 until it matched.
+The current repeatability verdict has two gates:
 
-That outcome is exactly what the golden rule forbids: the shots agreed
-only because a patcher forced them to. The **fix belonged in the
-contract**, and is now there:
-
-```jsonc
-// blueprint.contract.serialization
-"listScope": "allRows"   // list returns EVERY row — including the
-                         // requesting principal. No requester filtering.
+```text
+all shots pass the same functional conformance suite on first verification
+AND
+all normalized OpenAPI snapshots are byte-identical
 ```
 
-with matching suite assertions: the principal list test fetches its own
-row via `/auth/me` and expects it **first** in the list:
+The OpenAPI snapshot retains route, method, success statuses, path parameters
+and required request-body presence. It intentionally drops descriptions,
+operation ids and other non-contract metadata.
 
-```python
-def test_user_list(client):
-    token = auth_token(client)
-    me = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
-    first = create_row(client, "User")
-    second = create_row(client, "User")
-    r = client.get("/users", headers={"Authorization": f"Bearer {token}"})
-    assert [row["id"] for row in r.json()] == [me.json()["id"], first["id"], second["id"]]
+This distinction matters:
+
+- functionality is tested independently in every shot against exact expected
+  responses and state changes;
+- interface shape is then compared directly across shots;
+- the current harness does not yet run a shared request trace against both
+  live apps and compare every response/database/event trace directly.
+
+Passing the same deterministic oracle is strong evidence of behavior equality
+over the covered contract, but it is not exhaustive differential testing.
+
+## Step 14: measured 2 x 2 result
+
+The 2026-09-01 run generated cblog and Booking independently, two parallel
+shots per project, using Claude Code configured for
+`deepseek-v4-flash[1m]`.
+
+| Project | Routes | Shot 1 | Shot 2 | OpenAPI | Repair |
+| --- | ---: | --- | --- | --- | --- |
+| cblog | 19 | 28 passed, $10.63 | 28 passed, $11.44 | identical | none |
+| Booking | 17 | 24 passed, $12.25 | 24 passed, $11.66 | identical | none |
+
+For Booking, every setup and check command exited zero:
+
+```text
+shot-1: venv ok -> install ok -> import ok -> 24 passed in 12.21s
+shot-2: venv ok -> install ok -> import ok -> 24 passed in 12.73s
+report: REPEATABLE + INTERFACE_IDENTICAL
 ```
 
-The repair loop is gone from the codebase. Same discipline for the stack:
-version drift across install dates used to be luck; the stack is now
-pinned **in the specification** (`fastapi({ stack: {...} })`, merged onto
-`@spec/fastapi`'s validated defaults), so every shot of every future
-generation resolves identical dependencies.
+No spec, IR or blueprint change was needed during this valid run. Earlier DNS
+failures occurred before code generation and were infrastructure failures, not
+behavior verdicts.
 
-## Step 13 — Repeatability (`packages/agent/src/repeatability.ts`)
+## Step 15: artifact provenance
 
-With all shots conformant, each workspace runs the OpenAPI snapshot:
+Entry: `packages/agent/src/artifacts.ts`.
 
-```python
-from app.main import app
-spec = app.openapi()
-norm = {f"{method.upper()} {path}": {
-    "statuses": sorted(op.get("responses", {}).keys()),
-    "pathParams": sorted(p["name"] for p in op.get("parameters", []) if p.get("in") == "path"),
-    "requestBody": bool(op.get("requestBody", {}).get("required", False)),
-} ...}
-print(json.dumps(norm, sort_keys=True, indent=2))
+After verification, generated files become `Artifact` records:
+
+```ts
+interface Artifact {
+  id: string
+  type: "source" | "config" | "test" | "document" | "verification"
+  path?: string
+  contentHash?: string
+  generatedBy?: string
+  sourceNodes?: string[]
+}
 ```
 
-Every snapshot must be byte-identical → `INTERFACE_IDENTICAL`. The
-verdict line the CLI prints:
+The report connects:
 
-```
-✓ Generation repeatable across 3 shot(s), zero repairs
-```
-
-## Step 14 — Artifacts & provenance (`packages/agent/src/artifacts.ts`)
-
-Every workspace file becomes a hashed `Artifact`; the harness's per-task
-diffs additionally record **which task produced which file**:
-
-```jsonc
-{ "id": "artifact:app/main.py", "type": "source", "path": "app/main.py",
-  "contentHash": "…", "generatedBy": "fastapi:dag",
-  "sourceNodes": ["api:BookingCount", "app:BookingAPI", "auth:MainAuth",
-                  "crud:Booking", "crud:User", "crud:Venue", "entity:Booking",
-                  "entity:User", "entity:Venue", "fastapi:Server", "postgres:MainDB"] }
+```text
+Artifact -> DAG task -> SpecNode id -> SourceLocation
 ```
 
-The provenance chain is fully navigable:
-`Artifact → DagTask → SpecNode → SourceLocation (file, line, column)`.
+`agent.result.json` also stores per-task produced files, scope warnings, costs,
+verification command outputs and the project-level repeatability diagnostics.
+Session ids and timings are intentionally outside deterministic IR artifacts.
 
 ## Source map
 
-Where everything in this walkthrough lives:
-
-| Stage | File |
-| ----- | ---- |
-| Parse | `packages/compiler/src/parse.ts` |
-| Resolve / load | `packages/compiler/src/loader.ts` |
-| Static evaluation | `packages/compiler/src/evaluate.ts` |
-| Normalize / validate / link / emit | `packages/compiler/src/pipeline.ts` |
-| Orchestration + artifacts writing | `packages/compiler/src/compiler.ts` |
-| `entity` / `field` | `packages/web/src/entity.ts`, `field.ts` |
-| `crud` / `count` | `packages/web/src/crud.ts` |
-| web validators | `packages/web/src/validators.ts` |
-| `auth` / `password` | `packages/auth/src/builders.ts` |
-| `postgres` | `packages/postgres/src/index.ts` |
-| `fastapi()` builder | `packages/fastapi/src/builder.ts` |
-| Blueprint (+ stack pins) | `packages/fastapi/src/blueprint.ts` |
-| Generation DAG | `packages/fastapi/src/dag.ts` |
-| Conformance generator | `packages/fastapi/src/conformance.ts` |
-| Per-task prompts | `packages/fastapi/src/prompt.ts` |
-| Verification plan | `packages/fastapi/src/verify.ts` |
-| Plan assembly | `packages/fastapi/src/lowering.ts` |
+| Stage | Source |
+| --- | --- |
+| Parse and restrictions | `packages/compiler/src/parse.ts` |
+| Package resolution | `packages/compiler/src/loader.ts` |
+| Static evaluator | `packages/compiler/src/evaluate.ts` |
+| Normalize, validate, link, emit | `packages/compiler/src/pipeline.ts` |
+| Core types and serialization | `packages/core/src/types.ts`, `builder.ts` |
+| Entity, CRUD and behavior DSL | `packages/web/src/*.ts` |
+| Web behavior validators | `packages/web/src/validators.ts` |
+| Auth and storage builders | `packages/auth/src/*`, `packages/postgres/src/*` |
+| FastAPI target builder | `packages/fastapi/src/builder.ts` |
+| Blueprint lowering | `packages/fastapi/src/blueprint.ts` |
+| Functional conformance generator | `packages/fastapi/src/conformance.ts` |
+| Generation DAG and prompts | `packages/fastapi/src/dag.ts`, `prompt.ts` |
+| Plan assembly and verification | `packages/fastapi/src/lowering.ts`, `verify.ts` |
 | Claude Code runner | `packages/agent/src/runner.ts` |
-| Agent harness (DAG executor) | `packages/agent/src/harness.ts` |
-| Shot lifecycle (no repair) | `packages/agent/src/orchestrate.ts` |
-| Repeatability | `packages/agent/src/repeatability.ts` |
-| Artifact scan | `packages/agent/src/artifacts.ts` |
-| `spec generate` | `packages/cli/src/index.ts` |
+| DAG harness | `packages/agent/src/harness.ts` |
+| One-shot orchestration | `packages/agent/src/orchestrate.ts` |
+| Parallel repeatability | `packages/agent/src/repeatability.ts` |
+| Artifact provenance | `packages/agent/src/artifacts.ts` |
+| CLI integration | `packages/cli/src/index.ts` |
+
+Next: read the [blueprint reference](/reference/blueprint) for the complete
+contract shape, or [generation internals](/reference/generation) for the exact
+runner and report types.

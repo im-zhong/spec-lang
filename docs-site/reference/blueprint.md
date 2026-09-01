@@ -25,8 +25,15 @@ interface BackendBlueprint {
   app: { name: string; title: string; version: string; prefix: string; port: number }
   entities: BlueprintEntity[]
   routes: BlueprintRoute[]
+  lifecycles: BlueprintLifecycle[]
+  invariants: BlueprintInvariant[]
+  effects?: {
+    eventsTable: string
+    columns: { id: "uuid"; event: "text"; payload: "json"; created_at: "datetime" }
+  }
   auth?: BlueprintAuth
   database: { engine: "postgres" | "sqlite"; urlEnv: string; fallback: string; urlFormat: "sqlalchemy-url" }
+  stack: BackendStack
   contract: BackendContract
 }
 ```
@@ -44,8 +51,9 @@ interface BlueprintEntity {
 interface BlueprintField {
   name: string                  // JSON key, EXACTLY as declared
   column: string                // snake_case DB column
-  type: "string" | "int" | "boolean" | "uuid" | "email" | "datetime" | "ref"
+  type: "string" | "int" | "boolean" | "uuid" | "email" | "datetime" | "ref" | "enum"
   target?: string               // for ref fields: referenced entity name
+  states?: string[]             // for enum fields: closed set of states
   unique?: boolean
   optional?: boolean
   default?: unknown
@@ -75,7 +83,16 @@ interface BlueprintRoute {
   request?: { shape: Record<string, string>; partial?: boolean }
   response: { kind: "entity" | "entityArray" | "empty" | "token" | "count"; entity?: string }
   /** For transition routes: the state machine edge being lowered. */
-  transition?: { field: string; event: string; from: string[]; to: string }
+  transition?: {
+    field: string
+    event: string
+    from: string[]
+    to: string
+    guard?: unknown
+    effects?: Array<{ __effect: "set"; field: string; value: unknown }
+                  | { __effect: "emit"; event: string; fields: string[] }>
+  }
+  invariantIds?: string[]       // invariants rechecked by this operation
 }
 ```
 
@@ -127,15 +144,21 @@ request transaction; violations roll back and answer
 `409 {"detail": "Invariant violated"}`. The conformance suite derives
 minimally violating worlds from the same nodes.
 
-### `lifecycles` lowering
+### Transition lowering
 
 Lowering (pinned): one route per transition —
 `POST <crudPath>/{id}/<event>` — implemented as an ATOMIC guarded update
-(`UPDATE … WHERE id = :id AND <field> IN (<from>)`); the state field is
+(`UPDATE … WHERE id = :id AND <field> IN (<from>)` plus the optional
+guard); the state field is
 excluded from create/update shapes (server-controlled); outcomes are
 `200` (updated row), `409 {"detail": "Invalid state"}` (guard failure),
 `404 {"detail": "Not found"}` (unknown id). The conformance suite derives
 the full legal/illegal matrix from this same data.
+
+Effects execute in declaration order in the same transaction as the
+transition. `set` mutates a declared field; `emit` appends an event and
+selected entity fields to the compiler-pinned `events` outbox table. A
+failed guard or invariant leaves neither state changes nor outbox rows.
 
 Derivation rules (deterministic):
 
@@ -156,6 +179,22 @@ interface BlueprintAuth {
   identityField: string         // from password({ identity })
   passwordColumn: "password_hash"
   routes: BlueprintRoute[]      // login / register / me
+}
+```
+
+### `stack`
+
+The generated technology stack is contract data, not an agent choice.
+Defaults pin Python `3.13` and exact versions of FastAPI, Uvicorn,
+SQLAlchemy, Pydantic, PyJWT, bcrypt, pytest and httpx. A spec may override
+individual values through `fastapi({ stack: ... })`; the resolved, sorted
+map is written to the blueprint and prompts.
+
+```ts
+interface BackendStack {
+  python: string
+  dependencies: Record<string, string>
+  dev: Record<string, string>
 }
 ```
 

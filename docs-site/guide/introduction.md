@@ -47,8 +47,9 @@ A specification language changes that contract:
 - **Traceable** — every node in the IR points back to a file, line and
   column, forming the provenance chain
   `Artifact → AgentTask → SpecNode → SourceLocation`.
-- **Repairable** — problems are structured diagnostics with codes and
-  details, a protocol an agent can consume to fix the spec.
+- **Machine-actionable** — problems are structured diagnostics with codes
+  and details. The current generator reports them; future spec-repair tools
+  can consume the same protocol without parsing prose.
 
 ## Why TypeScript as the host language?
 
@@ -91,7 +92,7 @@ meaning. See [the language guide](/guide/language) for the allowed subset.
 | ------------------- | ----------------------------------------------------------------------- |
 | `@spec/core`        | Core abstractions: `SpecNode`, `Diagnostic`, `Spec IR`, `defineApp`      |
 | `@spec/package-sdk` | Authoring SDK for writing your own spec packages                        |
-| `@spec/web`         | Web domain: `entity`, `field`, `crud`, `count`, `page`, `api`           |
+| `@spec/web`         | Web domain: entities, CRUD/count, lifecycles, invariants, guards and effects |
 | `@spec/auth`        | Authentication: `auth`, `password`                                      |
 | `@spec/postgres`    | Database resource: `postgres` (provides `RelationalStore`)              |
 | `@spec/fastapi`     | Backend target: blueprint, generation DAG, conformance suite            |

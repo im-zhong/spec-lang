@@ -14,7 +14,12 @@ export default defineApp({
   name: "ExampleApp",       // required: the application name
 
   entities: [User],         // data model (from @spec/web)
-  services: [MainAuth],     // behavior (from @spec/auth, ...)
+  services: [               // HTTP and behavioral services
+    MainAuth,               // auth
+    Bookings,               // CRUD/count
+    BookingFlow,            // lifecycle transitions, guards, effects
+    NoOverbooking,          // invariants
+  ],
   resources: [MainDB],      // infrastructure (from @spec/postgres, ...)
 })
 ```

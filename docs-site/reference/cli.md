@@ -8,8 +8,9 @@ spec <command> <file.spec.ts> [--debug] [--help]
 
 ### `spec check <file>`
 
-Runs the semantic pipeline (parse, resolve, validate, link) and reports
-diagnostics. Writes no artifacts.
+Runs the semantic pipeline (parse, resolve, normalize, validate, link,
+lower) and reports diagnostics. Writes no artifacts. `lower` is currently
+a no-op extension point.
 
 | Exit | Meaning           |
 | ---- | ----------------- |
@@ -39,7 +40,8 @@ specification (exit 1 otherwise).
 
 Compiles, lowers to a backend blueprint, and generates the application
 with a headless coding agent — N independent shots, each judged by the
-compiler's conformance suite and compared for interface equality (see
+compiler's runtime functional conformance suite and compared for
+normalized OpenAPI equality (see
 [agentic generation](/guide/generate)). Requires `claude` on `PATH`, plus
 `uv` and Python 3.10+ for verification.
 
@@ -71,6 +73,11 @@ Artifacts written to the output dir: `blueprint.json`,
 
 There is deliberately no repair option: a shot that fails its first
 verification is a specification defect (pin the contract, regenerate).
+
+The CLI resolves `--model` from the explicit option, then
+`SPEC_AGENT_MODEL`, then `glm-5.3-flash`, and passes that value to the
+agent runner. At the lower-level runner API, `--model` is omitted when no
+model is supplied, so Claude Code's own settings can select the model.
 
 ## Configuration
 

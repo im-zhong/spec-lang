@@ -1,8 +1,8 @@
 # Spec IR & determinism
 
 The Spec IR (intermediate representation) is the compiler's output and
-the stable input for everything downstream — validators today, agents and
-generators tomorrow.
+the stable input for everything downstream: Blueprint derivation,
+generation DAGs, compiler-owned conformance suites and agent runs.
 
 ## The artifact
 
@@ -105,7 +105,7 @@ Artifact → AgentTask → SpecNode → SourceLocation
 
 It is populated today: every file a `spec generate` shot produces becomes
 an `Artifact` in `.spec/agent.result.json` with a SHA-256 content hash,
-the task that generated it (`generatedBy: "fastapi:implement"`), and the
+the DAG that generated it (`generatedBy: "fastapi:dag"`), and the
 spec nodes it derives from (`sourceNodes`). "Which specification produced
 this code?" is answered by following node ids back to
 [file, line, column].

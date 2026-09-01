@@ -54,20 +54,21 @@ The `code` is the contract: it stays stable even if messages are
 reworded. `details` carries the structured payload an agent needs to
 reason about a repair without parsing English.
 
-## The agent-repair loop (live today)
+## Generation diagnostics (live today)
 
 ```
-Compiler → Diagnostic → Agent → Repair
+Compiler → Agent run → Verification → Diagnostic
 ```
 
-The loop runs in two places now. During **generation**
-([`spec generate`](/guide/generate)), failed verification output is fed
-back to the coding agent as a repair prompt — with structured
-`AGENT_VERIFICATION_FAILED` diagnostics recording exactly which step
-failed and its output tail. And because diagnostics are code-addressed,
-source-located and carry details, spec *repair* by agents follows the
-same protocol: consume `diagnostics.json`, rewrite the spec, recompile,
-check that the code disappeared.
+During [`spec generate`](/guide/generate), task failures, scope violations,
+first-attempt conformance failures and cross-shot interface divergence use
+the same diagnostic shape as static compilation. Verification output tails
+are stored in `GENERATION_NONCONFORMANT.details` for post-mortem analysis.
+
+There is deliberately **no generated-code repair loop**. A conformance
+failure is reported once; the specification, IR, blueprint or oracle must be
+made more precise, and every shot regenerated. Structured spec repair is a
+future consumer of this protocol, not a current generation phase.
 
 ## Full code reference
 

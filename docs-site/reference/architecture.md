@@ -17,21 +17,23 @@ app.spec.ts
     │
     ▼  Link         capability requirements vs providers
     │
-    ▼  Lower        target lowering: @spec/fastapi builds the plan
+    ▼  Lower        current no-op; reserved static extension point
     │
     ▼  Emit         Spec IR + manifest + diagnostics (stable JSON)
 
-spec generate (agentic half, runs on a valid IR):
+spec generate (target + agentic half, runs after a valid IR):
     │
-    ▼  Blueprint    pure derivation pinning all observable behavior
+    ▼  FastAPI plan pure IR → blueprint + DAG + suite + verification
     ▼  Agent shots  headless coding agent writes each workspace
     ▼  Conformance  compiler-owned pytest suite + verification plan
-    ▼  Repeatability  N shots must behave identically (golden rule)
+    ▼  Repeatability  N shots pass one runtime oracle + equal OpenAPI
 ```
 
 Each static stage is a `CompilerPass` over a shared `Compilation` state,
-orchestrated in `packages/compiler/src/compiler.ts`. The agentic half
-never touches the static pipeline: it consumes the emitted IR.
+orchestrated in `packages/compiler/src/compiler.ts`. `lowerPass()` is
+currently an identity function. The FastAPI target is invoked by
+`spec generate` after compilation and consumes the valid emitted IR; it
+is not installed into the static `Lower` pass.
 
 ## Key design decisions
 
@@ -49,7 +51,7 @@ Security boundary:
 | Trusted                      | Untrusted                    |
 | ---------------------------- | ---------------------------- |
 | Compiler                     | User specifications          |
-| Published spec packages (builders, validators) | Future agent output |
+| Published spec packages (builders, validators) | Generated application code |
 
 Only trusted package code runs; untrusted spec code is data.
 
@@ -109,7 +111,8 @@ raise `InternalCompilerError` (exit 2, stack traces with `--debug`).
 ```
 packages/core         types, builder protocol, core DSL, logger, errors, stable JSON
 packages/package-sdk  definePackage / defineValidator / provides / requires
-packages/web          entity / field / crud / count / page / api + validators
+packages/web          entity / field / crud / count / lifecycle / invariant /
+                      expressions / effects + validators
 packages/auth         auth / password + validators
 packages/postgres     postgres resource + RelationalStore provider
 packages/fastapi      backend target: blueprint, conformance suite, prompts,
@@ -127,10 +130,16 @@ docs-site/            this documentation site (VitePress)
 ## The agentic division of labor
 
 - The **agent** writes code — it never grades itself.
-- The **compiler** owns the contract (blueprint), the oracle (conformance
-  suite) and the verdict (verification + repeatability).
+- The **compiler/target** owns the contract (blueprint), the runtime
+  functional oracle, the interface snapshot and the verdict.
 - Divergence between shots is a specification/compiler defect: pin more of
   the contract, never re-roll the agent.
+
+Today “same behavior” means every independent shot passes the same
+compiler-derived functional tests, including state transitions, guards,
+effects and invariants. The harness separately requires normalized
+OpenAPI equality. It does not yet perform direct cross-shot request-trace
+or database-state comparison.
 
 Provenance is real: every generated file becomes an `Artifact` with a
 SHA-256 content hash, the task that generated it, and the SpecNodes it

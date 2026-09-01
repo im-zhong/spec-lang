@@ -31,10 +31,10 @@ features:
     details: spec generate lowers the IR to a pinned behavioral blueprint and lets a headless coding agent implement it — FastAPI backends today, more targets via the package interface.
   - icon: ⚖️
     title: The golden rule
-    details: Same spec, several independent generations, identical behavior — same routes, same responses, same errors. Enforced by a compiler-owned conformance suite plus cross-shot OpenAPI equality.
+    details: Same spec, several independent generations, identical behavior — real HTTP requests, state changes, errors, transitions and invariants. Enforced by a compiler-owned runtime conformance suite plus cross-shot OpenAPI equality.
   - icon: 🩺
     title: Structured diagnostics
-    details: Every problem carries a code, level, source location and structured details — a machine protocol from static validation all the way to agent repair.
+    details: Every problem carries a code, level, source location and structured details — one machine protocol for static compilation, generation, verification and repeatability verdicts.
   - icon: 🔗
     title: Capability system
     details: Packages declare what they provide and require (Auth requires RelationalStore; Postgres provides it). The compiler links and checks them.

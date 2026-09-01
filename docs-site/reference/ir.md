@@ -70,8 +70,10 @@ of strings under `requires` / `provides`.
 | Kind (package)              | Produced by                      | Key attributes                                |
 | --------------------------- | -------------------------------- | --------------------------------------------- |
 | `app` (`@spec/core`)        | `defineApp({...})`               | `name`, `entities`, `services`, `resources`   |
-| `entity` (`@spec/web`)      | `entity("Name", fields)`         | `fields: { [name]: { type, unique?, target?, ... } }` |
+| `entity` (`@spec/web`)      | `entity("Name", fields)`         | `fields: { [name]: { type, states?, unique?, target?, ... } }` |
 | `crud` (`@spec/web`)        | `crud(Entity, opts?)`            | `entity: ref`, `path`, `methods?`, `auth`     |
+| `lifecycle` (`@spec/web`)   | `lifecycle(Entity, {...})`       | `entity: ref`, enum `field`, `initial`, transitions with guard/effects |
+| `invariant` (`@spec/web`)   | `invariant(name, {...})`         | `on: ref`, statically represented `check` expression |
 | `page` / `api` (`@spec/web`)| `page({...})` / `api({...})`     | `path`, `title` / `method`, `operation`, `input`, `output` |
 | `auth` (`@spec/auth`)       | `auth({...})`                    | `principal: ref`, `requires: [...]`           |
 | `passwordStrategy` (`@spec/auth`) | `password({...})` child      | `identity: fieldRef`                          |
@@ -82,6 +84,8 @@ Notes:
 
 - `field.ref("User")` serializes with a `target` key:
   `{ "type": "ref", "target": "User" }`.
+- `field.enum("pending", "confirmed")` serializes as
+  `{ "type": "enum", "states": ["pending", "confirmed"] }`.
 - `count(Entity)` produces an `api` node with pinned semantics:
   `{ "method": "GET", "operation": "count", "entity": ref, "path", "auth }`.
 - A `fastapi` node serving crud or auth resources carries

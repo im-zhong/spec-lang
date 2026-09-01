@@ -69,7 +69,7 @@ SHA-256 hashes.
 
 ```
 claude -p --output-format json --permission-mode acceptEdits \
-       --max-turns <n> --model <id> \
+       --max-turns <n> [--model <id>] \
        --allowedTools Read Glob Grep LS Edit Write \
                      Bash(uv:*) Bash(python:*) Bash(pytest:*) …
 ```
@@ -153,6 +153,13 @@ dropped into every workspace:
   unknown-identity logins, duplicate register, `/auth/me` without token,
   every protected route without a token
 - **count** — `{"count": 0}` then `{"count": 1}` after a create
+- **lifecycles** — declared initial state, every legal transition,
+  illegal-state `409`, request-time guard pass/fail paths, and direct
+  update attempts that try to change the server-controlled state
+- **effects** — exact `set` values and emitted outbox event/payload shape
+- **invariants** — compiler-derived minimally violating worlds for row
+  checks and cross-row counts; the mutation rolls back with the pinned
+  `409` body
 
 Test values that must be unique are generated per call
 (`uuid`-based), so the suite itself never collides with unique
@@ -182,7 +189,7 @@ interface Artifact {
   type: "source" | "config" | "test" | "document" | "verification"
   path: string        // workspace-relative
   contentHash: string // sha256
-  generatedBy: string // "fastapi:implement"
+  generatedBy: string // "fastapi:dag"
   sourceNodes: string[] // the IR nodes it derives from
 }
 ```
@@ -213,6 +220,14 @@ The snapshot normalizes each shot's `/openapi.json` to exactly:
 
 Agent naming (operationIds, tags, descriptions) is dropped by
 construction — only client-observable interface facts are compared.
+
+The two gates prove complementary properties: every shot independently
+passes the same functional runtime oracle, and every shot exposes the
+same normalized OpenAPI surface. The harness does **not yet** replay one
+shared request trace across all shots and compare response bytes or
+database snapshots directly; behavioral equality is therefore inferred
+from common-oracle conformance, not measured by a cross-shot differential
+runner.
 
 ## `agent.result.json`
 
@@ -245,6 +260,6 @@ session ids, costs, timings — and therefore gitignored):
 }
 ```
 
-Generation diagnostics (`AGENT_TASK_FAILED`, `AGENT_VERIFICATION_FAILED`,
+Generation diagnostics (`AGENT_TASK_FAILED`, `GENERATION_NONCONFORMANT`,
 `INTERFACE_DIVERGENT`, …) follow the same structured protocol as compiler
 diagnostics — see the [diagnostics reference](/reference/diagnostics).

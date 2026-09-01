@@ -70,9 +70,10 @@ const MainAuth = auth({ principal: User, strategy: password({ ... }) })
 
 ## 3. Diagnostics are a protocol, not stack traces
 
-The architecture's contract is `Compiler → Diagnostic → Agent → Repair`:
-every problem arrives as a structured record with a stable code, a source
-location and machine-readable details. Break one line of a spec:
+The architecture's diagnostic contract is
+`Compiler → Diagnostic → Author or tooling`: every problem arrives as a
+structured record with a stable code, a source location and
+machine-readable details. Break one line of a spec:
 
 ```ts
 const MainAuth = auth({
@@ -103,8 +104,8 @@ const MainAuth = auth({
   A raw JavaScript stack whose frames point into the *package's*
   internals, not the user's spec line semantics. The compiler cannot
   classify this failure — it must report exit code `2` (*internal*
-  error) for what is actually a typo, and the repair protocol has
-  nothing structured to work with. Every such case needs bespoke
+  error) for what is actually a typo, and downstream tooling has nothing
+  structured to work with. Every such case needs bespoke
   try/catch-and-parse-English heuristics.
 
 ## Where the simple approach is genuinely fine
@@ -120,7 +121,7 @@ The evaluator (~370 lines) is the price of:
 | --- | --- |
 | Byte-stable IR | nondeterministic constructs unrepresentable |
 | Stable node ids | const-binding name adoption |
-| Machine-repairable failures | codes + positions + details, not stack traces |
+| Machine-actionable failures | codes + positions + details, not stack traces |
 | "User code is data" | nothing in the file ever executes |
 
 All four are load-bearing for [the golden rule](/guide/golden-rule):
