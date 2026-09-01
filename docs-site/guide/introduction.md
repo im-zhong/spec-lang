@@ -29,6 +29,10 @@ and the agentic pass is held to one standard: generating the same spec
 twice must produce software that behaves identically (see
 [the golden rule](./golden-rule)).
 
+To see all of it working on one concrete example — every function, every
+data structure, every generated file — read the
+[source walkthrough](/deep-dive/source-walkthrough).
+
 ## Why a specification language?
 
 When an AI agent (or a formal verifier, or a code generator) is asked to

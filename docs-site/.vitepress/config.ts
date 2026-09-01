@@ -27,10 +27,19 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: "Guide", link: "/guide/introduction", activeMatch: "/guide/" },
+      { text: "Deep Dive", link: "/deep-dive/source-walkthrough", activeMatch: "/deep-dive/" },
       { text: "Reference", link: "/reference/cli", activeMatch: "/reference/" },
     ],
 
     sidebar: {
+      "/deep-dive/": [
+        {
+          text: "Deep Dive",
+          items: [
+            { text: "Source walkthrough: booking, end to end", link: "/deep-dive/source-walkthrough" },
+          ],
+        },
+      ],
       "/guide/": [
         {
           text: "Introduction",

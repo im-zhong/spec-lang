@@ -182,4 +182,6 @@ location and the offending value. See [Diagnostics](/guide/diagnostics).
 - [REST resources](/guide/rest-resources) — crud, count and references
 - [Agentic generation](/guide/generate) — from spec to running software
 - [The golden rule](/guide/golden-rule) — why generation is repeatable
+- [Source walkthrough](/deep-dive/source-walkthrough) — one spec traced
+  through every stage, at the source-code level
 - [Authoring spec packages](/guide/package-authoring) — extend the language
