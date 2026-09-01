@@ -72,6 +72,26 @@ export interface BlueprintRoute {
   response: { kind: "entity" | "entityArray" | "empty" | "token" | "count"; entity?: string }
   /** For transition routes: the state machine edge being lowered. */
   transition?: { field: string; event: string; from: string[]; to: string }
+  /** Invariants this operation must preserve (ids into blueprint.invariants). */
+  invariantIds?: string[]
+}
+
+/** A served invariant (behavior Phase 2): a truth that must always hold. */
+export interface BlueprintInvariant {
+  id: string          // "invariant:no-overbooking"
+  name: string        // "no-overbooking"
+  /** The entity the invariant is about ("self" in the check). */
+  entity: string
+  shape: "rowCheck" | "crossRowCount"
+  /** For rowCheck: the expression tree (fields/consts/comparisons/and). */
+  check?: unknown
+  /** For crossRowCount: count(<counted>.<refField> → self) <op> <bound>. */
+  count?: {
+    entity: string
+    refField: string
+    op: "lt" | "lte"
+    bound: { kind: "field"; name: string } | { kind: "const"; value: number }
+  }
 }
 
 /** A served lifecycle (behavior Phase 1): entity + state machine. */
@@ -127,6 +147,8 @@ export interface BackendContract {
     alreadyExists: { status: 409; body: { detail: "Already exists" } }
     /** A lifecycle transition whose guard (current state) fails. */
     guardFailed: { status: 409; body: { detail: "Invalid state" } }
+    /** An invariant violated by a mutating operation (row rolled back). */
+    invariantViolated: { status: 409; body: { detail: "Invariant violated" } }
     /** Field validation failures use the framework default (422). */
     validation: { status: 422; body: "fastapi-default" }
   }
@@ -149,6 +171,7 @@ export interface BackendBlueprint {
   entities: BlueprintEntity[]
   routes: BlueprintRoute[]
   lifecycles: BlueprintLifecycle[]
+  invariants: BlueprintInvariant[]
   auth?: BlueprintAuth
   database: {
     engine: "postgres" | "sqlite"
@@ -537,6 +560,77 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
     }
   }
 
+  /* ---------------- invariants (behavior Phase 2) ---------------- */
+  const blueprintInvariants: BlueprintInvariant[] = []
+  for (const node of nodes.filter((n) => n.kind === "invariant")) {
+    if (!isServed(node)) continue
+    const onRef = node.attributes.on
+    const onId = isPlainObject(onRef) && typeof onRef.nodeId === "string" ? onRef.nodeId : undefined
+    const entityName = onId ? byId.get(onId)?.name : undefined
+    if (!entityName || !entityByName.has(entityName)) continue
+    const name = node.name ?? "invariant"
+    const check = isPlainObject(node.attributes.check) ? node.attributes.check : undefined
+
+    let invariant: BlueprintInvariant | undefined
+    if (
+      check &&
+      check.__expr === "cmp" &&
+      isPlainObject(check.left) &&
+      check.left.__expr === "countOf"
+    ) {
+      const filter = isPlainObject(check.left.filter) ? Object.entries(check.left.filter) : []
+      const right = isPlainObject(check.right) ? check.right : undefined
+      const bound:
+        | { kind: "field"; name: string }
+        | { kind: "const"; value: number }
+        | undefined = right
+        ? right.__expr === "field" && typeof right.name === "string"
+          ? { kind: "field", name: right.name }
+          : right.__expr === "const" && typeof right.value === "number"
+            ? { kind: "const", value: right.value }
+            : undefined
+        : undefined
+      if (filter.length === 1 && bound) {
+        invariant = {
+          id: `invariant:${name}`,
+          name,
+          entity: entityName,
+          shape: "crossRowCount",
+          count: {
+            entity: String(check.left.entity),
+            refField: filter[0][0],
+            op: check.op === "lt" ? "lt" : "lte",
+            bound,
+          },
+        }
+      }
+    } else if (check) {
+      invariant = { id: `invariant:${name}`, name, entity: entityName, shape: "rowCheck", check }
+    }
+    if (invariant) blueprintInvariants.push(invariant)
+  }
+
+  // Mark the operations that must preserve each invariant:
+  //  - rowCheck(E)        → create + update of E
+  //  - crossRowCount(E,C) → create + update of C, update of E
+  for (const inv of blueprintInvariants) {
+    for (const route of routes) {
+      const isMutation = route.operation === "create" || route.operation === "update"
+      if (!isMutation || !route.entity) continue
+      if (inv.shape === "rowCheck" && route.entity === inv.entity) {
+        route.invariantIds = [...(route.invariantIds ?? []), inv.id].sort()
+      } else if (inv.shape === "crossRowCount") {
+        const counted = inv.count!.entity
+        if (
+          (route.entity === counted && (route.operation === "create" || route.operation === "update")) ||
+          (route.entity === inv.entity && route.operation === "update")
+        ) {
+          route.invariantIds = [...(route.invariantIds ?? []), inv.id].sort()
+        }
+      }
+    }
+  }
+
   /* ---------------- auth routes ---------------- */
   let auth: BlueprintAuth | undefined
   let identity = "email"
@@ -621,6 +715,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
       danglingRef: { status: 404, body: { detail: "Not found" } },
       alreadyExists: { status: 409, body: { detail: "Already exists" } },
       guardFailed: { status: 409, body: { detail: "Invalid state" } },
+      invariantViolated: { status: 409, body: { detail: "Invariant violated" } },
       validation: { status: 422, body: "fastapi-default" },
     },
     auth: {
@@ -645,6 +740,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
     entities,
     routes,
     lifecycles: blueprintLifecycles,
+    invariants: blueprintInvariants,
     ...(auth ? { auth } : {}),
     database: { engine, urlEnv: "DATABASE_URL", fallback: "sqlite:///./dev.db", urlFormat: "sqlalchemy-url" },
     stack,

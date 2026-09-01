@@ -4,7 +4,9 @@ import {
   crud,
   defaultCrudPath,
   entity,
+  expr,
   field,
+  invariant,
   isFieldSpec,
   lifecycle,
   transition,
@@ -192,5 +194,54 @@ describe("@spec/web lifecycle", () => {
 
   it("the package registers the lifecycle node kind and validator", () => {
     expect(webPackage.nodeKinds?.map((k) => k.kind)).toContain("lifecycle")
+  })
+})
+
+describe("@spec/web invariant", () => {
+  it("expr builders produce chainable pure-data trees", () => {
+    const cmp = expr.field("age").gte(expr.const(18))
+    expect(cmp.__expr).toBe("cmp")
+    expect(cmp.op).toBe("gte")
+    expect(cmp.left).toMatchObject({ __expr: "field", name: "age" })
+    expect(cmp.right).toEqual({ __expr: "const", value: 18 })
+    // comparisons embed the RAW node: no authoring methods leak into data
+    expect((cmp.left as { gte?: unknown }).gte).toBeUndefined()
+  })
+
+  it("invariant() stores the entity ref and the stripped check tree", () => {
+    const Venue = entity("Venue", { id: field.uuid(), capacity: field.int() })
+    const Booking = entity("Booking", { id: field.uuid(), venue: field.ref("Venue") })
+    const NoOverbooking = invariant("no-overbooking", {
+      on: Venue,
+      check: expr.countOf(Booking, { venue: "self" }).lte(expr.field("capacity")),
+    })
+    expect(NoOverbooking.kind).toBe("invariant")
+    expect(NoOverbooking.name).toBe("no-overbooking")
+    expect(NoOverbooking.attributes.on).toEqual({ nodeId: "entity:Venue" })
+    // chain methods are stripped; only data remains
+    expect(NoOverbooking.attributes.check).toEqual({
+      __expr: "cmp",
+      op: "lte",
+      left: { __expr: "countOf", entity: "Booking", filter: { venue: "self" } },
+      right: { __expr: "field", name: "capacity" },
+    })
+  })
+
+  it("row-local checks serialize as data too", () => {
+    const Post = entity("Post", { id: field.uuid(), title: field.string() })
+    const inv = invariant("no-empty-title", {
+      on: Post,
+      check: expr.field("title").neq(expr.const("")),
+    })
+    expect(inv.attributes.check).toEqual({
+      __expr: "cmp",
+      op: "neq",
+      left: { __expr: "field", name: "title" },
+      right: { __expr: "const", value: "" },
+    })
+  })
+
+  it("the package registers the invariant node kind and validator", () => {
+    expect(webPackage.nodeKinds?.map((k) => k.kind)).toContain("invariant")
   })
 })

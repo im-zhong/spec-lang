@@ -415,3 +415,186 @@ export const validateLifecycles = defineValidator("web/validate-lifecycles", (ct
   }
   return diagnostics
 })
+
+/**
+ * Invariants (docs/behavior-model.md §5): the check must be an expression
+ * tree from the closed vocabulary, every term must resolve, and the shape
+ * must be one Phase 2 can lower (rowCheck or crossRowCount) — anything
+ * richer is rejected rather than silently re-interpreted by the agent.
+ */
+export const validateInvariants = defineValidator("web/validate-invariants", (ctx) => {
+  const diagnostics: Diagnostic[] = []
+  const entities = ctx.findNodes("entity")
+  const byId = new Map(entities.map((e) => [e.id, e]))
+  const entityFields = (entityName: string): Record<string, unknown> => {
+    const e = entities.find((x) => x.name === entityName)
+    const fields = e?.attributes.fields
+    return isPlainObject(fields) ? fields : {}
+  }
+
+  for (const node of ctx.findNodes("invariant")) {
+    const onRef = node.attributes.on
+    if (!isPlainObject(onRef) || typeof onRef.nodeId !== "string") {
+      diagnostics.push(
+        diag("INVARIANT_TARGET_INVALID", "error", `invariant(...) must declare an "on" entity.`, {
+          nodeId: node.id,
+        }),
+      )
+      continue
+    }
+    const on = byId.get(onRef.nodeId)
+    if (!on || on.kind !== "entity") {
+      diagnostics.push(
+        diag(
+          "INVARIANT_ENTITY_NOT_FOUND",
+          "error",
+          `invariant "${node.name}" is on "${onRef.nodeId}" but no such entity exists.`,
+          { nodeId: node.id, details: { entity: onRef.nodeId } },
+        ),
+      )
+      continue
+    }
+    const onName = on.name ?? ""
+    const fields = entityFields(onName)
+    const check = node.attributes.check
+    if (!isPlainObject(check) || typeof check.__expr !== "string") {
+      diagnostics.push(
+        diag(
+          "INVARIANT_CHECK_INVALID",
+          "error",
+          `invariant "${node.name}" check must be an expression from expr.* (got ${JSON.stringify(check)?.slice(0, 60)}…).`,
+          { nodeId: node.id },
+        ),
+      )
+      continue
+    }
+
+    /** Validate a rowCheck subtree: fields/consts only, no countOf. */
+    const validateRowTerms = (tree: Record<string, unknown>, depth = 0): boolean => {
+      if (depth > 8) return false
+      const kind = tree.__expr
+      if (kind === "field") {
+        const name = String(tree.name)
+        const def = fields[name]
+        if (!isPlainObject(def)) {
+          diagnostics.push(
+            diag(
+              "INVARIANT_TERM_UNKNOWN",
+              "error",
+              `invariant "${node.name}" references field "${name}" which does not exist on entity "${onName}".`,
+              { nodeId: node.id, details: { field: name } },
+            ),
+          )
+          return false
+        }
+        return true
+      }
+      if (kind === "const") return true
+      if (kind === "cmp") {
+        return (
+          validateRowTerms(tree.left as Record<string, unknown>, depth + 1) &&
+          validateRowTerms(tree.right as Record<string, unknown>, depth + 1)
+        )
+      }
+      if (kind === "and") {
+        return (
+          validateRowTerms(tree.left as Record<string, unknown>, depth + 1) &&
+          validateRowTerms(tree.right as Record<string, unknown>, depth + 1)
+        )
+      }
+      diagnostics.push(
+        diag(
+          "INVARIANT_SHAPE_UNSUPPORTED",
+          "error",
+          `invariant "${node.name}" uses unsupported expression "${String(kind)}" in a row check (allowed: field, const, comparisons, and).`,
+          { nodeId: node.id, details: { kind: String(kind) } },
+        ),
+      )
+      return false
+    }
+
+    if (check.__expr === "cmp" && isPlainObject(check.left) && check.left.__expr === "countOf") {
+      // crossRowCount: countOf(ref edge) <op> bound, upper bounds only
+      const op = String(check.op)
+      if (!["lt", "lte"].includes(op)) {
+        diagnostics.push(
+          diag(
+            "INVARIANT_SHAPE_UNSUPPORTED",
+            "error",
+            `invariant "${node.name}": count comparisons support lt/lte only in this phase (got "${op}").`,
+            { nodeId: node.id, details: { op } },
+          ),
+        )
+        continue
+      }
+      const counted = String((check.left as Record<string, unknown>).entity)
+      const countedEntity = entities.find((e) => e.name === counted)
+      if (!countedEntity) {
+        diagnostics.push(
+          diag(
+            "INVARIANT_TERM_UNKNOWN",
+            "error",
+            `invariant "${node.name}" counts entity "${counted}" which does not exist.`,
+            { nodeId: node.id, details: { entity: counted } },
+          ),
+        )
+        continue
+      }
+      const filter = (check.left as Record<string, unknown>).filter
+      const entries = isPlainObject(filter) ? Object.entries(filter) : []
+      if (entries.length !== 1 || entries[0][1] !== "self") {
+        diagnostics.push(
+          diag(
+            "INVARIANT_SHAPE_UNSUPPORTED",
+            "error",
+            `invariant "${node.name}": countOf filter must be exactly one ref field mapped to "self".`,
+            { nodeId: node.id },
+          ),
+        )
+        continue
+      }
+      const [refField] = entries[0]
+      const refDef = entityFields(counted)[refField]
+      const refTarget = isPlainObject(refDef) ? String(refDef.target) : undefined
+      if (!isPlainObject(refDef) || refDef.type !== "ref" || refTarget !== onName) {
+        diagnostics.push(
+          diag(
+            "INVARIANT_TERM_UNKNOWN",
+            "error",
+            `invariant "${node.name}": "${counted}.${refField}" must be a ref field targeting "${onName}".`,
+            { nodeId: node.id, details: { entity: counted, field: refField } },
+          ),
+        )
+        continue
+      }
+      // the bound must be a numeric field of `on` or a numeric const
+      const right = check.right
+      if (isPlainObject(right) && right.__expr === "field") {
+        const def = fields[String(right.name)]
+        if (!isPlainObject(def) || def.type !== "int") {
+          diagnostics.push(
+            diag(
+              "INVARIANT_TERM_UNKNOWN",
+              "error",
+              `invariant "${node.name}": count bound must be an int field of "${onName}" (got "${String(right.name)}").`,
+              { nodeId: node.id, details: { field: String(right.name) } },
+            ),
+          )
+        }
+      } else if (!(isPlainObject(right) && right.__expr === "const" && typeof right.value === "number")) {
+        diagnostics.push(
+          diag(
+            "INVARIANT_SHAPE_UNSUPPORTED",
+            "error",
+            `invariant "${node.name}": count bound must be expr.field(<int field>) or expr.const(<number>).`,
+            { nodeId: node.id },
+          ),
+        )
+      }
+    } else {
+      // row-local check
+      validateRowTerms(check)
+    }
+  }
+  return diagnostics
+})

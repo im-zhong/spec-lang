@@ -216,7 +216,7 @@
         ],
         "id": "router:Post",
         "label": "router: Post",
-        "promptSha256": "57148173758c9298089e47dd45a4da450649a11aedfd744f4c60e8c93c9e3755",
+        "promptSha256": "f718e8b879c1f7921fb71e9dc0959294826b29f310d5b61cef013aa283adf4c3",
         "scope": [
           "app/routers/post.py"
         ],

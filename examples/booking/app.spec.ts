@@ -1,5 +1,5 @@
 import { defineApp } from "@spec/core"
-import { entity, field, crud, count, lifecycle, transition } from "@spec/web"
+import { entity, field, crud, count, lifecycle, transition, invariant, expr } from "@spec/web"
 import { auth, password } from "@spec/auth"
 import { postgres } from "@spec/postgres"
 import { fastapi } from "@spec/fastapi"
@@ -54,6 +54,13 @@ const BookingFlow = lifecycle(Booking, {
   ],
 })
 
+// PLANE — invariant: "full" is derived, never stored. A venue may never
+// host more bookings than its capacity (behavior Phase 2).
+const NoOverbooking = invariant("no-overbooking", {
+  on: Venue,
+  check: expr.countOf(Booking, { venue: "self" }).lte(expr.field("capacity")),
+})
+
 const MainDB = postgres({ entities: [User, Venue, Booking] })
 
 const Server = fastapi({
@@ -71,13 +78,13 @@ const Server = fastapi({
     },
     dev: { pytest: "9.1.1", httpx: "0.28.1" },
   },
-  services: [MainAuth, Users, Venues, Bookings, BookingCount, BookingFlow],
+  services: [MainAuth, Users, Venues, Bookings, BookingCount, BookingFlow, NoOverbooking],
   resources: [MainDB],
 })
 
 export default defineApp({
   name: "BookingAPI",
   entities: [User, Venue, Booking],
-  services: [MainAuth, Users, Venues, Bookings, BookingCount, BookingFlow],
+  services: [MainAuth, Users, Venues, Bookings, BookingCount, BookingFlow, NoOverbooking],
   resources: [MainDB, Server],
 })

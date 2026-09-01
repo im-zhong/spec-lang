@@ -137,6 +137,74 @@ function pathToState(
   return null
 }
 
+/** First comparison in a check tree (DFS), if any. */
+function findFirstCmp(check: unknown): Record<string, unknown> | undefined {
+  if (!check || typeof check !== "object") return undefined
+  const node = check as Record<string, unknown>
+  if (node.__expr === "cmp") return node
+  if (node.__expr === "and") {
+    return findFirstCmp(node.left) ?? findFirstCmp(node.right)
+  }
+  return undefined
+}
+
+/** The field compared against a const in a cmp node ("left" or "right"). */
+function cmpFieldName(cmp: Record<string, unknown>): string | undefined {
+  const left = cmp.left as Record<string, unknown> | undefined
+  const right = cmp.right as Record<string, unknown> | undefined
+  if (left?.__expr === "field" && right?.__expr === "const") return String(left.name)
+  if (right?.__expr === "field" && left?.__expr === "const") return String(right.name)
+  return undefined
+}
+
+/** A Python literal/expression that VIOLATES the comparison, or undefined. */
+function violatingValue(
+  entity: BlueprintEntity,
+  fieldName: string | undefined,
+  cmp: Record<string, unknown>,
+): string | undefined {
+  if (!fieldName) return undefined
+  const field = entity.fields.find((f) => f.name === fieldName)
+  if (!field) return undefined
+  const left = cmp.left as Record<string, unknown> | undefined
+  const right = cmp.right as Record<string, unknown> | undefined
+  const op = String(cmp.op)
+  // normalize so `bound` is the const and the field side is known
+  let bound: unknown
+  if (right?.__expr === "const") bound = right.value
+  else if (left?.__expr === "const") bound = left.value
+  else return undefined
+  const flip = left?.__expr === "const" // field on the right → mirror the op
+  const mirror: Record<string, string> = { lt: "gt", lte: "gte", gt: "lt", gte: "lte", eq: "eq", neq: "neq" }
+  const effOp = flip ? mirror[op] : op
+
+  if (typeof bound === "number" && field.type === "int") {
+    const v =
+      effOp === "neq" ? bound :
+      effOp === "eq" ? bound + 1 :
+      effOp === "lt" || effOp === "lte" ? bound + 1 :
+      bound - 1
+    return String(v)
+  }
+  if (typeof bound === "string" && (field.type === "string" || field.type === "enum")) {
+    if (field.type === "enum") {
+      const others = (field.states ?? []).filter((s) => s !== bound)
+      if (effOp === "neq") return JSON.stringify(bound)
+      if (others.length > 0) return JSON.stringify(others[0])
+      return undefined
+    }
+    if (effOp === "neq") return JSON.stringify(bound)
+    if (effOp === "eq") return JSON.stringify(bound + "-different")
+    return undefined
+  }
+  if (typeof bound === "boolean" && field.type === "boolean") {
+    if (effOp === "eq") return bound ? "False" : "True"
+    if (effOp === "neq") return bound ? "True" : "False"
+    return undefined
+  }
+  return undefined
+}
+
 /** Python expression for a route path with {id} filled from a variable. */
 function pathExpr(route: BlueprintRoute, idVar: string): string {
   if (route.path.includes("{id}")) {
@@ -175,34 +243,16 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
   c.push("import uuid")
   c.push("")
   c.push("")
-  c.push("def body_for(client, entity, overrides=None, token=None):")
+  c.push("def make_body(client, entity, overrides=None, token=None):")
   c.push('    """Build a valid create body for entity (seeding ref targets).')
   c.push("")
-  c.push("    Returns (sent_body, stored_json).")
+  c.push("    Does NOT create the row itself — used by invariant tests that")
+  c.push("    need a body for a create that must FAIL.")
   c.push('"""')
   for (const entity of lifecycles) {
     const create = createRoutes.get(entity.name)
-    const viaRegister = hasAuth && bp.auth!.principal === entity.name
+    if (!create) continue // principal-without-create has no dict form
     c.push(`    if entity == ${JSON.stringify(entity.name)}:`)
-    if (!create) {
-      // Principal without an exposed create route: seed via register.
-      const reg = bp.auth!.routes.find((r) => r.operation === "register")!
-      const identity = bp.auth!.identityField
-      const parts: string[] = []
-      for (const field of entity.fields) {
-        if (field.name === "id" || field.name === identity) continue
-        if (field.type === "ref" || field.optional || field.default !== undefined) continue
-        parts.push(`${JSON.stringify(field.name)}: ${sampleValue(field)}`)
-      }
-      c.push(`        identity = f"{uuid.uuid4()}@example.com"`)
-      c.push(
-        `        body = {${JSON.stringify(identity)}: identity, ${parts.join(", ")}, "password": "secret123"}`,
-      )
-      c.push(`        r = client.post(${JSON.stringify(reg.path)}, json=body)`)
-      c.push("        assert r.status_code == 201, r.text")
-      c.push("        return body, r.json()")
-      continue
-    }
     const seeds: string[] = []
     for (const field of entity.fields) {
       if (field.type === "ref" && field.target) {
@@ -225,10 +275,38 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
     c.push(`        base = {${parts.join(", ")}}`)
     c.push("        if overrides:")
     c.push("            base.update(overrides)")
-    const headers = hasAuth && create.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
-    c.push(
-      `        r = client.post(${JSON.stringify(create.path)}, json=base${headers})`,
-    )
+    c.push("        return base")
+  }
+  c.push(`    raise AssertionError(f"no body builder for {entity}")`)
+  c.push("")
+  c.push("")
+  c.push("def body_for(client, entity, overrides=None, token=None):")
+  c.push('    """Make a body and CREATE the row; returns (sent_body, stored_json)."""')
+  for (const entity of lifecycles) {
+    const create = createRoutes.get(entity.name)
+    c.push(`    if entity == ${JSON.stringify(entity.name)}:`)
+    if (!create) {
+      // Principal without an exposed create route: seed via register.
+      const reg = bp.auth!.routes.find((r) => r.operation === "register")!
+      const identity = bp.auth!.identityField
+      const parts: string[] = []
+      for (const field of entity.fields) {
+        if (field.name === "id" || field.name === identity) continue
+        if (field.type === "ref" || field.optional || field.default !== undefined) continue
+        parts.push(`${JSON.stringify(field.name)}: ${sampleValue(field)}`)
+      }
+      c.push(`        identity = f"{uuid.uuid4()}@example.com"`)
+      c.push(
+        `        body = {${JSON.stringify(identity)}: identity, ${parts.join(", ")}, "password": "secret123"}`,
+      )
+      c.push(`        r = client.post(${JSON.stringify(reg.path)}, json=body)`)
+      c.push("        assert r.status_code == 201, r.text")
+      c.push("        return body, r.json()")
+      continue
+    }
+    const hdrs = hasAuth && create.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
+    c.push(`        base = make_body(client, entity, overrides=overrides, token=token)`)
+    c.push(`        r = client.post(${JSON.stringify(create.path)}, json=base${hdrs})`)
     c.push("        assert r.status_code == 201, r.text")
     c.push("        return base, r.json()")
   }
@@ -282,7 +360,10 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
   t.push('"""')
   t.push("import uuid")
   t.push("")
-  t.push("from helpers import body_for, create_row" + (hasAuth ? ", auth_user, auth_token" : ""))
+  t.push(
+    "from helpers import body_for, create_row, make_body" +
+      (hasAuth ? ", auth_user, auth_token" : ""),
+  )
   t.push("")
   t.push("")
 
@@ -627,6 +708,116 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
       t.push(`    r = client.patch(${pathExpr(updateRoute, 'row["id"]')}, json={${JSON.stringify(lifecycle.field)}: ${JSON.stringify(probeState)}}${headers})`)
       t.push("    assert r.status_code == 200, r.text")
       t.push(`    assert r.json()[${JSON.stringify(lifecycle.field)}] == row[${JSON.stringify(lifecycle.field)}]`)
+    }
+  }
+
+  // ---- invariants (behavior Phase 2): minimally violating worlds ----
+  for (const inv of bp.invariants) {
+    const onEntity = bp.entities.find((e) => e.name === inv.entity)
+    const withAuth = hasAuth
+
+    if (inv.shape === "rowCheck" && onEntity) {
+      // Find the first comparison with a const bound and compute a value
+      // that violates it.
+      const firstCmp = findFirstCmp(inv.check)
+      const field = firstCmp ? cmpFieldName(firstCmp) : undefined
+      const value = firstCmp ? violatingValue(onEntity, field, firstCmp) : undefined
+      const create = createRoutes.get(inv.entity)
+      if (firstCmp && field && value !== undefined && create && lifecycles.includes(onEntity)) {
+        const suffix = withAuth && create.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
+        const tokenArg = withAuth && create.auth ? ", token=token" : ""
+        t.push("")
+        t.push("")
+        t.push(`def test_invariant_${inv.name.replace(/[^a-zA-Z0-9_]/g, "_")}(client):`)
+        if (withAuth && create.auth) t.push("    token = auth_token(client)")
+        t.push(`    good = make_body(client, ${JSON.stringify(inv.entity)}${tokenArg})`)
+        t.push(`    bad = {**good, ${JSON.stringify(field)}: ${value}}`)
+        t.push(`    r = client.post(${JSON.stringify(create.path)}, json=bad${suffix})`)
+        t.push("    assert r.status_code == 409, r.text")
+        t.push('    assert r.json() == {"detail": "Invariant violated"}')
+        const countRoute = bp.routes.find(
+          (r) => r.operation === "count" && r.entity === inv.entity && (!withAuth || r.auth === (create.auth ?? false)),
+        )
+        if (countRoute) {
+          const cSuffix = withAuth && countRoute.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
+          t.push(`    r = client.get(${JSON.stringify(countRoute.path)}${cSuffix})`)
+          t.push("    assert r.status_code == 200, r.text")
+          t.push(`    assert r.json() == {"count": 0}`)
+        }
+      }
+    }
+
+    if (inv.shape === "crossRowCount" && onEntity) {
+      const c = inv.count!
+      const countedCreate = createRoutes.get(c.entity)
+      const onCreate = createRoutes.get(inv.entity)
+      const onUpdate = bp.routes.find((r) => r.operation === "update" && r.entity === inv.entity)
+      const countedEntity = bp.entities.find((e) => e.name === c.entity)
+      const boundIsField = c.bound.kind === "field"
+      if (
+        countedCreate &&
+        countedEntity &&
+        lifecycles.includes(countedEntity) &&
+        onEntity &&
+        (boundIsField ? onCreate && onUpdate : true)
+      ) {
+        const cSuffix = withAuth && countedCreate.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
+        const cTokenArg = withAuth && countedCreate.auth ? ", token=token" : ""
+        const boundField = c.bound.kind === "field" ? c.bound.name : undefined
+        const boundConst = c.bound.kind === "const" ? c.bound.value : undefined
+        t.push("")
+        t.push("")
+        t.push(`def test_invariant_${inv.name.replace(/[^a-zA-Z0-9_]/g, "_")}(client):`)
+        if (withAuth && countedCreate.auth) t.push("    token = auth_token(client)")
+        if (boundIsField && onCreate && boundField) {
+          const onSuffix = withAuth && onCreate.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
+          // 1) a zero-capacity bound: ANY create of the counted entity fails
+          t.push(`    tight = create_row(client, ${JSON.stringify(inv.entity)}${onCreate.auth && withAuth ? ", token=token" : ""}, overrides={${JSON.stringify(boundField)}: 0})`)
+          t.push(`    body = make_body(client, ${JSON.stringify(c.entity)}${cTokenArg})`)
+          t.push(`    body[${JSON.stringify(c.refField)}] = tight["id"]`)
+          t.push(`    r = client.post(${JSON.stringify(countedCreate.path)}, json=body${cSuffix})`)
+          t.push("    assert r.status_code == 409, r.text")
+          t.push('    assert r.json() == {"detail": "Invariant violated"}')
+          // 2) relax the bound by one: exactly one create succeeds, the next fails
+          if (onUpdate) {
+            const uSuffix = withAuth && onUpdate.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
+            t.push(`    r = client.patch(${pathExpr(onUpdate, 'tight["id"]')}, json={${JSON.stringify(boundField)}: 1}${uSuffix})`)
+            t.push("    assert r.status_code == 200, r.text")
+          }
+          t.push(`    body = make_body(client, ${JSON.stringify(c.entity)}${cTokenArg})`)
+          t.push(`    body[${JSON.stringify(c.refField)}] = tight["id"]`)
+          t.push(`    r = client.post(${JSON.stringify(countedCreate.path)}, json=body${cSuffix})`)
+          t.push("    assert r.status_code == 201, r.text")
+          t.push(`    body = make_body(client, ${JSON.stringify(c.entity)}${cTokenArg})`)
+          t.push(`    body[${JSON.stringify(c.refField)}] = tight["id"]`)
+          t.push(`    r = client.post(${JSON.stringify(countedCreate.path)}, json=body${cSuffix})`)
+          t.push("    assert r.status_code == 409, r.text")
+          t.push('    assert r.json() == {"detail": "Invariant violated"}')
+          // 3) tightening the bound below the live count also fails
+          if (onUpdate) {
+            const uSuffix2 = withAuth && onUpdate.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
+            t.push(`    r = client.patch(${pathExpr(onUpdate, 'tight["id"]')}, json={${JSON.stringify(boundField)}: 0}${uSuffix2})`)
+            t.push("    assert r.status_code == 409, r.text")
+            t.push('    assert r.json() == {"detail": "Invariant violated"}')
+          }
+          void onSuffix
+        } else if (boundConst !== undefined) {
+          // const bound N: the first N creates succeed, the (N+1)-th fails
+          const N = Math.max(0, Math.min(boundConst, 3))
+          t.push(`    holder = create_row(client, ${JSON.stringify(inv.entity)}${onCreate && hasAuth && onCreate.auth ? ", token=token" : ""})`)
+          for (let i = 0; i < N; i++) {
+            t.push(`    body = make_body(client, ${JSON.stringify(c.entity)}${cTokenArg})`)
+            t.push(`    body[${JSON.stringify(c.refField)}] = holder["id"]`)
+            t.push(`    r = client.post(${JSON.stringify(countedCreate.path)}, json=body${cSuffix})`)
+            t.push("    assert r.status_code == 201, r.text")
+          }
+          t.push(`    body = make_body(client, ${JSON.stringify(c.entity)}${cTokenArg})`)
+          t.push(`    body[${JSON.stringify(c.refField)}] = holder["id"]`)
+          t.push(`    r = client.post(${JSON.stringify(countedCreate.path)}, json=body${cSuffix})`)
+          t.push("    assert r.status_code == 409, r.text")
+          t.push('    assert r.json() == {"detail": "Invariant violated"}')
+        }
+      }
     }
   }
 

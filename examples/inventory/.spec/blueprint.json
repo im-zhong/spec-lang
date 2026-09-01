@@ -46,6 +46,12 @@
         },
         "status": 401
       },
+      "invariantViolated": {
+        "body": {
+          "detail": "Invariant violated"
+        },
+        "status": 409
+      },
       "notFound": {
         "body": {
           "detail": "Not found"
@@ -153,6 +159,7 @@
       "table": "products"
     }
   ],
+  "invariants": [],
   "lifecycles": [],
   "routes": [
     {

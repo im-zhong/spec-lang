@@ -199,6 +199,53 @@ ${stableStringify({ auth: bp.auth, unauthenticated: bp.contract.errors.unauthent
   \`Uuid\` columns raise and 500.`
 }
 
+/** The invariant section of a router prompt (empty when none apply). */
+function invariantSection(bp: BackendBlueprint, entityName: string): string {
+  const relevant = bp.invariants.filter((inv) =>
+    bp.routes.some(
+      (r) => r.entity === entityName && r.invariantIds?.includes(inv.id),
+    ),
+  )
+  if (relevant.length === 0) return ""
+  const lines: string[] = [
+    "",
+    "### Invariants (truths that must hold at ALL times)",
+    "",
+  ]
+  for (const inv of relevant) {
+    if (inv.shape === "crossRowCount") {
+      const c = inv.count!
+      const bound =
+        c.bound.kind === "field" ? `<row>.${c.bound.name}` : String(c.bound.value)
+      lines.push(
+        `- ${inv.name}: for every ${inv.entity} row — count of ${c.entity} rows whose`,
+        `  ${c.refField} points at it must be ${c.op === "lt" ? "<" : "≤"} ${bound}.`,
+        `  Enforced in create/update handlers of ${c.entity} and update handlers of`,
+        `  ${inv.entity}, INSIDE the request transaction: apply the mutation, re-check`,
+        `  the affected ${inv.entity} row, roll back and answer 409 on violation.`,
+      )
+    } else {
+      lines.push(
+        `- ${inv.name}: every ${inv.entity} row must satisfy the check tree below.`,
+        `  Validate on create/update before committing.`,
+      )
+    }
+  }
+  lines.push(
+    "",
+    "Pinned violation outcome (exact body, row rolled back):",
+    '409 `{"detail": "Invariant violated"}`',
+    "",
+    "Check trees (data, from the specification):",
+    "",
+    "```json",
+    stableStringify(relevant.map((inv) => ({ id: inv.id, shape: inv.shape, check: inv.check, count: inv.count }))),
+    "```",
+    "",
+  )
+  return lines.join("\n")
+}
+
 /** The lifecycle section of a router prompt (empty when no transitions). */
 function transitionSection(
   transitions: Array<{ event: string; path: string; field: string; from: string[]; to: string }>,
@@ -260,7 +307,7 @@ ${stableStringify(entity)}
 | method | path | success | auth | operation |
 | --- | --- | --- | --- | --- |
 ${routeTable(routes)}
-${transitionSection(transitions)}
+${transitionSection(transitions)}${invariantSection(bp, entityName)}
 ## Requirements
 - Register count routes BEFORE any \`{id}\` route of the same prefix.
 - Use the schemas from \`app/schemas.py\` and the models from \`app/models.py\`.

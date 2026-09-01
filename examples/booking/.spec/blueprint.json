@@ -107,6 +107,12 @@
         },
         "status": 401
       },
+      "invariantViolated": {
+        "body": {
+          "detail": "Invariant violated"
+        },
+        "status": 409
+      },
       "notFound": {
         "body": {
           "detail": "Not found"
@@ -235,6 +241,23 @@
       "table": "venues"
     }
   ],
+  "invariants": [
+    {
+      "count": {
+        "bound": {
+          "kind": "field",
+          "name": "capacity"
+        },
+        "entity": "Booking",
+        "op": "lte",
+        "refField": "venue"
+      },
+      "entity": "Venue",
+      "id": "invariant:no-overbooking",
+      "name": "no-overbooking",
+      "shape": "crossRowCount"
+    }
+  ],
   "lifecycles": [
     {
       "entity": "Booking",
@@ -290,6 +313,9 @@
       "auth": true,
       "entity": "Booking",
       "id": "POST /bookings",
+      "invariantIds": [
+        "invariant:no-overbooking"
+      ],
       "method": "POST",
       "operation": "create",
       "path": "/bookings",
@@ -394,6 +420,9 @@
       "auth": false,
       "entity": "Venue",
       "id": "PATCH /venues/{id}",
+      "invariantIds": [
+        "invariant:no-overbooking"
+      ],
       "method": "PATCH",
       "operation": "update",
       "path": "/venues/{id}",

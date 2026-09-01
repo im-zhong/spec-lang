@@ -63,7 +63,8 @@
           "Venue",
           "Booking",
           "BookingCount",
-          "BookingLifecycle"
+          "BookingLifecycle",
+          "no-overbooking"
         ]
       },
       "id": "app:BookingAPI",
@@ -73,7 +74,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 78
+        "line": 85
       }
     },
     {
@@ -300,6 +301,9 @@
           },
           {
             "nodeId": "lifecycle:BookingLifecycle"
+          },
+          {
+            "nodeId": "invariant:no-overbooking"
           }
         ],
         "stack": {
@@ -325,6 +329,37 @@
       "package": "@spec/fastapi",
       "source": {
         "column": 16,
+        "file": "app.spec.ts",
+        "line": 66
+      }
+    },
+    {
+      "attributes": {
+        "check": {
+          "__expr": "cmp",
+          "left": {
+            "__expr": "countOf",
+            "entity": "Booking",
+            "filter": {
+              "venue": "self"
+            }
+          },
+          "op": "lte",
+          "right": {
+            "__expr": "field",
+            "name": "capacity"
+          }
+        },
+        "on": {
+          "nodeId": "entity:Venue"
+        }
+      },
+      "id": "invariant:no-overbooking",
+      "kind": "invariant",
+      "name": "no-overbooking",
+      "package": "@spec/web",
+      "source": {
+        "column": 23,
         "file": "app.spec.ts",
         "line": 59
       }
@@ -388,7 +423,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 57
+        "line": 64
       }
     }
   ],

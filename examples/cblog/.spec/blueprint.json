@@ -107,6 +107,12 @@
         },
         "status": 401
       },
+      "invariantViolated": {
+        "body": {
+          "detail": "Invariant violated"
+        },
+        "status": 409
+      },
       "notFound": {
         "body": {
           "detail": "Not found"
@@ -231,6 +237,26 @@
       "table": "users"
     }
   ],
+  "invariants": [
+    {
+      "check": {
+        "__expr": "cmp",
+        "left": {
+          "__expr": "field",
+          "name": "title"
+        },
+        "op": "neq",
+        "right": {
+          "__expr": "const",
+          "value": ""
+        }
+      },
+      "entity": "Post",
+      "id": "invariant:no-empty-title",
+      "name": "no-empty-title",
+      "shape": "rowCheck"
+    }
+  ],
   "lifecycles": [],
   "routes": [
     {
@@ -342,6 +368,9 @@
       "auth": true,
       "entity": "Post",
       "id": "POST /posts",
+      "invariantIds": [
+        "invariant:no-empty-title"
+      ],
       "method": "POST",
       "operation": "create",
       "path": "/posts",
@@ -363,6 +392,9 @@
       "auth": true,
       "entity": "Post",
       "id": "PATCH /posts/{id}",
+      "invariantIds": [
+        "invariant:no-empty-title"
+      ],
       "method": "PATCH",
       "operation": "update",
       "path": "/posts/{id}",

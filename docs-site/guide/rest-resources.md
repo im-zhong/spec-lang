@@ -275,3 +275,64 @@ every legal transition (200 + new state echoed), every illegal re-apply
 update-ignores-state. Roadmap (Phase 2/3 of the behavior model):
 `invariant` for cross-entity truths and `effect.set`/`effect.emit` —
 every new expression must pass the SQL litmus test to enter the language.
+
+## Invariants (behavior: what must hold at all times)
+
+The "plane" facet of the behavior model (Phase 2): cross-entity truths.
+Modeling "venue is full" as a *state* would drift from the real count;
+modeling it as an **invariant** makes "full" a derived fact with no state
+to desynchronize — the database arbitrates:
+
+```ts
+import { invariant, expr } from "@spec/web"
+
+// cross-row: no venue may host more bookings than its capacity
+const NoOverbooking = invariant("no-overbooking", {
+  on: Venue,                                                  // "self"
+  check: expr.countOf(Booking, { venue: "self" }).lte(expr.field("capacity")),
+})
+
+// row-local: every post has a non-empty title
+const NoEmptyTitle = invariant("no-empty-title", {
+  on: Post,
+  check: expr.field("title").neq(expr.const("")),
+})
+```
+
+`check` is an expression tree from a **closed vocabulary** —
+`expr.field` / `expr.const` / `expr.countOf` / comparisons / `both(a, b)`
+conjunction — and the litmus test governs admission: *an expression
+enters the vocabulary only if it lowers to a single SQL statement*
+(`countOf` → scalar subquery, comparisons → `WHERE`). Anything richer is
+rejected at compile time, because the agent would have to interpret it —
+and every shot would re-roll that interpretation.
+
+Serve an invariant and the compiler marks exactly the operations that
+must preserve it:
+
+| Shape | Enforced on | Pinned outcome |
+| ----- | ----------- | -------------- |
+| row-check on E | create + update of E | violating row rolled back, `409 {"detail": "Invariant violated"}` |
+| cross-row count on (E, C) | create + update of C, update of E | same, re-checked inside the request transaction |
+
+For `no-overbooking`: `POST /bookings`, `PATCH /bookings/{id}` and
+`PATCH /venues/{id}` re-check the affected venue inside the transaction —
+two concurrent bookings serialize in the database and the loser observes
+the pinned 409.
+
+The conformance suite derives **minimally violating worlds** from the
+same data: a zero-capacity venue rejects any booking; relaxing the bound
+by one admits exactly one more; tightening it below the live count fails
+the update; and every rejection asserts the exact body *and* that the
+row was not created.
+
+| Diagnostic | Meaning |
+| ---------- | ------- |
+| `INVARIANT_TARGET_INVALID` / `INVARIANT_ENTITY_NOT_FOUND` | the `on` entity is missing |
+| `INVARIANT_CHECK_INVALID` | the check is not an `expr.*` tree |
+| `INVARIANT_TERM_UNKNOWN` | a field/entity in the tree does not resolve |
+| `INVARIANT_SHAPE_UNSUPPORTED` | outside the Phase-2 shapes (row check; countOf ≤ field/const) — rejected, never agent-interpreted |
+
+Roadmap (Phase 3 of the behavior model): `effect.set` / `effect.emit`
+with an outbox `events` table; guard vocabulary grows strictly by
+demand, every new term passing the SQL litmus test.

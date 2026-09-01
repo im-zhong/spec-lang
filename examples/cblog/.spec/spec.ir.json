@@ -41,7 +41,8 @@
           "MainAuth",
           "User",
           "Post",
-          "Comment"
+          "Comment",
+          "no-empty-title"
         ]
       },
       "id": "app:ContentAPI",
@@ -51,7 +52,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 52
+        "line": 59
       }
     },
     {
@@ -79,7 +80,7 @@
           "source": {
             "column": 13,
             "file": "app.spec.ts",
-            "line": 37
+            "line": 38
           }
         }
       ],
@@ -90,7 +91,7 @@
       "source": {
         "column": 18,
         "file": "app.spec.ts",
-        "line": 35
+        "line": 36
       }
     },
     {
@@ -108,7 +109,7 @@
       "source": {
         "column": 18,
         "file": "app.spec.ts",
-        "line": 42
+        "line": 43
       }
     },
     {
@@ -126,7 +127,7 @@
       "source": {
         "column": 15,
         "file": "app.spec.ts",
-        "line": 41
+        "line": 42
       }
     },
     {
@@ -144,7 +145,7 @@
       "source": {
         "column": 15,
         "file": "app.spec.ts",
-        "line": 40
+        "line": 41
       }
     },
     {
@@ -173,7 +174,7 @@
       "source": {
         "column": 17,
         "file": "app.spec.ts",
-        "line": 28
+        "line": 29
       }
     },
     {
@@ -206,7 +207,7 @@
       "source": {
         "column": 14,
         "file": "app.spec.ts",
-        "line": 20
+        "line": 21
       }
     },
     {
@@ -231,7 +232,7 @@
       "source": {
         "column": 14,
         "file": "app.spec.ts",
-        "line": 14
+        "line": 15
       }
     },
     {
@@ -258,6 +259,9 @@
           },
           {
             "nodeId": "crud:Comment"
+          },
+          {
+            "nodeId": "invariant:no-empty-title"
           }
         ],
         "title": "Content API",
@@ -269,6 +273,34 @@
       "package": "@spec/fastapi",
       "source": {
         "column": 16,
+        "file": "app.spec.ts",
+        "line": 53
+      }
+    },
+    {
+      "attributes": {
+        "check": {
+          "__expr": "cmp",
+          "left": {
+            "__expr": "field",
+            "name": "title"
+          },
+          "op": "neq",
+          "right": {
+            "__expr": "const",
+            "value": ""
+          }
+        },
+        "on": {
+          "nodeId": "entity:Post"
+        }
+      },
+      "id": "invariant:no-empty-title",
+      "kind": "invariant",
+      "name": "no-empty-title",
+      "package": "@spec/web",
+      "source": {
+        "column": 22,
         "file": "app.spec.ts",
         "line": 46
       }
@@ -297,7 +329,7 @@
       "source": {
         "column": 16,
         "file": "app.spec.ts",
-        "line": 44
+        "line": 51
       }
     }
   ],

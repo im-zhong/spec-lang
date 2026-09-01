@@ -1,5 +1,5 @@
 import { defineApp } from "@spec/core"
-import { entity, field, crud } from "@spec/web"
+import { entity, field, crud, invariant, expr } from "@spec/web"
 import { auth, password } from "@spec/auth"
 import { postgres } from "@spec/postgres"
 import { fastapi } from "@spec/fastapi"
@@ -8,7 +8,8 @@ import { fastapi } from "@spec/fastapi"
  * Project 1 — Content CMS API.
  * Purpose: classic authenticated content backend.
  * Features: password auth, two-level refs (comment → post → user),
- * full CRUD everywhere, protected routes.
+ * full CRUD everywhere, protected routes, and a row-local invariant
+ * (behavior Phase 2): every post has a non-empty title.
  */
 
 const User = entity("User", {
@@ -41,17 +42,23 @@ const Users = crud(User)
 const Posts = crud(Post)
 const Comments = crud(Comment)
 
+// PLANE — row-local invariant: a post's title must never be empty.
+const NoEmptyTitle = invariant("no-empty-title", {
+  on: Post,
+  check: expr.field("title").neq(expr.const("")),
+})
+
 const MainDB = postgres({ entities: [User, Post, Comment] })
 
 const Server = fastapi({
   title: "Content API",
-  services: [MainAuth, Users, Posts, Comments],
+  services: [MainAuth, Users, Posts, Comments, NoEmptyTitle],
   resources: [MainDB],
 })
 
 export default defineApp({
   name: "ContentAPI",
   entities: [User, Post, Comment],
-  services: [MainAuth, Users, Posts, Comments],
+  services: [MainAuth, Users, Posts, Comments, NoEmptyTitle],
   resources: [MainDB, Server],
 })

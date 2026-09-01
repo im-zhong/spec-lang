@@ -142,7 +142,65 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
     // projects without lifecycles derive none
     const inventory = planGeneration((await compileExample("inventory")).ir)
     expect(inventory.blueprint.lifecycles).toEqual([])
-  }))
+  })
+
+  it("booking: no-overbooking lowers and marks the preserving operations", async () => {
+    const result = await compileExample("booking")
+    const plan = planGeneration(result.ir)
+    expect(plan.blueprint.invariants).toEqual([
+      {
+        id: "invariant:no-overbooking",
+        name: "no-overbooking",
+        entity: "Venue",
+        shape: "crossRowCount",
+        count: {
+          entity: "Booking",
+          refField: "venue",
+          op: "lte",
+          bound: { kind: "field", name: "capacity" },
+        },
+      },
+    ])
+    const marked = plan.blueprint.routes.filter((r) => r.invariantIds)
+    expect(marked.map((r) => r.id).sort()).toEqual(["PATCH /venues/{id}", "POST /bookings"])
+    expect(plan.blueprint.contract.errors.invariantViolated).toEqual({
+      status: 409,
+      body: { detail: "Invariant violated" },
+    })
+    // the minimally-violating-world test, from the same data
+    const testFile = plan.conformance.files["conformance/test_contract.py"]
+    expect(testFile).toContain("def test_invariant_no_overbooking(client):")
+    expect(testFile).toContain('overrides={"capacity": 0}')
+    expect(testFile).toContain('assert r.json() == {"detail": "Invariant violated"}')
+  })
+
+  it("cblog: the row-local invariant lowers and is asserted", async () => {
+    const result = await compileExample("cblog")
+    const plan = planGeneration(result.ir)
+    expect(plan.blueprint.invariants).toEqual([
+      {
+        id: "invariant:no-empty-title",
+        name: "no-empty-title",
+        entity: "Post",
+        shape: "rowCheck",
+        check: {
+          __expr: "cmp",
+          op: "neq",
+          left: { __expr: "field", name: "title" },
+          right: { __expr: "const", value: "" },
+        },
+      },
+    ])
+    const marked = plan.blueprint.routes.filter((r) => r.invariantIds)
+    expect(marked.map((r) => r.id).sort()).toEqual(["PATCH /posts/{id}", "POST /posts"])
+    const testFile = plan.conformance.files["conformance/test_contract.py"]
+    expect(testFile).toContain("def test_invariant_no_empty_title(client):")
+    expect(testFile).toContain('"title": ""')
+    expect(testFile).toContain('assert r.json() == {"detail": "Invariant violated"}')
+    // inventory has no invariants
+    const inventory = planGeneration((await compileExample("inventory")).ir)
+    expect(inventory.blueprint.invariants).toEqual([])
+  })
 
   it("generated conformance python is syntactically valid", async () => {
     if (!hasPython) return

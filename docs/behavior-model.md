@@ -1,11 +1,18 @@
 # Behavior Model — Design Plan
 
-Status: **Phase 1 implemented** (2026-09-01) — `field.enum`,
-`lifecycle`/`transition`, the §5 validators, §6 lowering (action routes,
-atomic guarded updates, pinned 409), and the §7 conformance matrix are
-live and validated by the golden-rule runs. Phase 2 (`invariant`) and
-Phase 3 (`effect`) remain proposals. See
-`docs-site/guide/rest-resources.md` § "Lifecycles" for the shipped surface.
+Status: **Phase 1 + Phase 2 implemented** (2026-09-01):
+- Phase 1 — `field.enum`, `lifecycle`/`transition`, §5 validators, §6
+  lowering (action routes, atomic guarded updates, pinned 409), §7
+  conformance matrix.
+- Phase 2 — `invariant` + the `expr` vocabulary (`field`/`const`/
+  `countOf`/comparisons/`both`), shape-restricted to row checks and
+  countOf upper bounds (the SQL-litmus-admissible fragment), §5
+  validators, lowering to transactional re-checks with the pinned
+  `409 {"detail": "Invariant violated"}`, and conformance via minimally
+  violating worlds.
+Phase 3 (`effect`) remains a proposal. See
+`docs-site/guide/rest-resources.md` § "Lifecycles" and § "Invariants" for
+the shipped surface.
 
 This document specifies how behavioral semantics —
 *what an API does*, not just *what it looks like* — enters the specification

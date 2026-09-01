@@ -1,5 +1,11 @@
 import { definePackage, defineNode } from "@spec/package-sdk"
-import { validateCountApis, validateCrud, validateEntities, validateLifecycles } from "./validators"
+import {
+  validateCountApis,
+  validateCrud,
+  validateEntities,
+  validateInvariants,
+  validateLifecycles,
+} from "./validators"
 import type { SpecNode } from "@spec/core"
 
 function inspectEntity(node: SpecNode): { label: string; lines: string[] } {
@@ -46,7 +52,8 @@ export default definePackage({
     defineNode("api"),
     defineNode("crud"),
     defineNode("lifecycle"),
+    defineNode("invariant"),
   ],
-  validators: [validateEntities, validateCrud, validateCountApis, validateLifecycles],
+  validators: [validateEntities, validateCrud, validateCountApis, validateLifecycles, validateInvariants],
   inspectors: { entity: inspectEntity, crud: inspectCrud },
 })

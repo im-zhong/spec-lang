@@ -93,6 +93,35 @@ interface BlueprintLifecycle {
 }
 ```
 
+### `invariants`
+
+Behavior Phase 2: each served invariant becomes one entry, and the
+compiler marks the operations that must preserve it
+(`route.invariantIds`):
+
+```ts
+interface BlueprintInvariant {
+  id: string                  // "invariant:no-overbooking"
+  name: string
+  entity: string              // the "on" entity ("self")
+  shape: "rowCheck" | "crossRowCount"
+  check?: unknown             // rowCheck: the expression tree
+  count?: {                   // crossRowCount
+    entity: string            // counted entity
+    refField: string          // its ref field pointing at `entity`
+    op: "lt" | "lte"          // upper bounds only in Phase 2
+    bound: { kind: "field"; name: string } | { kind: "const"; value: number }
+  }
+}
+```
+
+Lowering (pinned): the marked handlers re-check the invariant inside the
+request transaction; violations roll back and answer
+`409 {"detail": "Invariant violated"}`. The conformance suite derives
+minimally violating worlds from the same nodes.
+
+### `lifecycles` lowering
+
 Lowering (pinned): one route per transition —
 `POST <crudPath>/{id}/<event>` — implemented as an ATOMIC guarded update
 (`UPDATE … WHERE id = :id AND <field> IN (<from>)`); the state field is
@@ -152,6 +181,7 @@ interface BackendContract {
     danglingRef:        { status: 404; body: { detail: "Not found" } }
     alreadyExists:      { status: 409; body: { detail: "Already exists" } }
     guardFailed:        { status: 409; body: { detail: "Invalid state" } }
+    invariantViolated:  { status: 409; body: { detail: "Invariant violated" } }
     validation:         { status: 422; body: "fastapi-default" }
   }
   auth: {
