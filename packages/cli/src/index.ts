@@ -213,7 +213,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
 
     process.stdout.write(
-      `⟳ Generating ${args.shots} independent shot(s), ${plan.dag.tasks.length} DAG tasks each (this takes a while)…\n`,
+      `⟳ Generating ${args.shots} independent shot(s) in parallel, ${plan.dag.tasks.length} DAG tasks each (this takes a while)…\n`,
     )
     const model = args.model ?? "glm-5.3-flash"
     const report = await runRepeatability(shotSpec, workspaces, {

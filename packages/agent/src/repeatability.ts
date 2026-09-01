@@ -61,8 +61,13 @@ export async function runRepeatability(
   const diagnostics: Diagnostic[] = []
   let totalCostUsd = 0
 
-  for (const { shot, workspace } of shotWorkspaces) {
-    const report = await runShot(shot, workspace, spec, options)
+  // Shots are INDEPENDENT generations in separate workspaces — run them
+  // in parallel. (Tasks within a shot stay sequential: two agents must
+  // never write the same workspace concurrently.)
+  const shotReports = await Promise.all(
+    shotWorkspaces.map(({ shot, workspace }) => runShot(shot, workspace, spec, options)),
+  )
+  for (const report of shotReports) {
     shots.push(report)
     diagnostics.push(...report.diagnostics)
     totalCostUsd += report.totalCostUsd

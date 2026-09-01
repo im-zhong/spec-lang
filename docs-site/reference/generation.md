@@ -90,8 +90,9 @@ verification is compiler-side.
 `AgentHarness` (`packages/agent/src/harness.ts`) executes a task DAG:
 
 - **scheduling** — deterministic topological order (`schedule`, Kahn,
-  stable by id). Sequential by default: two agents must never write the
-  same workspace concurrently.
+  stable by id). Tasks within a shot are sequential: two agents must
+  never write the same workspace concurrently. SHOTS, by contrast, are
+  independent generations in separate workspaces and run in **parallel**.
 - **per-task execution** — one runner.run per task with the task's narrow
   prompt (its scope, its readable context files, its blueprint slice).
 - **auditing** — the workspace is hashed before and after each task; the
