@@ -70,7 +70,7 @@ reproduce a build months later from the manifest.
 
 The IR carries `version: "spec-ir/0.1"`. Breaking changes will bump to
 `spec-ir/0.2`, then `spec-ir/1.0` — consumers can dispatch on the version
-string. Future formats (e.g. Protobuf) may be added; JSON is the MVP
+string. Future formats (e.g. Protobuf) may be added; JSON is the current
 format.
 
 ## The manifest
@@ -103,6 +103,9 @@ chain navigable:
 Artifact → AgentTask → SpecNode → SourceLocation
 ```
 
-When generated artifacts appear in later phases, "which specification
-produced this code?" will be answerable by following node ids and source
-locations — the data model already supports it.
+It is populated today: every file a `spec generate` shot produces becomes
+an `Artifact` in `.spec/agent.result.json` with a SHA-256 content hash,
+the task that generated it (`generatedBy: "fastapi:implement"`), and the
+spec nodes it derives from (`sourceNodes`). "Which specification produced
+this code?" is answered by following node ids back to
+[file, line, column].

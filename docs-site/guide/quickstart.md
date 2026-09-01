@@ -1,6 +1,7 @@
 # Quickstart
 
-Requirements: **Node.js >= 20** and **pnpm >= 9**.
+Requirements: **Node.js >= 20**, **pnpm >= 9** — plus, for generation:
+the `claude` CLI on `PATH`, `uv`, and Python 3.10+.
 
 ## 1. Install and build
 
@@ -12,16 +13,17 @@ pnpm build
 ```
 
 This builds all workspace packages (`@spec/core`, `@spec/web`,
-`@spec/auth`, `@spec/postgres`, `@spec/compiler`, `@spec/cli`).
+`@spec/auth`, `@spec/postgres`, `@spec/fastapi`, `@spec/agent`,
+`@spec/compiler`, `@spec/cli`).
 
 ::: tip
-Run `pnpm test` to verify the installation — 40+ unit, golden,
-determinism and integration tests should pass.
+Run `pnpm test` to verify the installation — 70+ unit, golden,
+determinism, conformance-syntax and integration tests should pass.
 :::
 
 ## 2. Inspect the example app
 
-The repository ships with the canonical example in
+The repository ships with examples in `examples/`. The static-only one is
 `examples/basic-web-app/app.spec.ts`:
 
 ```ts
@@ -107,6 +109,41 @@ The build is **deterministic**: compiling the same file twice produces a
 byte-identical `spec.ir.json` (same SHA-256). See
 [Spec IR & determinism](/guide/ir).
 
+## 4b. Generate a running server
+
+The same specification can be *implemented*, not just checked. Take one
+of the golden-rule examples — `examples/inventory` is the smallest — and
+plan a generation first:
+
+```bash
+pnpm spec generate examples/inventory/app.spec.ts --dry-run
+```
+
+```
+✓ Plan derived: 11 routes, 2 entities
+✓ Dry run complete — artifacts in .spec (no agent run)
+```
+
+`.spec/blueprint.json` now holds the full behavioral contract (exact
+routes, status codes, response shapes, error bodies). To actually build
+the software, drop `--dry-run` and ask for independent generations:
+
+```bash
+pnpm spec generate examples/inventory/app.spec.ts --shots 2
+```
+
+The coding agent writes a complete FastAPI backend per shot
+(`out/inventoryapi-1/`, `out/inventoryapi-2/`); the compiler drops its own
+pytest conformance suite into each and requires **identical behavior and
+identical OpenAPI interfaces** — the [golden rule](/guide/golden-rule).
+Run the result:
+
+```bash
+cd out/inventoryapi-1
+uv venv .venv && uv pip install -e ".[dev]"
+.venv/bin/uvicorn app.main:app --reload
+```
+
 ## 5. Break it (on purpose)
 
 Change the auth identity to a field of another entity:
@@ -142,4 +179,7 @@ location and the offending value. See [Diagnostics](/guide/diagnostics).
 
 - [The .spec.ts language](/guide/language) — what you can and cannot write
 - [Entities & fields](/guide/entities) — the data model DSL
+- [REST resources](/guide/rest-resources) — crud, count and references
+- [Agentic generation](/guide/generate) — from spec to running software
+- [The golden rule](/guide/golden-rule) — why generation is repeatable
 - [Authoring spec packages](/guide/package-authoring) — extend the language

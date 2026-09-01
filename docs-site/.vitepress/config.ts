@@ -44,6 +44,7 @@ export default defineConfig({
           items: [
             { text: "The .spec.ts language", link: "/guide/language" },
             { text: "Entities & fields", link: "/guide/entities" },
+            { text: "REST resources", link: "/guide/rest-resources" },
             { text: "Authentication", link: "/guide/authentication" },
             { text: "Databases", link: "/guide/database" },
             { text: "The application root", link: "/guide/app-root" },
@@ -78,6 +79,8 @@ export default defineConfig({
             { text: "CLI reference", link: "/reference/cli" },
             { text: "Diagnostic codes", link: "/reference/diagnostics" },
             { text: "Spec IR format", link: "/reference/ir" },
+            { text: "Blueprint format", link: "/reference/blueprint" },
+            { text: "Generation internals", link: "/reference/generation" },
             { text: "Architecture", link: "/reference/architecture" },
           ],
         },

@@ -33,7 +33,7 @@ Example:
 | ---------- | --------------------------------------- |
 | `error`    | Exit code 1; build writes no artifacts |
 | `warning`  | Printed, compilation succeeds          |
-| `info`     | Reserved for future informational notes |
+| `info`     | Printed; used by generation (`AGENT_VERIFIED`, `REPEATABLE`, `INTERFACE_IDENTICAL`, …) |
 
 ## Ordering and determinism
 
@@ -54,16 +54,20 @@ The `code` is the contract: it stays stable even if messages are
 reworded. `details` carries the structured payload an agent needs to
 reason about a repair without parsing English.
 
-## The agent-repair loop (where this is going)
+## The agent-repair loop (live today)
 
 ```
 Compiler → Diagnostic → Agent → Repair
 ```
 
-Because diagnostics are code-addressed, source-located and carry details,
-a future agent can consume `diagnostics.json` and rewrite the spec —
-then recompile, and check whether the code disappeared. The MVP builds
-the protocol; the agent comes later.
+The loop runs in two places now. During **generation**
+([`spec generate`](/guide/generate)), failed verification output is fed
+back to the coding agent as a repair prompt — with structured
+`AGENT_VERIFICATION_FAILED` diagnostics recording exactly which step
+failed and its output tail. And because diagnostics are code-addressed,
+source-located and carry details, spec *repair* by agents follows the
+same protocol: consume `diagnostics.json`, rewrite the spec, recompile,
+check that the code disappeared.
 
 ## Full code reference
 

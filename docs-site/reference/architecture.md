@@ -1,6 +1,6 @@
 # Architecture
 
-How the MVP implements the system, and where future extension points live.
+How the system is implemented, and where extension points live.
 
 ## Pipeline
 
@@ -17,13 +17,21 @@ app.spec.ts
     │
     ▼  Link         capability requirements vs providers
     │
-    ▼  Lower        extension point (agentic / verification passes later)
+    ▼  Lower        target lowering: @spec/fastapi builds the plan
     │
     ▼  Emit         Spec IR + manifest + diagnostics (stable JSON)
+
+spec generate (agentic half, runs on a valid IR):
+    │
+    ▼  Blueprint    pure derivation pinning all observable behavior
+    ▼  Agent shots  headless coding agent writes each workspace
+    ▼  Conformance  compiler-owned pytest suite + verification plan
+    ▼  Repeatability  N shots must behave identically (golden rule)
 ```
 
-Each stage is a `CompilerPass` over a shared `Compilation` state,
-orchestrated in `packages/compiler/src/compiler.ts`.
+Each static stage is a `CompilerPass` over a shared `Compilation` state,
+orchestrated in `packages/compiler/src/compiler.ts`. The agentic half
+never touches the static pipeline: it consumes the emitted IR.
 
 ## Key design decisions
 
@@ -94,38 +102,49 @@ raise `InternalCompilerError` (exit 2, stack traces with `--debug`).
 | 3     | Core semantics (ids, app shape)        | Normalize pass                 |
 | 4     | Package semantics                      | Package validators             |
 | 5     | Cross-package semantics (capabilities) | Link pass                      |
-| 6     | Formal verification (future)           | Lower pass extension point     |
+| 6     | Behavioral conformance of generated code | `@spec/fastapi` suite + `@spec/agent` verification |
 
 ## Repository layout
 
 ```
-packages/core         types, builder protocol, core DSL, logger, errors
+packages/core         types, builder protocol, core DSL, logger, errors, stable JSON
 packages/package-sdk  definePackage / defineValidator / provides / requires
-packages/web          entity / field / page / api + validators
+packages/web          entity / field / crud / count / page / api + validators
 packages/auth         auth / password + validators
 packages/postgres     postgres resource + RelationalStore provider
-packages/compiler     parse, evaluate, loader, passes, stable JSON, inspect
-packages/cli          spec check / build / inspect
-examples/basic-web-app/app.spec.ts
+packages/fastapi      backend target: blueprint, conformance suite, prompts,
+                      verification plan (the traditional↔agentic bridge)
+packages/agent        Claude Code bridge: headless runner, shot orchestration,
+                      repeatability harness
+packages/compiler     parse, evaluate, loader, passes, config, inspect
+packages/cli          spec check / build / inspect / generate
+examples/basic-web-app/             static-only acceptance spec
+examples/cblog|inventory|booking/   golden-rule test projects (generate)
 tests/fixtures/       golden fixtures (valid, invalid, warning, capability, syntax)
 docs-site/            this documentation site (VitePress)
 ```
 
+## The agentic division of labor
+
+- The **agent** writes code — it never grades itself.
+- The **compiler** owns the contract (blueprint), the oracle (conformance
+  suite) and the verdict (verification + repeatability).
+- Divergence between shots is a specification/compiler defect: pin more of
+  the contract, never re-roll the agent.
+
+Provenance is real: every generated file becomes an `Artifact` with a
+SHA-256 content hash, the task that generated it, and the SpecNodes it
+derives from (`Artifact → AgentTask → SpecNode → SourceLocation`).
+
 ## Future extension points
 
-Reserved in the MVP, not yet implemented:
-
-- **Agentic compiler passes** — the `lower` pass and `SpecLowering` hooks
-- **Formal verification passes** — same seam
-- **Package-specific agents/verifiers/generators** — the `SpecPackage`
-  interface
-- **Agent runtime** — `AgentTask` / `AgentResult` / `Artifact` /
-  `Constraint` types already defined in `@spec/core`
+- **More backend targets** — `@spec/fastapi` is the reference
+  implementation of a target package (see
+  [package authoring §8](/guide/package-authoring))
+- **Formal verification passes** — the `lower` seam and the suite hook
 - **Incremental compilation** — pass pipeline is composable
 - **Remote package registry** — package loading is isolated in the loader
 - **Protobuf IR** — IR is versioned; JSON is one encoding
-- **Reproducible software build** — manifest + deterministic IR are the
-  foundation
 
 The long-term shape:
 

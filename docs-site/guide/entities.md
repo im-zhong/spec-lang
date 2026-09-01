@@ -1,7 +1,8 @@
 # Entities & fields
 
 The `@spec/web` package provides the data-model vocabulary: `entity`,
-`field`, `page` and `api`. Entities and fields are the core of it.
+`field`, plus the HTTP layer (`crud`, `count`, `page`, `api`). Entities
+and fields are the core of it.
 
 ## Declaring an entity
 
@@ -44,6 +45,31 @@ IR node:
 | `field.uuid()`       | `uuid`      |
 | `field.email()`      | `email`     |
 | `field.datetime()`   | `datetime`  |
+| `field.ref("User")`  | `ref`       |
+
+## References (foreign keys)
+
+`field.ref` declares that a field points at another entity:
+
+```ts
+const Post = entity("Post", {
+  id: field.uuid(),
+  title: field.string(),
+  author: field.ref("User").optional(),
+})
+```
+
+In the IR the field carries its target:
+
+```json
+"author": { "type": "ref", "target": "User", "optional": true }
+```
+
+The target must be an entity defined in the same specification, checked at
+compile time (`FIELD_REF_TARGET_UNKNOWN` /
+`FIELD_REF_TARGET_INVALID`). For the semantics references get in generated
+backends — id-string serialization, dangling-ref 404s — see
+[REST resources](/guide/rest-resources).
 
 ## Modifiers
 
@@ -123,8 +149,7 @@ supported types.
 
 ## Pages and APIs (vocabulary preview)
 
-`page` and `api` exist as stable vocabulary placeholders for the next
-phase:
+`page` and the generic `api` exist as stable vocabulary placeholders:
 
 ```ts
 import { page, api } from "@spec/web"
@@ -133,4 +158,6 @@ const Home = page({ path: "/", title: "Home" })
 const ListUsers = api({ path: "/users", method: "GET" })
 ```
 
-They compile into `page` / `api` IR nodes; generation comes later.
+They compile into `page` / `api` IR nodes; generation targets only lower
+vocabulary with pinned semantics — see [REST resources](/guide/rest-resources)
+for `crud()` and `count()`, which *are* generated.

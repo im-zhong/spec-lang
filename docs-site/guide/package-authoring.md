@@ -7,7 +7,8 @@ It provides:
 - **Semantics** — validators the compiler runs on every build
 - **Capabilities** — `provides` / `requires` declarations
 - **Presentation** — optional per-node-kind inspectors for `spec inspect`
-- **Future** — lowering rules, agents, verifiers
+- **Generation** — backend targets lower the IR to blueprints, conformance
+  suites and verification plans (see §8; `@spec/fastapi` is the reference)
 
 Packages are ordinary npm packages. The compiler discovers them through
 normal Node.js resolution from your spec file — no registry, no compiler
@@ -181,3 +182,37 @@ export default defineApp({
 The compiler loads `@alice/spec-redis` through ordinary module resolution,
 runs its validators, links its capabilities and renders its nodes — all
 without a single change to `@spec/compiler`.
+
+## 8. Backend target packages
+
+A package can go further than vocabulary + validation: it can be a
+**generation target**. `@spec/fastapi` is the reference implementation,
+and it is "just" a package — the compiler core still knows nothing about
+FastAPI. A target package provides four things:
+
+```ts
+import { planGeneration } from "@spec/fastapi"
+
+const plan = planGeneration(ir)   // Spec IR → deterministic plan
+```
+
+| Piece | In `@spec/fastapi` | Requirement |
+| ----- | ------------------ | ----------- |
+| **Target node** | `fastapi({ services, resources, title, prefix, port })` builder + `FASTAPI_*` validators | ordinary builders/validators as above |
+| **Blueprint** | `buildBlueprint(ir)` — pins every observable behavior | pure function of the IR |
+| **Conformance oracle** | `buildConformanceSuite(blueprint)` — a compiler-owned test suite for generated apps | deterministic, agent-independent |
+| **Prompts + verification** | `implementPrompt/repairPrompt`, `fastApiVerification()` (idempotent commands) | prompts pure functions of the blueprint |
+
+The orchestration itself is target-agnostic and lives in `@spec/agent`:
+workspace lifecycle, the headless Claude Code runner, the
+generate → conformance → verify → repair loop, and the multi-shot
+repeatability harness (see the
+[generation reference](/reference/generation)). Wiring a target into the
+CLI is a thin adapter that maps the plan onto the agent's `ShotSpec`.
+
+The one rule that makes a target legitimate: **the oracle belongs to the
+compiler, not the agent**. Anything your target's generated software must
+do repeatably has to be pinned in the blueprint and asserted by the
+suite — see [the golden rule](/guide/golden-rule) for why, and
+`docs/golden-rule-results.md` for the divergences that shaped
+`@spec/fastapi`'s contract.

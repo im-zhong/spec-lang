@@ -51,7 +51,7 @@ interface SpecNode {
 | ------------------------ | ----------------------------------------------- |
 | Node builder             | `{ "nodeId": "entity:User" }` (reference)       |
 | Field ref (`User.fields.email`) | `{ "__fieldRef": true, "entity": "User", "field": "email", "owner": "entity:User" }` |
-| Field spec builder       | flattened `{ "type": ..., "unique": ..., ... }` |
+| Field spec builder       | flattened `{ "type": ..., "unique": ..., "target": ..., "default": ... }` |
 | Plain object/array       | keys sorted recursively                        |
 | Function                 | dropped (undefined)                             |
 
@@ -70,11 +70,23 @@ of strings under `requires` / `provides`.
 | Kind (package)              | Produced by                      | Key attributes                                |
 | --------------------------- | -------------------------------- | --------------------------------------------- |
 | `app` (`@spec/core`)        | `defineApp({...})`               | `name`, `entities`, `services`, `resources`   |
-| `entity` (`@spec/web`)      | `entity("Name", fields)`         | `fields: { [name]: { type, unique?, ... } }`  |
-| `page` / `api` (`@spec/web`)| `page({...})` / `api({...})`     | `path`, `title` / `method`, `input`, `output` |
+| `entity` (`@spec/web`)      | `entity("Name", fields)`         | `fields: { [name]: { type, unique?, target?, ... } }` |
+| `crud` (`@spec/web`)        | `crud(Entity, opts?)`            | `entity: ref`, `path`, `methods?`, `auth`     |
+| `page` / `api` (`@spec/web`)| `page({...})` / `api({...})`     | `path`, `title` / `method`, `operation`, `input`, `output` |
 | `auth` (`@spec/auth`)       | `auth({...})`                    | `principal: ref`, `requires: [...]`           |
 | `passwordStrategy` (`@spec/auth`) | `password({...})` child      | `identity: fieldRef`                          |
 | `postgres` (`@spec/postgres`) | `postgres({...})`              | `entities: [ref]`, `provides: [...]`          |
+| `fastapi` (`@spec/fastapi`) | `fastapi({...})`                 | `title`, `version`, `prefix`, `port`, `services: [ref]`, `resources: [ref]`, `requires?` |
+
+Notes:
+
+- `field.ref("User")` serializes with a `target` key:
+  `{ "type": "ref", "target": "User" }`.
+- `count(Entity)` produces an `api` node with pinned semantics:
+  `{ "method": "GET", "operation": "count", "entity": ref, "path", "auth }`.
+- A `fastapi` node serving crud or auth resources carries
+  `requires: ["RelationalStore"]` — the link pass resolves it against
+  providers exactly like the auth package's own requirement.
 
 ## Serialization rules
 

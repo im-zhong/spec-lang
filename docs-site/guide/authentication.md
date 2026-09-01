@@ -1,7 +1,9 @@
 # Authentication
 
-The `@spec/auth` package describes authentication services. In the MVP it
-*specifies* auth semantics — it does not implement a login system.
+The `@spec/auth` package describes authentication services. Statically it
+*specifies* auth semantics; when served by a
+[`fastapi()`](/guide/generate) server, `spec generate` **implements** the
+whole flow.
 
 ## Declaring an auth service
 
@@ -135,3 +137,32 @@ Add a `postgres` resource (see [Databases](/guide/database)) to satisfy
 it. This is the capability system working across packages: `@spec/auth`
 and `@spec/postgres` know nothing about each other — the compiler
 connects them.
+
+## Generated auth behavior
+
+When an auth service is served (`fastapi({ services: [MainAuth, ...])`),
+the blueprint derives three routes, all pinned:
+
+| Route | Request | Success | Failure |
+| ----- | ------- | ------- | ------- |
+| `POST <prefix>/auth/register` | principal fields + `password` | `201` principal row (never the hash) | `409 {"detail": "Already exists"}` on duplicate identity |
+| `POST <prefix>/auth/login` | `{ <identityField>, password }` | `200 { "access_token": "…", "token_type": "bearer" }` | `401 {"detail": "Invalid credentials"}` |
+| `GET <prefix>/auth/me` | bearer token | `200` principal row | `401 {"detail": "Not authenticated"}` |
+
+Implementation details the compiler pins (and the conformance suite
+asserts):
+
+- passwords are stored **bcrypt-hashed** in an implicit `password_hash`
+  column that never appears in any response
+- tokens are **JWT bearer** tokens; every `crud`/`count` route with
+  `auth: true` (the default) requires one
+- wrong password and unknown identity answer identically — no user
+  enumeration
+- the principal must not carry `ref` fields
+  (`FASTAPI_PRINCIPAL_REF_UNSUPPORTED`): register creates principals
+  standalone and cannot seed references
+
+Serve the auth service to *activate* route protection — in its absence
+every route in the app is public. See
+[the blueprint reference](/reference/blueprint#auth) for the exact
+contract data.

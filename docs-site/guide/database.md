@@ -1,9 +1,8 @@
 # Databases
 
-The `@spec/postgres` package describes a PostgreSQL resource. In the MVP
+The `@spec/postgres` package describes a PostgreSQL resource. Statically
 it *specifies* the database — which entities live in it, and what
-capabilities it provides — without creating or connecting to a real
-database.
+capabilities it provides. Generated backends bind to it at runtime.
 
 ## Declaring a database resource
 
@@ -79,6 +78,36 @@ The compiled IR records both sides:
   ]
 }
 ```
+
+A `fastapi()` server that serves crud resources or an auth service also
+requires `RelationalStore` — data has to live somewhere.
+
+## Runtime binding (generated backends)
+
+The blueprint derives this `database` block for generated apps:
+
+```json
+{
+  "engine": "postgres",
+  "urlEnv": "DATABASE_URL",
+  "fallback": "sqlite:///./dev.db",
+  "urlFormat": "sqlalchemy-url"
+}
+```
+
+Resolution order, pinned:
+
+1. `create_app(database_url=...)` — used by tests and embeddings
+2. the `DATABASE_URL` environment variable
+3. the SQLite fallback — so `uvicorn app.main:app` works with zero setup
+
+`database_url` values are **SQLAlchemy URL strings**
+(`postgresql+psycopg://user:pass@host/db`, `sqlite:///./dev.db`) — the
+`urlFormat` pin exists because agents once interpreted bare paths
+differently, which broke repeatability. Two columns are implicit on every
+entity: `created_at` (orders list responses) and the auth principal's
+`password_hash` — neither is ever serialized. Verification runs on
+SQLite, so generated SQL stays portable.
 
 ## A complete application
 
