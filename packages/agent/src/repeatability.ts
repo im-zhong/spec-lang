@@ -95,21 +95,31 @@ export async function runRepeatability(
       ? options.pythonCommand(workspace)
       : `${workspace}/.venv/bin/python`
     const result = await runCommand(
-      `${python} -c ${shellQuote(OPENAPI_SNIPPET)}`,
+      `${python} -W ignore -c ${shellQuote(OPENAPI_SNIPPET)}`,
       workspace,
       "openapi-snapshot",
       120_000,
     )
-    interfaces.push({
-      shot,
-      snapshot: result.ok ? normalizeJson(result.output) : null,
-    })
+    const snapshot = result.ok ? normalizeJson(result.output) : null
+    interfaces.push({ shot, snapshot })
     if (!result.ok) {
       diagnostics.push(
         diagnostic(
           "OPENAPI_SNAPSHOT_FAILED",
           "warning",
           `Could not capture the OpenAPI interface of shot "${shot}".`,
+          { details: { shot, output: result.output.slice(-1500) } },
+        ),
+      )
+    } else if (snapshot === null) {
+      // An exit-0 capture whose output is not parseable JSON must never
+      // silently null the snapshot: that turns an unexplained capture
+      // failure into a false "golden rule violated" verdict.
+      diagnostics.push(
+        diagnostic(
+          "OPENAPI_SNAPSHOT_UNPARSEABLE",
+          "error",
+          `The OpenAPI capture of shot "${shot}" exited 0 but printed no parseable JSON — treating the interface as uncaptured. Re-run generation; if it reproduces, the capture contract is broken.`,
           { details: { shot, output: result.output.slice(-1500) } },
         ),
       )
@@ -158,18 +168,28 @@ export async function runRepeatability(
       ? options.pythonCommand(workspace)
       : `${workspace}/.venv/bin/python`
     const result = await runCommand(
-      `${python} conformance/behavior_snapshot.py`,
+      `${python} -W ignore conformance/behavior_snapshot.py`,
       workspace,
       "behavior-snapshot",
       120_000,
     )
-    behaviors.push({ shot, snapshot: result.ok ? normalizeJson(result.output) : null })
+    const snapshot = result.ok ? normalizeJson(result.output) : null
+    behaviors.push({ shot, snapshot })
     if (!result.ok) {
       diagnostics.push(
         diagnostic(
           "BEHAVIOR_SNAPSHOT_FAILED",
           "warning",
           `Could not capture the compiler-owned behavior snapshot of shot "${shot}".`,
+          { details: { shot, output: result.output.slice(-1500) } },
+        ),
+      )
+    } else if (snapshot === null) {
+      diagnostics.push(
+        diagnostic(
+          "BEHAVIOR_SNAPSHOT_UNPARSEABLE",
+          "error",
+          `The behavior capture of shot "${shot}" exited 0 but printed no parseable JSON — treating the behavior as uncaptured. Re-run generation; if it reproduces, the capture contract is broken.`,
           { details: { shot, output: result.output.slice(-1500) } },
         ),
       )

@@ -15,6 +15,7 @@
     "@spec/sqs": "workspace:*",
     "@spec/blob": "workspace:*",
     "@spec/s3": "workspace:*",
+    "@spec/container": "workspace:*",
     "@spec/fastapi": "workspace:*"
   }
 }

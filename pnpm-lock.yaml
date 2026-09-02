@@ -87,6 +87,24 @@ importers:
         specifier: workspace:*
         version: link:../../packages/web
 
+  examples/container-contract:
+    dependencies:
+      '@spec/container':
+        specifier: workspace:*
+        version: link:../../packages/container
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:../../packages/fastapi
+      '@spec/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@spec/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+
   examples/frontend-golden:
     dependencies:
       '@spec/core':
@@ -125,6 +143,9 @@ importers:
       '@spec/cache':
         specifier: workspace:*
         version: link:../../packages/cache
+      '@spec/container':
+        specifier: workspace:*
+        version: link:../../packages/container
       '@spec/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -161,6 +182,9 @@ importers:
       '@spec/core':
         specifier: workspace:*
         version: link:../core
+      '@spec/execution':
+        specifier: workspace:*
+        version: link:../execution
     devDependencies:
       vitest:
         specifier: ^2.1.8
@@ -216,6 +240,9 @@ importers:
       '@spec/compiler':
         specifier: workspace:*
         version: link:../compiler
+      '@spec/container':
+        specifier: workspace:*
+        version: link:../container
       '@spec/core':
         specifier: workspace:*
         version: link:../core
@@ -243,7 +270,33 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)
 
+  packages/container:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+    devDependencies:
+      '@spec/compiler':
+        specifier: workspace:*
+        version: link:../compiler
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
   packages/core:
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/execution:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       vitest:
         specifier: ^2.1.8
@@ -443,6 +496,9 @@ importers:
       '@spec/compiler':
         specifier: workspace:*
         version: link:../packages/compiler
+      '@spec/container':
+        specifier: workspace:*
+        version: link:../packages/container
       '@spec/core':
         specifier: workspace:*
         version: link:../packages/core

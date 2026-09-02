@@ -11,6 +11,7 @@ import { sqs } from "@spec/sqs"
 import { blob } from "@spec/blob"
 import { s3 } from "@spec/s3"
 import { fastapi } from "@spec/fastapi"
+import { backendContainer } from "@spec/container"
 
 /**
  * Media Operations Platform
@@ -303,6 +304,20 @@ const Server = fastapi({
   resources: [MainDB, MainRedis, Rabbit, Kafka, SQS, MainS3],
 })
 
+const BackendImage = backendContainer("BackendImage", {
+  service: Server,
+  baseImage: "python:3.13.7-slim-bookworm@sha256:adafcc17694d715c905b4c7bebd96907a1fd5cf183395f0ebc4d3428bd22d92d",
+  port: 8080,
+  readOnlyRootFilesystem: false,
+  healthcheck: {
+    command: ["CMD", "python", "-c", "import app.main"],
+    intervalSeconds: 30,
+    timeoutSeconds: 5,
+    startPeriodSeconds: 10,
+    retries: 3,
+  },
+})
+
 export default defineApp({
   name: "MediaOperationsAPI",
   entities: [User, Organization, Project, Dataset, Asset,
@@ -320,5 +335,5 @@ export default defineApp({
     AssetUploaded, AssetReady, JobRequested, JobFinished,
     DeliveryRequested, AuditCaptured,
   ],
-  resources: [MainDB, MainRedis, Rabbit, Kafka, SQS, MainS3, Server],
+  resources: [MainDB, MainRedis, Rabbit, Kafka, SQS, MainS3, Server, BackendImage],
 })

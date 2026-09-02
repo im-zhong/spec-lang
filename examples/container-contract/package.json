@@ -1,0 +1,12 @@
+{
+  "name": "@spec/example-container-contract",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@spec/container": "workspace:*",
+    "@spec/core": "workspace:*",
+    "@spec/fastapi": "workspace:*",
+    "@spec/react": "workspace:*",
+    "@spec/ui": "workspace:*"
+  }
+}

@@ -238,3 +238,104 @@ export interface AgentResult {
   artifacts?: Artifact[]
   diagnostics?: Diagnostic[]
 }
+
+/* ------------------------------------------------------------------ */
+/* GitHub-native execution of compiler-owned agent DAGs               */
+/* ------------------------------------------------------------------ */
+
+/** Reproducible executor contract shared by every task in one run. */
+export interface AgentExecutionEnvironment {
+  /** Immutable OCI image reference (`repository@sha256:...`). */
+  image: string
+  /** Hash of the repository-owned devcontainer/environment definition. */
+  devcontainerHash: string
+  /** Hash covering language and package-manager lockfiles. */
+  toolchainLockHash: string
+}
+
+/** Clean-container acceptance gate re-run against the pushed commit. */
+export interface AgentExecutionAcceptance {
+  requiredChecks: string[]
+  commands: string[]
+}
+
+/**
+ * Plan-time node. Its integration base does not exist until all dependency
+ * head SHAs have been published, so it intentionally contains no baseSha.
+ */
+export interface AgentExecutionTask {
+  id: string
+  objective: string
+  instruction: string
+  /** Agent tasks are written by the coding agent; materialize tasks contain compiler-owned bytes. */
+  executor?: "agent" | "materialize"
+  materializedFiles?: Record<string, string>
+  dependsOn: string[]
+  /** Task commands and relative prompt paths resolve from here. */
+  workingDirectory?: string
+  /** Exact repository-relative file paths; glob semantics are not implicit. */
+  scope: string[]
+  specNodeIds: string[]
+  acceptance?: AgentExecutionAcceptance
+}
+
+export type AgentExecutionMergePolicy = "pull-request" | "merge-queue"
+
+/** Byte-stable execution envelope for one compiler-owned agent DAG. */
+export interface AgentExecutionPlan {
+  schemaVersion: "spec-agent-execution-plan/0.1"
+  graphKind: "generation-execution"
+  runId: string
+  repository: string
+  defaultBranch: string
+  /** Immutable root Git commit from which the run is reproducible. */
+  rootBaseSha: string
+  branchPrefix: string
+  environment: AgentExecutionEnvironment
+  acceptance: AgentExecutionAcceptance
+  mergePolicy: AgentExecutionMergePolicy
+  tasks: AgentExecutionTask[]
+  fingerprint: string
+}
+
+/** Ready-time task whose dependency commits and integration base are known. */
+export interface ResolvedAgentExecutionTask extends AgentExecutionTask {
+  runId: string
+  repository: string
+  baseSha: string
+  dependencyHeadShas: Record<string, string>
+  baseRef: string
+  branch: string
+  environment: AgentExecutionEnvironment
+  acceptance: AgentExecutionAcceptance
+}
+
+export type AgentExecutionTaskStatus =
+  | "planned"
+  | "running"
+  | "pushed"
+  | "checking"
+  | "review"
+  | "merged"
+  | "failure"
+
+export interface AgentExecutionCheckResult {
+  name: string
+  status: "queued" | "in_progress" | "success" | "failure"
+  url?: string
+}
+
+/** GitHub-backed runtime state. It does not mutate the task definition. */
+export interface AgentExecutionTaskResult {
+  taskId: string
+  status: AgentExecutionTaskStatus
+  branch?: string
+  integrationBaseSha?: string
+  headSha?: string
+  pullRequest?: { number: number; url: string }
+  checks: AgentExecutionCheckResult[]
+  startedAt?: string
+  completedAt?: string
+  costUsd?: number
+  diagnostics?: Diagnostic[]
+}

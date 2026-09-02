@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@spec/compiler": "workspace:*",
+    "@spec/container": "workspace:*",
     "@spec/core": "workspace:*",
     "@spec/agent": "workspace:*",
     "@spec/fastapi": "workspace:*",

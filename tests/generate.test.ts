@@ -4,6 +4,10 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { createHash } from "node:crypto"
+import { compile } from "@spec/compiler"
+import { planGeneration } from "@spec/fastapi"
+import { lowerContainers } from "@spec/container"
+import { createGitHubGenerationPlan, type ShotSpec } from "@spec/agent"
 
 const projectRoot = path.resolve(__dirname, "..")
 const cliDist = path.join(projectRoot, "packages", "cli", "dist", "index.js")
@@ -23,6 +27,45 @@ function runCli(args: string[], cwd: string): { status: number; stdout: string; 
 }
 
 describe("spec generate (dry-run planning)", () => {
+  it("projects the media generator DAG itself onto GitHub task execution", async () => {
+    const compiled = await compile("examples/media-platform/app.spec.ts", { projectRoot })
+    expect(compiled.ok).toBe(true)
+    const generation = planGeneration(compiled.ir)
+    const containers = lowerContainers(compiled.ir)
+    const shot: ShotSpec = {
+      tasks: generation.dag.tasks,
+      conformanceFiles: generation.conformance.files,
+      verification: generation.verification,
+      evidenceFiles: ["conformance-output/openapi.json", "conformance-output/behavior.json"],
+    }
+    const plan = createGitHubGenerationPlan({
+      shot,
+      runId: "media-test",
+      repository: "owner/repo",
+      rootBaseSha: "a".repeat(40),
+      targetDirectory: "products/media-platform/backend",
+      environment: {
+        image: `ghcr.io/owner/spec-agent@sha256:${"b".repeat(64)}`,
+        devcontainerHash: "c".repeat(64),
+        toolchainLockHash: "d".repeat(64),
+      },
+      requiredChecks: ["spec-generation"],
+      finalMaterializations: [{
+        id: "containers",
+        objective: "containers",
+        files: containers.files,
+        commands: ["true"],
+      }],
+    })
+    expect(plan.graphKind).toBe("generation-execution")
+    expect(plan.tasks).toHaveLength(generation.dag.tasks.length + 2)
+    expect(plan.tasks.find((task) => task.id === "models")?.scope).toEqual([
+      "products/media-platform/backend/app/models.py",
+    ])
+    expect(plan.tasks.find((task) => task.id === "conformance")?.dependsOn).toEqual(["app"])
+    expect(plan.tasks.find((task) => task.id === "containers")?.dependsOn).toEqual(["conformance"])
+  })
+
   it("plans the fastapi backend and writes deterministic planning artifacts", () => {
     const exampleDir = path.join(projectRoot, "examples", "booking")
     const first = runCli(["generate", "app.spec.ts", "--dry-run"], exampleDir)

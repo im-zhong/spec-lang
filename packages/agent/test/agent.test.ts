@@ -7,6 +7,7 @@ import { normalizeJson, OPENAPI_SNIPPET } from "../src/repeatability"
 import { isCompilerWorkspace, MARKER_FILE, prepareWorkspace, scanArtifacts, sha256 } from "../src/artifacts"
 import { runCommand } from "../src/orchestrate"
 import { AgentHarness, schedule, type HarnessTask } from "../src/harness"
+import { createGitHubGenerationPlan } from "../src/github-generation"
 import type { AgentRunResult, ClaudeCodeAgentRunner } from "../src/runner"
 
 describe("parseResultJson", () => {
@@ -226,5 +227,38 @@ describe("agent harness", () => {
     const rogue = report.results.find((r) => r.id === "router:a")!
     expect(rogue.scopeViolations).toEqual(["app/rogue.py"])
     void runner
+  })
+})
+
+describe("GitHub generator DAG execution", () => {
+  it("preserves generator edges while assigning every node a branchable task", () => {
+    const hash = "b".repeat(64)
+    const plan = createGitHubGenerationPlan({
+      shot: {
+        tasks: [
+          { id: "project", label: "project", dependsOn: [], scope: ["pyproject.toml"], prompt: "project" },
+          { id: "router:posts", label: "router", dependsOn: ["project"], scope: ["app/router.py"], prompt: "router" },
+          { id: "app", label: "app", dependsOn: ["router:posts"], scope: ["app/main.py"], prompt: "app" },
+        ],
+        conformanceFiles: { "conformance/test_app.py": "def test_app(): pass\n" },
+        verification: { setup: [], check: [{ name: "pytest", command: "pytest -q", timeoutMs: 1000 }] },
+      },
+      runId: "media-v1",
+      repository: "owner/repo",
+      rootBaseSha: "a".repeat(40),
+      targetDirectory: "products/media/backend",
+      environment: {
+        image: `ghcr.io/owner/dev@sha256:${"c".repeat(64)}`,
+        devcontainerHash: hash,
+        toolchainLockHash: hash,
+      },
+      requiredChecks: ["spec-generation"],
+    })
+    expect(plan.branchPrefix).toBe("spec/generate")
+    expect(plan.tasks.map((task) => task.id)).toEqual(["app", "conformance", "project", "router-posts"])
+    expect(plan.tasks.find((task) => task.id === "router-posts")?.dependsOn).toEqual(["project"])
+    expect(plan.tasks.find((task) => task.id === "app")?.dependsOn).toEqual(["router-posts"])
+    expect(plan.tasks.find((task) => task.id === "conformance")?.dependsOn).toEqual(["app"])
+    expect(plan.tasks.find((task) => task.id === "project")?.scope).toEqual(["products/media/backend/pyproject.toml"])
   })
 })

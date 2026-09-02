@@ -277,6 +277,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 
 export function buildRuntimeFiles(blueprint: FrontendBlueprint): Record<string, string> {
   return {
+    ".gitignore": "node_modules/\ndist/\nconformance-output/test-results/\n",
     "src/frontend.blueprint.json": stableStringify(blueprint) + "\n",
     "src/spec-runtime.tsx": RUNTIME_SOURCE,
     "src/spec-runtime.css": RUNTIME_CSS,

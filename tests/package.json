@@ -12,6 +12,7 @@
     "@spec/cli": "workspace:*",
     "@spec/fastapi": "workspace:*",
     "@spec/agent": "workspace:*"
+    ,"@spec/container": "workspace:*"
     ,"@spec/cache": "workspace:*"
     ,"@spec/redis": "workspace:*"
     ,"@spec/messaging": "workspace:*"
