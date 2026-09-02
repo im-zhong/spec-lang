@@ -65,13 +65,17 @@ describe("Git agent execution repository", () => {
     const fresh = path.join(temporary, "fresh")
     git(temporary, ["clone", bare, fresh])
     const freshRepository = new GitAgentExecutionRepository({ repoRoot: fresh, worktreeRoot: path.join(temporary, "fresh-worktrees") })
-    expect(await freshRepository.verifyCommitProvenance(
-      results[0].headSha!,
-      results[0].branch!,
+    const fetchHead = path.resolve(fresh, git(fresh, ["rev-parse", "--git-path", "FETCH_HEAD"]))
+    const fetchHeadSentinel = "shared FETCH_HEAD must remain untouched\n"
+    fs.writeFileSync(fetchHead, fetchHeadSentinel, "utf8")
+    expect(await Promise.all(results.map((result) => freshRepository.verifyCommitProvenance(
+      result.headSha!,
+      result.branch!,
       rootBaseSha,
       plan,
-      results[0].taskId,
-    )).toBe(true)
+      result.taskId,
+    )))).toEqual([true, true])
+    expect(fs.readFileSync(fetchHead, "utf8")).toBe(fetchHeadSentinel)
 
     const first = await repository.materializeIntegrationBase(plan, "child", results)
     const second = await repository.materializeIntegrationBase(plan, "child", [...results].reverse())

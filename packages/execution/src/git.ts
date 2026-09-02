@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import * as fs from "node:fs"
 import * as path from "node:path"
 import type { AgentExecutionPlan, AgentExecutionTaskResult, ResolvedAgentExecutionTask } from "@spec/core"
@@ -42,6 +43,28 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     return result
   }
 
+  /**
+   * Fetch one remote branch without touching the repository-wide FETCH_HEAD.
+   *
+   * The explicit refspec makes Git update a branch-specific scratch ref under
+   * its normal ref lock, so concurrent task fetches cannot overwrite one
+   * another's identity before provenance verification reads it.
+   */
+  private async fetchRemoteBranch(branch: string): Promise<string> {
+    const key = createHash("sha256").update(`${this.remote}\0${branch}`).digest("hex")
+    const fetchedRef = `refs/spec-fetch/${key}`
+    await this.git([
+      "fetch",
+      "--no-tags",
+      "--no-write-fetch-head",
+      this.remote,
+      `+refs/heads/${branch}:${fetchedRef}`,
+    ])
+    const sha = (await this.git(["rev-parse", "--verify", `${fetchedRef}^{commit}`])).stdout.trim()
+    if (!FULL_SHA.test(sha)) throw new Error(`git fetch returned an invalid commit SHA for remote branch "${branch}"`)
+    return sha
+  }
+
   async remoteHead(branch: string): Promise<string | undefined> {
     const result = await runProcess("git", ["ls-remote", "--heads", this.remote, `refs/heads/${branch}`], {
       cwd: this.repoRoot,
@@ -64,7 +87,8 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     const canonical = canonicalJson(plan)
     const existing = await this.remoteHead(ref)
     if (existing) {
-      await this.git(["fetch", "--no-tags", this.remote, `refs/heads/${ref}`])
+      const fetched = await this.fetchRemoteBranch(ref)
+      if (fetched !== existing) throw new Error(`remote plan ref "${ref}" moved from ${existing} to ${fetched} while fetching`)
       const stored = await this.git(["show", `${existing}:plan.json`])
       if (stored.stdout !== canonical) {
         throw new Error(`remote plan ref "${ref}" already contains a different immutable plan`)
@@ -117,7 +141,8 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
       if (!parent.headSha || !parent.branch) throw new Error(`dependency "${parent.taskId}" has no published branch/head SHA`)
       const remote = await this.remoteHead(parent.branch)
       if (remote !== parent.headSha) throw new Error(`dependency "${parent.taskId}" head ${parent.headSha} is not published at ${parent.branch}`)
-      await this.git(["fetch", "--no-tags", this.remote, `refs/heads/${parent.branch}`])
+      const fetched = await this.fetchRemoteBranch(parent.branch)
+      if (fetched !== parent.headSha) throw new Error(`dependency "${parent.taskId}" moved from ${parent.headSha} to ${fetched} while fetching`)
     }
 
     let current = parents.length === 0 ? plan.rootBaseSha : parents[0].headSha!
@@ -160,9 +185,7 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     plan: AgentExecutionPlan,
     taskId: string,
   ): Promise<boolean> {
-    const fetched = await this.git(["fetch", "--no-tags", this.remote, `refs/heads/${branch}`])
-    void fetched
-    const fetchedHead = (await this.git(["rev-parse", "FETCH_HEAD"])).stdout.trim()
+    const fetchedHead = await this.fetchRemoteBranch(branch)
     if (fetchedHead !== headSha) return false
     const ancestor = await runProcess("git", ["merge-base", "--is-ancestor", expectedBaseSha, headSha], { cwd: this.repoRoot })
     if (!ancestor.ok) return false
@@ -185,7 +208,10 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     if (fs.existsSync(workspace)) await this.removeWorkspace(workspace)
     fs.mkdirSync(path.dirname(workspace), { recursive: true })
     const start = resumeHeadSha ?? task.baseSha
-    if (resumeHeadSha) await this.git(["fetch", "--no-tags", this.remote, `refs/heads/${task.branch}`])
+    if (resumeHeadSha) {
+      const fetched = await this.fetchRemoteBranch(task.branch)
+      if (fetched !== resumeHeadSha) throw new Error(`remote task branch "${task.branch}" moved from ${resumeHeadSha} to ${fetched} while fetching`)
+    }
     await this.git(["worktree", "add", "--detach", workspace, start])
     return workspace
   }
