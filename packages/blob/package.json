@@ -1,0 +1,11 @@
+{
+  "name": "@spec/blob",
+  "version": "0.1.0",
+  "description": "Portable object and blob storage behavior",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": { "build": "tsc -p tsconfig.json", "clean": "rm -rf dist" },
+  "dependencies": { "@spec/core": "workspace:*", "@spec/package-sdk": "workspace:*" },
+  "spec": { "package": true, "entry": "./dist/spec-package.js" },
+  "devDependencies": { "vitest": "^2.1.8" }
+}

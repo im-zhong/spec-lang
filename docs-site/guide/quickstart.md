@@ -183,6 +183,7 @@ location and the offending value. See [Diagnostics](/guide/diagnostics).
 - [The .spec.ts language](/guide/language) — what you can and cannot write
 - [Entities & fields](/guide/entities) — the data model DSL
 - [REST resources](/guide/rest-resources) — crud, count and references
+- [Backend infrastructure](/guide/infrastructure) — cache/Redis, messaging providers and blob/S3
 - [Agentic generation](/guide/generate) — from spec to running software
 - [The golden rule](/guide/golden-rule) — why generation is repeatable
 - [Source walkthrough](/deep-dive/source-walkthrough) — one spec traced

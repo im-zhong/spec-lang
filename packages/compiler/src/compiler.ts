@@ -9,7 +9,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 import type { Diagnostic, Logger, SpecIR, SpecPackage } from "@spec/core"
-import { InternalCompilerError, silentLogger } from "@spec/core"
+import { InternalCompilerError, SPEC_IR_VERSION, silentLogger } from "@spec/core"
 import { sortDiagnostics } from "./diagnostics"
 import { displayPath } from "./parse"
 import { DEFAULT_CONFIG, loadSpecConfig } from "./config"
@@ -85,6 +85,7 @@ export async function compile(entry: string, options: CompilerOptions = {}): Pro
     nodes: [],
     capabilities: { required: [], provided: [] },
     diagnostics: [],
+    generationContributions: [],
   }
 
   if (!fs.existsSync(absoluteEntry)) {
@@ -94,11 +95,12 @@ export async function compile(entry: string, options: CompilerOptions = {}): Pro
       message: `Specification file not found: ${entry}`,
     })
     compilation.ir = {
-      version: "spec-ir/0.1",
+      version: SPEC_IR_VERSION,
       app: { name: "unknown" },
       packages: [],
       nodes: [],
       capabilities: { required: [], provided: [] },
+      generation: { contributions: [] },
       diagnostics: compilation.diagnostics,
       metadata: { compilerVersion: "0.1.0" },
     }
@@ -142,11 +144,12 @@ function finish(
 ): CompileResult {
   const diagnostics = sortDiagnostics(compilation.diagnostics)
   const ir: SpecIR = compilation.ir ?? {
-    version: "spec-ir/0.1",
+    version: SPEC_IR_VERSION,
     app: { name: "unknown" },
     packages: [],
     nodes: compilation.nodes,
     capabilities: compilation.capabilities,
+    generation: { contributions: compilation.generationContributions },
     diagnostics,
     metadata: { compilerVersion: "0.1.0" },
   }

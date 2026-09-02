@@ -15,7 +15,8 @@
     "@spec/compiler": "workspace:*",
     "@spec/core": "workspace:*",
     "@spec/agent": "workspace:*",
-    "@spec/fastapi": "workspace:*"
+    "@spec/fastapi": "workspace:*",
+    "@spec/react": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^2.1.8"

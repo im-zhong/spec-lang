@@ -20,7 +20,7 @@ import * as path from "node:path"
 import { spawn } from "node:child_process"
 import type { Artifact, Diagnostic } from "@spec/core"
 import { diagnostic } from "./diagnostics"
-import { prepareWorkspace, scanArtifacts } from "./artifacts"
+import { prepareWorkspace, scanArtifacts, STDERR_LOG_FILE } from "./artifacts"
 import {
   AgentHarness,
   type HarnessReport,
@@ -38,11 +38,15 @@ export interface VerificationCommand {
 export interface ShotSpec {
   /** The generation DAG tasks (already topologically sortable). */
   tasks: HarnessTask[]
+  /** Compiler-owned target runtime/contract files available to generation tasks. */
+  seedFiles?: Record<string, string>
   /** Compiler-owned files written into the workspace after generation. */
   conformanceFiles: Record<string, string>
   /** Directories excluded from artifact scanning (compiler-owned). */
   conformanceDirs?: string[]
   verification: { setup: VerificationCommand[]; check: VerificationCommand[] }
+  /** Artifact provenance label; defaults to the historical fastapi target. */
+  generatedBy?: string
 }
 
 export interface CommandResult {
@@ -115,13 +119,22 @@ export async function runShot(
 ): Promise<ShotReport> {
   const runner = new ClaudeCodeAgentRunner({
     model: options.model,
-    maxTurns: options.maxTurns ?? 60,
-    stderrLogFile: path.join(workspace, ".agent-stderr.log"),
+    maxTurns: options.maxTurns,
+    stderrLogFile: path.join(workspace, STDERR_LOG_FILE),
   })
   const harness = new AgentHarness({ runner })
   const diagnostics: Diagnostic[] = []
 
   prepareWorkspace(workspace)
+
+  // Target-owned runtime and contract files are materialized before the
+  // agent runs. They are immutable context: tasks may import them but must
+  // never create or modify them.
+  for (const [rel, content] of Object.entries(spec.seedFiles ?? {})) {
+    const target = path.join(workspace, rel)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, content, "utf8")
+  }
 
   /* 1 — the harness executes the generation DAG */
   const harnessReport: HarnessReport = await harness.execute(workspace, spec.tasks)
@@ -218,7 +231,7 @@ export async function runShot(
   /* 4 — artifacts with provenance */
   const artifacts = scanArtifacts(workspace, {
     excludeDirs: spec.conformanceDirs ?? ["conformance"],
-    generatedBy: "fastapi:dag",
+    generatedBy: spec.generatedBy ?? "fastapi:dag",
     sourceNodes: [...new Set(spec.tasks.flatMap((t) => t.specNodeIds ?? []))].sort(),
   })
 

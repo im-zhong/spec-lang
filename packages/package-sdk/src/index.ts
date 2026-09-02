@@ -9,6 +9,7 @@
 import type {
   CapabilityDefinition,
   Diagnostic,
+  GenerationContribution,
   NodeKindDefinition,
   NodeInspector,
   SpecLowering,
@@ -26,6 +27,7 @@ export interface PackageDefinitionInput {
   capabilities?: Array<CapabilityDefinition | CapabilityClause>
   validators?: SpecValidator[]
   lowerings?: SpecLowering[]
+  generation?: GenerationContribution[]
   inspectors?: Record<string, NodeInspector>
   metadata?: Record<string, unknown>
 }
@@ -68,12 +70,46 @@ export function definePackage(input: PackageDefinitionInput): SpecPackage {
     capabilities,
     validators: input.validators,
     lowerings: input.lowerings,
+    generation: input.generation,
     inspectors: input.inspectors,
     metadata: {
       ...(input.metadata ?? {}),
       requires: requirementClauses.map((c) => c.requires),
     },
   }
+}
+
+/**
+ * Define a JSON-serializable generation contribution. The helper clones and
+ * sorts maps so package authors cannot accidentally leak mutable input or
+ * insertion-order differences into the IR.
+ */
+export function defineGeneration(
+  contribution: GenerationContribution,
+): GenerationContribution {
+  return {
+    id: contribution.id,
+    target: contribution.target,
+    ...(contribution.nodeKinds
+      ? { nodeKinds: [...contribution.nodeKinds].sort() }
+      : {}),
+    tasks: [...contribution.tasks],
+    instructions: [...contribution.instructions],
+    ...(contribution.dependencies
+      ? { dependencies: sortRecord(contribution.dependencies) }
+      : {}),
+    ...(contribution.devDependencies
+      ? { devDependencies: sortRecord(contribution.devDependencies) }
+      : {}),
+  }
+}
+
+function sortRecord(record: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(record).sort(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    ),
+  )
 }
 
 /** Register a node kind (with optional per-node validation). */

@@ -27,24 +27,27 @@ agent "decides" is a behavior the specification failed to pin.
    attempt**.
 4. **Interface equality** — every shot's normalized OpenAPI document
    (paths, methods, statuses, path params) must be identical.
+5. **Behavior snapshot equality** — every shot executes the same
+   compiler-owned cache, messaging and blob probe and must emit identical
+   canonical JSON.
 
 ## What “behaviorally identical” means today
 
-The current verdict is the conjunction of two independent checks:
+The current verdict is the conjunction of three independent checks:
 
 ```text
 every shot satisfies the same deterministic functional oracle
 AND
 every shot exposes the same normalized OpenAPI interface
+AND
+every shot produces the same canonical infrastructure behavior snapshot
 ```
 
 This is more than an OpenAPI comparison. The conformance suite checks real
 responses and state transitions in each generated application. It is also a
-precise boundary: the harness does not yet replay one shared request trace
-against two live shots and compare every response, database row and outbox
-event directly. Passing the same oracle proves equality over the contract's
-generated test surface, not exhaustive observational equivalence for every
-possible request sequence.
+precise boundary: passing the same oracle and snapshot proves equality over
+the contract's generated test surface, not exhaustive observational
+equivalence for every possible request sequence.
 
 ## The no-repair policy
 
@@ -54,7 +57,7 @@ well the specification pins behavior. The protocol is:
 
 ```
 generate N shots → verify once each
-  all pass + identical interfaces   → golden rule satisfied
+  all pass + identical interface/behavior snapshots → golden rule satisfied
   any failure                       → the spec/blueprint is under-pinned
                                       fix the CONTRACT, regenerate all N
 ```

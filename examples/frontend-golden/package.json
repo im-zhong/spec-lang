@@ -1,0 +1,10 @@
+{
+  "name": "@spec/example-frontend-golden",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@spec/core": "workspace:*",
+    "@spec/ui": "workspace:*",
+    "@spec/react": "workspace:*"
+  }
+}

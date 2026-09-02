@@ -65,6 +65,8 @@
     ],
     "strategy": "password-jwt"
   },
+  "blobs": [],
+  "caches": [],
   "contract": {
     "auth": {
       "loginRequest": {
@@ -256,6 +258,40 @@
       "table": "venues"
     }
   ],
+  "generation": {
+    "contributions": [
+      {
+        "id": "python-fastapi-baseline",
+        "instructions": [
+          "Use Python 3.13 type hints on public functions and concrete return types; avoid Any except at serialization boundaries.",
+          "Keep asynchronous I/O non-blocking and move unavoidable blocking SDK calls to asyncio.to_thread.",
+          "Create network clients and pools in FastAPI lifespan, inject them into services, and close them in reverse order.",
+          "Use typed settings for configuration, explicit timeouts, bounded retries, and structured logging without secrets or payload bodies.",
+          "Keep provider adapters behind small protocols and make every behavior independently testable with deterministic in-memory adapters.",
+          "Do not catch broad exceptions unless translating them into a contract-defined typed error while preserving the original cause."
+        ],
+        "nodeKinds": [
+          "fastapi"
+        ],
+        "package": "@spec/fastapi",
+        "target": "fastapi-python",
+        "tasks": [
+          "project",
+          "models",
+          "database",
+          "schemas",
+          "security",
+          "router",
+          "cache",
+          "messaging",
+          "blob",
+          "app"
+        ],
+        "version": "0.1.0"
+      }
+    ],
+    "target": "fastapi-python"
+  },
   "invariants": [
     {
       "count": {
@@ -328,6 +364,8 @@
       ]
     }
   ],
+  "messages": [],
+  "queues": [],
   "routes": [
     {
       "auth": true,

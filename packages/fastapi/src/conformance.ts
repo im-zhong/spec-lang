@@ -249,6 +249,223 @@ function pathExpr(route: BlueprintRoute, idVar: string): string {
   return JSON.stringify(route.path)
 }
 
+function infrastructureTests(bp: BackendBlueprint): string {
+  const infrastructure = {
+    caches: bp.caches,
+    messages: bp.messages,
+    queues: bp.queues,
+    blobs: bp.blobs,
+  }
+  return `"""Compiler-generated infrastructure conformance — DO NOT EDIT."""
+
+import asyncio
+from datetime import datetime
+import json
+import uuid
+
+import pytest
+
+CONTRACT = json.loads(${JSON.stringify(stableStringify(infrastructure))})
+
+
+def _sample_payload(message):
+    values = {
+        "string": "sample",
+        "int": 7,
+        "boolean": True,
+        "uuid": "00000000-0000-4000-8000-000000000001",
+        "datetime": "2026-01-01T00:00:00",
+    }
+    return {name: values[kind] for name, kind in message["fields"].items()}
+
+
+def test_cache_contract():
+    if not CONTRACT["caches"]:
+        return
+    from app.cache import CACHE_POLICIES, InMemoryCacheBackend
+
+    assert sorted(CACHE_POLICIES) == sorted(item["name"] for item in CONTRACT["caches"])
+
+    async def probe():
+        backend = InMemoryCacheBackend()
+        for policy in CONTRACT["caches"]:
+            name = policy["name"]
+            assert await backend.get(name, "asset:1") is None
+            original = {"nested": [1, 2]}
+            await backend.set(name, "asset:1", original)
+            original["nested"].append(3)
+            first = await backend.get(name, "asset:1")
+            assert first == {"nested": [1, 2]}
+            first["nested"].append(4)
+            assert await backend.get(name, "asset:1") == {"nested": [1, 2]}
+            await backend.delete(name, "asset:1")
+            assert await backend.get(name, "asset:1") is None
+            calls = 0
+            async def loader():
+                nonlocal calls
+                calls += 1
+                return {"loaded": True}
+            assert await backend.get_or_set(name, "asset:2", loader) == {"loaded": True}
+            assert await backend.get_or_set(name, "asset:2", loader) == {"loaded": True}
+            assert calls == 1
+        with pytest.raises((KeyError, ValueError)):
+            await backend.get("__unknown__", "key")
+
+    asyncio.run(probe())
+
+
+def test_messaging_contract():
+    if not CONTRACT["queues"]:
+        return
+    from app.messaging import (
+        MESSAGE_DEFINITIONS,
+        QUEUE_POLICIES,
+        InMemoryMessageBroker,
+        MessageValidationError,
+        build_envelope,
+        validate_payload,
+    )
+
+    assert sorted(MESSAGE_DEFINITIONS) == sorted(item["name"] for item in CONTRACT["messages"])
+    assert sorted(QUEUE_POLICIES) == sorted(item["name"] for item in CONTRACT["queues"])
+
+    async def probe():
+        broker = InMemoryMessageBroker()
+        by_name = {item["name"]: item for item in CONTRACT["messages"]}
+        for queue in CONTRACT["queues"]:
+            message = by_name[queue["messages"][0]]
+            payload = _sample_payload(message)
+            validate_payload(message["name"], payload)
+            with pytest.raises(MessageValidationError):
+                validate_payload(message["name"], {})
+            envelope = build_envelope(
+                message["name"], payload,
+                message_id="00000000-0000-4000-8000-000000000010",
+                occurred_at=datetime(2026, 1, 1, 0, 0, 0),
+            )
+            assert envelope.message == message["name"]
+            assert envelope.version == 1
+            await broker.publish(queue["name"], envelope)
+            await broker.publish(queue["name"], envelope)
+            drained = await broker.drain(queue["name"])
+            expected = 1 if queue["delivery"] == "at-least-once" else 2
+            assert len(drained) == expected
+            assert [item.id for item in drained] == [envelope.id] * expected
+
+    asyncio.run(probe())
+
+    import app.messaging as module
+    kinds = {item["provider"]["kind"] for item in CONTRACT["queues"]}
+    expected_classes = {"rabbitmq": "RabbitMQBroker", "kafka": "KafkaBroker", "sqs": "SQSBroker"}
+    for kind in kinds:
+        assert hasattr(module, expected_classes[kind])
+
+
+def test_blob_contract():
+    if not CONTRACT["blobs"]:
+        return
+    from app.blob import BLOB_POLICIES, BlobValidationError, InMemoryBlobStore, normalize_blob_key
+
+    assert sorted(BLOB_POLICIES) == sorted(item["name"] for item in CONTRACT["blobs"])
+
+    async def probe():
+        store = InMemoryBlobStore()
+        for policy in CONTRACT["blobs"]:
+            name = policy["name"]
+            key = "tenant/object.bin"
+            normalized = normalize_blob_key(name, key)
+            prefix = policy["keyPrefix"].strip("/")
+            assert normalized == f"{prefix + '/' if prefix else ''}{key}"
+            content_type = policy["contentTypes"][0]
+            await store.put(name, key, b"payload", content_type)
+            assert await store.get(name, key) == b"payload"
+            assert await store.signed_url(name, key) == f"memory://{policy['bucket']}/{normalized}?expires={policy['signedUrlTtlSeconds']}"
+            await store.delete(name, key)
+            with pytest.raises(KeyError):
+                await store.get(name, key)
+            with pytest.raises(BlobValidationError):
+                await store.put(name, key, b"x" * (policy["maxBytes"] + 1), content_type)
+            with pytest.raises(BlobValidationError):
+                await store.put(name, key, b"x", "application/x-not-allowed")
+            with pytest.raises(BlobValidationError):
+                normalize_blob_key(name, "../secret")
+
+    asyncio.run(probe())
+
+    import app.blob as module
+    if any(item["provider"]["kind"] == "s3" for item in CONTRACT["blobs"]):
+        assert hasattr(module, "S3BlobStore")
+`
+}
+
+function behaviorSnapshot(bp: BackendBlueprint): string {
+  const infrastructure = {
+    caches: bp.caches,
+    messages: bp.messages,
+    queues: bp.queues,
+    blobs: bp.blobs,
+  }
+  return `"""Deterministic cross-shot behavior probe — compiler owned."""
+
+import asyncio
+from datetime import datetime
+import json
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.main import app
+
+CONTRACT = json.loads(${JSON.stringify(stableStringify(infrastructure))})
+
+
+def sample_payload(message):
+    values = {"string": "sample", "int": 7, "boolean": True, "uuid": "00000000-0000-4000-8000-000000000001", "datetime": "2026-01-01T00:00:00"}
+    return {name: values[kind] for name, kind in message["fields"].items()}
+
+
+async def infrastructure_snapshot():
+    result = {"cache": {}, "messaging": {}, "blob": {}}
+    if CONTRACT["caches"]:
+        from app.cache import InMemoryCacheBackend
+        backend = InMemoryCacheBackend()
+        for policy in CONTRACT["caches"]:
+            await backend.set(policy["name"], "probe", {"ok": True})
+            result["cache"][policy["name"]] = await backend.get(policy["name"], "probe")
+    if CONTRACT["queues"]:
+        from app.messaging import InMemoryMessageBroker, build_envelope
+        broker = InMemoryMessageBroker()
+        messages = {item["name"]: item for item in CONTRACT["messages"]}
+        for queue in CONTRACT["queues"]:
+            message = messages[queue["messages"][0]]
+            envelope = build_envelope(message["name"], sample_payload(message), message_id="00000000-0000-4000-8000-000000000010", occurred_at=datetime(2026, 1, 1))
+            await broker.publish(queue["name"], envelope)
+            await broker.publish(queue["name"], envelope)
+            result["messaging"][queue["name"]] = len(await broker.drain(queue["name"]))
+    if CONTRACT["blobs"]:
+        from app.blob import InMemoryBlobStore
+        store = InMemoryBlobStore()
+        for policy in CONTRACT["blobs"]:
+            await store.put(policy["name"], "probe.bin", b"payload", policy["contentTypes"][0])
+            result["blob"][policy["name"]] = {
+                "bytes": len(await store.get(policy["name"], "probe.bin")),
+                "url": await store.signed_url(policy["name"], "probe.bin"),
+            }
+    return result
+
+
+openapi = app.openapi()
+interface = sorted(
+    f"{method.upper()} {path}"
+    for path, operations in openapi.get("paths", {}).items()
+    for method in operations
+    if method in {"get", "post", "put", "patch", "delete"}
+)
+print(json.dumps({"interface": interface, "infrastructure": asyncio.run(infrastructure_snapshot())}, sort_keys=True))
+`
+}
+
 export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
   const createRoutes = createRoutesByEntity(bp)
   const lifecycles = lifecyclableEntities(bp)
@@ -940,6 +1157,8 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
       "conformance/conftest.py": conftest,
       "conformance/helpers.py": helpers,
       "conformance/test_contract.py": t.join("\n") + "\n",
+      "conformance/test_infrastructure.py": infrastructureTests(bp),
+      "conformance/behavior_snapshot.py": behaviorSnapshot(bp),
       "conformance/contract.json": stableStringify(bp) + "\n",
     },
   }

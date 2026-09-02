@@ -87,6 +87,18 @@ importers:
         specifier: workspace:*
         version: link:../../packages/web
 
+  examples/frontend-golden:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@spec/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@spec/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+
   examples/inventory:
     dependencies:
       '@spec/core':
@@ -98,6 +110,48 @@ importers:
       '@spec/postgres':
         specifier: workspace:*
         version: link:../../packages/postgres
+      '@spec/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+
+  examples/media-platform:
+    dependencies:
+      '@spec/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@spec/blob':
+        specifier: workspace:*
+        version: link:../../packages/blob
+      '@spec/cache':
+        specifier: workspace:*
+        version: link:../../packages/cache
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:../../packages/fastapi
+      '@spec/kafka':
+        specifier: workspace:*
+        version: link:../../packages/kafka
+      '@spec/messaging':
+        specifier: workspace:*
+        version: link:../../packages/messaging
+      '@spec/postgres':
+        specifier: workspace:*
+        version: link:../../packages/postgres
+      '@spec/rabbitmq':
+        specifier: workspace:*
+        version: link:../../packages/rabbitmq
+      '@spec/redis':
+        specifier: workspace:*
+        version: link:../../packages/redis
+      '@spec/s3':
+        specifier: workspace:*
+        version: link:../../packages/s3
+      '@spec/sqs':
+        specifier: workspace:*
+        version: link:../../packages/sqs
       '@spec/web':
         specifier: workspace:*
         version: link:../../packages/web
@@ -128,6 +182,32 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)
 
+  packages/blob:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/cache:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
   packages/cli:
     dependencies:
       '@spec/agent':
@@ -142,6 +222,9 @@ importers:
       '@spec/fastapi':
         specifier: workspace:*
         version: link:../fastapi
+      '@spec/react':
+        specifier: workspace:*
+        version: link:../react
     devDependencies:
       vitest:
         specifier: ^2.1.8
@@ -191,6 +274,32 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)
 
+  packages/kafka:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/messaging:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
   packages/package-sdk:
     dependencies:
       '@spec/core':
@@ -217,6 +326,90 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)
 
+  packages/rabbitmq:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/react:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+      '@spec/ui':
+        specifier: workspace:*
+        version: link:../ui
+    devDependencies:
+      '@spec/compiler':
+        specifier: workspace:*
+        version: link:../compiler
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/redis:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/s3:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/sqs:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/ui:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
   packages/web:
     dependencies:
       '@spec/core':
@@ -238,6 +431,12 @@ importers:
       '@spec/auth':
         specifier: workspace:*
         version: link:../packages/auth
+      '@spec/blob':
+        specifier: workspace:*
+        version: link:../packages/blob
+      '@spec/cache':
+        specifier: workspace:*
+        version: link:../packages/cache
       '@spec/cli':
         specifier: workspace:*
         version: link:../packages/cli
@@ -250,12 +449,30 @@ importers:
       '@spec/fastapi':
         specifier: workspace:*
         version: link:../packages/fastapi
+      '@spec/kafka':
+        specifier: workspace:*
+        version: link:../packages/kafka
+      '@spec/messaging':
+        specifier: workspace:*
+        version: link:../packages/messaging
       '@spec/package-sdk':
         specifier: workspace:*
         version: link:../packages/package-sdk
       '@spec/postgres':
         specifier: workspace:*
         version: link:../packages/postgres
+      '@spec/rabbitmq':
+        specifier: workspace:*
+        version: link:../packages/rabbitmq
+      '@spec/redis':
+        specifier: workspace:*
+        version: link:../packages/redis
+      '@spec/s3':
+        specifier: workspace:*
+        version: link:../packages/s3
+      '@spec/sqs':
+        specifier: workspace:*
+        version: link:../packages/sqs
       '@spec/web':
         specifier: workspace:*
         version: link:../packages/web

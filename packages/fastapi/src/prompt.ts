@@ -30,6 +30,26 @@ const SHARED_INVARIANTS = `## Global invariants (hold for every task)
   suite asserts STRICT OpenAPI equality.
 - SQLite-compatible SQL only (tests run on SQLite).`
 
+/** Package-owned instructions selected for one target task kind. */
+function guidanceSection(bp: BackendBlueprint, taskKind: string): string {
+  const contributions = bp.generation.contributions.filter((contribution) =>
+    contribution.tasks.includes(taskKind),
+  )
+  if (contributions.length === 0) return ""
+  const lines = ["", "## Target and package engineering guidance"]
+  for (const contribution of contributions) {
+    lines.push("", `### ${contribution.package} · ${contribution.id}`)
+    for (const instruction of contribution.instructions) lines.push(`- ${instruction}`)
+  }
+  lines.push(
+    "",
+    "This guidance is subordinate to the compiler-derived behavioral contract.",
+    "If guidance appears to conflict with the blueprint, implement the blueprint.",
+    "",
+  )
+  return lines.join("\n")
+}
+
 function routeTable(routes: BlueprintRoute[]): string {
   return routes
     .map((r) => `| ${r.method} | ${r.path} | ${r.status} | ${r.auth ? "bearer" : "public"} | ${r.operation} |`)
@@ -67,6 +87,8 @@ export function projectPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): strin
     .join(",\n    ")
   return `${taskHeader("project skeleton", ctx.scope, ctx.context)}
 
+${guidanceSection(bp, "project")}
+
 Create the Python project skeleton for "${bp.app.title}".
 
 ## Requirements
@@ -98,6 +120,8 @@ ${stableStringify(bp.app)}
 
 export function modelsPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
   return `${taskHeader("data models", ctx.scope, ctx.context)}
+
+${guidanceSection(bp, "models")}
 
 Implement the SQLAlchemy models (\`app/models.py\`).
 
@@ -134,6 +158,8 @@ ${bp.auth ? `- The principal \`${bp.auth.principal}\` additionally gets the impl
 export function databasePrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
   return `${taskHeader("database layer", ctx.scope, ctx.context)}
 
+${guidanceSection(bp, "database")}
+
 Implement the database/engine layer.
 
 ${SHARED_INVARIANTS}
@@ -156,6 +182,8 @@ ${stableStringify(bp.database)}
 
 export function schemasPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
   return `${taskHeader("pydantic schemas", ctx.scope, ctx.context)}
+
+${guidanceSection(bp, "schemas")}
 
 Implement the request/response schemas (\`app/schemas.py\`).
 
@@ -181,6 +209,8 @@ ${stableStringify(bp.entities.map((e) => ({ name: e.name, fields: e.fields })))}
 
 export function securityPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
   return `${taskHeader("auth security", ctx.scope, ctx.context)}
+
+${guidanceSection(bp, "security")}
 
 Implement JWT/bcrypt security (\`app/security.py\`, \`app/deps.py\`).
 
@@ -359,6 +389,8 @@ export function routerPrompt(
     }))
   return `${taskHeader(`router: ${entityName}`, ctx.scope, ctx.context)}
 
+${guidanceSection(bp, "router")}
+
 Implement the API router for the **${entityName}** entity.
 
 ${SHARED_INVARIANTS}
@@ -390,6 +422,8 @@ export function authRouterPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): st
   const auth = bp.auth!
   const principal = bp.entities.find((e) => e.name === auth.principal)!
   return `${taskHeader("router: auth", ctx.scope, ctx.context)}
+
+${guidanceSection(bp, "router")}
 
 Implement the auth router (\`app/routers/auth.py\`).
 
@@ -426,6 +460,8 @@ export function appPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
     .map((r) => `${r.method} ${r.path}`)
   return `${taskHeader("application wiring", ctx.scope, ctx.context)}
 
+${guidanceSection(bp, "app")}
+
 Implement the application factory (\`app/main.py\`).
 
 ${SHARED_INVARIANTS}
@@ -447,6 +483,84 @@ ${registrationOrder.map((r) => `- ${r}`).join("\n")}
   reachable (registered before same-prefix \`{id}\` routes — the routers
   already encode this, just include them).
 - Create tables on startup against the resolved engine.
+- Construct deterministic in-memory cache, messaging, and blob adapters by
+  default and expose them as \`app.state.cache\`, \`app.state.messaging\`,
+  and \`app.state.blob\` when their corresponding contracts exist. Provider
+  adapters remain available for deployment, but tests require no external services.
 - Do not add extra routes: the conformance suite asserts strict OpenAPI
   equality (FastAPI's automatic /openapi.json and /docs are fine).`
+}
+
+export function cachePrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
+  return `${taskHeader("cache infrastructure", ctx.scope, ctx.context)}
+
+${guidanceSection(bp, "cache")}
+
+Implement \`app/cache.py\` from this exact cache contract:
+
+\`\`\`json
+${stableStringify(bp.caches)}
+\`\`\`
+
+## Required public API
+- \`CacheUnavailable\` and immutable \`CachePolicy\`.
+- \`CACHE_POLICIES: dict[str, CachePolicy]\` containing every declared cache.
+- \`InMemoryCacheBackend\` with async \`get(policy, key)\`, \`set(policy, key, value)\`,
+  \`delete(policy, key)\`, and \`get_or_set(policy, key, loader)\` methods.
+- \`RedisCacheBackend\` implementing the same methods with redis.asyncio.
+- Values are JSON-compatible and isolated from caller mutation. In-memory TTL
+  uses monotonic time; expired entries are misses. Full provider keys are
+  \`<keyPrefix>:<key>\`.
+- Unknown policy names raise \`KeyError\`. Empty keys raise \`ValueError\`.
+- Do not connect to Redis at import time.`
+}
+
+export function messagingPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
+  return `${taskHeader("messaging infrastructure", ctx.scope, ctx.context)}
+
+${guidanceSection(bp, "messaging")}
+
+Implement \`app/messaging.py\` from this exact contract:
+
+\`\`\`json
+${stableStringify({ messages: bp.messages, queues: bp.queues })}
+\`\`\`
+
+## Required public API
+- \`MessageValidationError\` plus immutable \`MessageDefinition\`, \`QueuePolicy\`,
+  and \`MessageEnvelope\` types. MessageEnvelope fields are exactly
+  \`message\`, \`version\`, \`id\`, \`occurred_at\`, and \`payload\`.
+- \`MESSAGE_DEFINITIONS\` and \`QUEUE_POLICIES\` maps containing every declaration.
+- \`validate_payload(message, payload)\` rejects missing, extra, or wrongly typed fields.
+- \`build_envelope(message, payload, *, message_id, occurred_at)\` returns a stable
+  version-1 envelope after validation; datetime values serialize as ISO strings.
+- Async \`InMemoryMessageBroker.publish(queue, envelope)\` and \`drain(queue)\`.
+  Publishing rejects messages not allowed by the queue and deduplicates message ids
+  for at-least-once queues. Drain preserves publish order.
+- Provider adapters named \`RabbitMQBroker\`, \`KafkaBroker\`, and \`SQSBroker\`
+  for selected providers. They must not connect at import time.`
+}
+
+export function blobPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
+  return `${taskHeader("blob infrastructure", ctx.scope, ctx.context)}
+
+${guidanceSection(bp, "blob")}
+
+Implement \`app/blob.py\` from this exact blob contract:
+
+\`\`\`json
+${stableStringify(bp.blobs)}
+\`\`\`
+
+## Required public API
+- \`BlobValidationError\` and immutable \`BlobPolicy\`.
+- \`BLOB_POLICIES: dict[str, BlobPolicy]\` containing every declaration.
+- \`normalize_blob_key(policy, key)\` returns \`<keyPrefix>/<key>\` without
+  duplicate separators and rejects absolute paths, dot segments, and empty keys.
+- \`InMemoryBlobStore\` with async \`put(policy, key, data, content_type)\`,
+  \`get(policy, key)\`, \`delete(policy, key)\`, and \`signed_url(policy, key)\`.
+  Enforce byte limit and MIME allowlist before storing. Missing objects raise KeyError.
+  Signed URLs are exactly \`memory://<bucket>/<normalized-key>?expires=<ttl>\`.
+- \`S3BlobStore\` implements the same surface with a lazily supplied boto3 client;
+  never create or contact an S3 client during module import.`
 }

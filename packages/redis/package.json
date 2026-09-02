@@ -1,0 +1,11 @@
+{
+  "name": "@spec/redis",
+  "version": "0.1.0",
+  "description": "Redis cache provider",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": { "build": "tsc -p tsconfig.json", "clean": "rm -rf dist" },
+  "dependencies": { "@spec/core": "workspace:*", "@spec/package-sdk": "workspace:*" },
+  "spec": { "package": true, "entry": "./dist/spec-package.js" },
+  "devDependencies": { "vitest": "^2.1.8" }
+}

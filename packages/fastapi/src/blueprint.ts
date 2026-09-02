@@ -13,7 +13,7 @@
  * flow, list ordering. The agent implements this contract; the compiler's
  * conformance suite (see conformance.ts) verifies it byte-for-byte.
  */
-import type { SpecIR, SpecNode } from "@spec/core"
+import type { MaterializedGenerationContribution, SpecIR, SpecNode } from "@spec/core"
 import { CRUD_METHODS, type CrudMethod } from "@spec/web"
 
 export type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE"
@@ -126,6 +126,48 @@ export interface BlueprintAuth {
   routes: BlueprintRoute[]
 }
 
+export interface BlueprintProviderRef {
+  name: string
+  kind: "redis" | "rabbitmq" | "kafka" | "sqs" | "s3"
+  config: Record<string, unknown>
+}
+
+export interface BlueprintCache {
+  name: string
+  provider: BlueprintProviderRef
+  keyPrefix: string
+  ttlSeconds: number
+  failureMode: "bypass" | "fail-closed"
+  stampedeProtection: boolean
+}
+
+export interface BlueprintMessage {
+  name: string
+  fields: Record<string, "string" | "int" | "boolean" | "uuid" | "datetime">
+}
+
+export interface BlueprintQueue {
+  name: string
+  provider: BlueprintProviderRef
+  messages: string[]
+  delivery: "at-least-once" | "at-most-once"
+  maxAttempts: number
+  backoffSeconds: number
+  deadLetter?: string
+  orderingKey?: string
+}
+
+export interface BlueprintBlob {
+  name: string
+  provider: BlueprintProviderRef
+  bucket: string
+  keyPrefix: string
+  maxBytes: number
+  contentTypes: string[]
+  signedUrlTtlSeconds: number
+  retentionDays?: number
+}
+
 /**
  * The behavioral contract every generation must satisfy identically.
  * These values are pinned (not agent choices) — that is the golden rule.
@@ -193,6 +235,15 @@ export interface BackendBlueprint {
     columns: { id: "uuid"; event: "text"; payload: "json"; created_at: "datetime" }
   }
   auth?: BlueprintAuth
+  caches: BlueprintCache[]
+  messages: BlueprintMessage[]
+  queues: BlueprintQueue[]
+  blobs: BlueprintBlob[]
+  /** Selected package-owned guidance with dependency and prompt provenance. */
+  generation: {
+    target: "fastapi-python"
+    contributions: MaterializedGenerationContribution[]
+  }
   database: {
     engine: "postgres" | "sqlite"
     urlEnv: string
@@ -242,7 +293,10 @@ export const DEFAULT_FASTAPI_STACK: BackendStack = {
 }
 
 /** Merge spec-level stack overrides onto the pinned defaults. */
-export function resolveStack(overrides: unknown): BackendStack {
+export function resolveStack(
+  overrides: unknown,
+  contributions: MaterializedGenerationContribution[] = [],
+): BackendStack {
   const merged: BackendStack = {
     python: DEFAULT_FASTAPI_STACK.python,
     dependencies: { ...DEFAULT_FASTAPI_STACK.dependencies },
@@ -258,6 +312,14 @@ export function resolveStack(overrides: unknown): BackendStack {
           if (typeof version === "string") merged[section][name] = version
         }
       }
+    }
+  }
+  for (const contribution of contributions) {
+    for (const [name, version] of Object.entries(contribution.dependencies ?? {})) {
+      merged.dependencies[name] = version
+    }
+    for (const [name, version] of Object.entries(contribution.devDependencies ?? {})) {
+      merged.dev[name] = version
     }
   }
   merged.dependencies = sortRecord(merged.dependencies)
@@ -393,6 +455,20 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
       : [],
   )
   const isServed = (node: SpecNode): boolean => !serverNode || servedIds.has(node.id)
+
+  const providerRef = (value: unknown): BlueprintProviderRef | undefined => {
+    if (!isPlainObject(value) || typeof value.nodeId !== "string") return undefined
+    const provider = byId.get(value.nodeId)
+    if (!provider || !["redis", "rabbitmq", "kafka", "sqs", "s3"].includes(provider.kind)) return undefined
+    const config = Object.fromEntries(
+      Object.entries(provider.attributes).filter(([key]) => key !== "provides"),
+    )
+    return {
+      name: provider.name ?? provider.id.split(":").slice(1).join(":"),
+      kind: provider.kind as BlueprintProviderRef["kind"],
+      config,
+    }
+  }
 
   /* ---------------- routes ---------------- */
   const routes: BlueprintRoute[] = []
@@ -716,6 +792,81 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
     routes.push(...auth.routes)
   }
 
+  /* ---------------- infrastructure contracts ---------------- */
+  const caches: BlueprintCache[] = nodes
+    .filter((node) => node.kind === "cache" && isServed(node))
+    .map((node): BlueprintCache | undefined => {
+      const provider = providerRef(node.attributes.provider)
+      if (!provider) return undefined
+      return {
+        name: node.name ?? node.id.split(":").slice(1).join(":"),
+        provider,
+        keyPrefix: String(node.attributes.keyPrefix),
+        ttlSeconds: Number(node.attributes.ttlSeconds),
+        failureMode: node.attributes.failureMode === "fail-closed" ? "fail-closed" : "bypass",
+        stampedeProtection: node.attributes.stampedeProtection === true,
+      }
+    })
+    .filter((value): value is BlueprintCache => value !== undefined)
+    .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+
+  const messages: BlueprintMessage[] = nodes
+    .filter((node) => node.kind === "message")
+    .map((node) => ({
+      name: node.name ?? node.id.split(":").slice(1).join(":"),
+      fields: isPlainObject(node.attributes.fields)
+        ? node.attributes.fields as BlueprintMessage["fields"]
+        : {},
+    }))
+    .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+
+  const queues: BlueprintQueue[] = nodes
+    .filter((node) => node.kind === "queue" && isServed(node))
+    .map((node): BlueprintQueue | undefined => {
+      const provider = providerRef(node.attributes.provider)
+      if (!provider) return undefined
+      const messageNames = Array.isArray(node.attributes.messages)
+        ? node.attributes.messages.flatMap((value) =>
+            isPlainObject(value) && typeof value.nodeId === "string"
+              ? [byId.get(value.nodeId)?.name].filter((name): name is string => typeof name === "string")
+              : [],
+          )
+        : []
+      return {
+        name: node.name ?? node.id.split(":").slice(1).join(":"),
+        provider,
+        messages: [...messageNames].sort(),
+        delivery: node.attributes.delivery === "at-most-once" ? "at-most-once" : "at-least-once",
+        maxAttempts: Number(node.attributes.maxAttempts),
+        backoffSeconds: Number(node.attributes.backoffSeconds),
+        ...(typeof node.attributes.deadLetter === "string" ? { deadLetter: node.attributes.deadLetter } : {}),
+        ...(typeof node.attributes.orderingKey === "string" ? { orderingKey: node.attributes.orderingKey } : {}),
+      }
+    })
+    .filter((value): value is BlueprintQueue => value !== undefined)
+    .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+
+  const blobs: BlueprintBlob[] = nodes
+    .filter((node) => node.kind === "blob" && isServed(node))
+    .map((node): BlueprintBlob | undefined => {
+      const provider = providerRef(node.attributes.provider)
+      if (!provider) return undefined
+      return {
+        name: node.name ?? node.id.split(":").slice(1).join(":"),
+        provider,
+        bucket: String(node.attributes.bucket),
+        keyPrefix: String(node.attributes.keyPrefix ?? ""),
+        maxBytes: Number(node.attributes.maxBytes),
+        contentTypes: Array.isArray(node.attributes.contentTypes)
+          ? node.attributes.contentTypes.filter((value): value is string => typeof value === "string")
+          : [],
+        signedUrlTtlSeconds: Number(node.attributes.signedUrlTtlSeconds),
+        ...(typeof node.attributes.retentionDays === "number" ? { retentionDays: node.attributes.retentionDays } : {}),
+      }
+    })
+    .filter((value): value is BlueprintBlob => value !== undefined)
+    .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+
   /* ---------------- database ---------------- */
   const databaseNode = nodes.find(
     (n) => n.kind === "postgres" || n.kind === "sqlite" || n.kind === "database",
@@ -723,7 +874,9 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
   const engine: "postgres" | "sqlite" = databaseNode?.kind === "sqlite" ? "sqlite" : "postgres"
 
   /* ---------------- stack (pinned, spec-overridable) ---------------- */
-  const stack = resolveStack(serverNode?.attributes.stack)
+  const contributions = (ir.generation?.contributions ?? [])
+    .filter((contribution) => contribution.target === "fastapi-python")
+  const stack = resolveStack(serverNode?.attributes.stack, contributions)
 
   /* ---------------- pinned contract ---------------- */
   const contract: BackendContract = {
@@ -784,6 +937,11 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
         }
       : {}),
     ...(auth ? { auth } : {}),
+    caches,
+    messages,
+    queues,
+    blobs,
+    generation: { target: "fastapi-python", contributions },
     database: { engine, urlEnv: "DATABASE_URL", fallback: "sqlite:///./dev.db", urlFormat: "sqlalchemy-url" },
     stack,
     contract,

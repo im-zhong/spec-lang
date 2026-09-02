@@ -43,6 +43,9 @@ export interface RepeatabilityReport {
   /** Canonical OpenAPI interface per shot (null when capture failed). */
   interfaces: Array<{ shot: string; snapshot: string | null }>
   interfaceEqual: boolean
+  /** Compiler-owned deterministic behavior probe per shot. */
+  behaviors: Array<{ shot: string; snapshot: string | null }>
+  behaviorEqual: boolean
   diagnostics: Diagnostic[]
   totalCostUsd: number
 }
@@ -147,11 +150,64 @@ export async function runRepeatability(
     }
   }
 
+  /* Cross-shot behavior equality: HTTP interface plus cache, messaging,
+   * and blob probes generated from the same blueprint. */
+  const behaviors: RepeatabilityReport["behaviors"] = []
+  for (const { shot, workspace } of shotWorkspaces) {
+    const python = options.pythonCommand
+      ? options.pythonCommand(workspace)
+      : `${workspace}/.venv/bin/python`
+    const result = await runCommand(
+      `${python} conformance/behavior_snapshot.py`,
+      workspace,
+      "behavior-snapshot",
+      120_000,
+    )
+    behaviors.push({ shot, snapshot: result.ok ? normalizeJson(result.output) : null })
+    if (!result.ok) {
+      diagnostics.push(
+        diagnostic(
+          "BEHAVIOR_SNAPSHOT_FAILED",
+          "warning",
+          `Could not capture the compiler-owned behavior snapshot of shot "${shot}".`,
+          { details: { shot, output: result.output.slice(-1500) } },
+        ),
+      )
+    }
+  }
+  const capturedBehaviors = behaviors.filter((item) => item.snapshot !== null)
+  const behaviorEqual =
+    capturedBehaviors.length === shotWorkspaces.length &&
+    new Set(capturedBehaviors.map((item) => item.snapshot)).size <= 1
+
+  if (shotWorkspaces.length > 1 && capturedBehaviors.length === shotWorkspaces.length) {
+    diagnostics.push(
+      behaviorEqual
+        ? diagnostic(
+            "BEHAVIOR_IDENTICAL",
+            "info",
+            "All shots produce an identical compiler-owned behavior snapshot.",
+            {},
+          )
+        : diagnostic(
+            "BEHAVIOR_DIVERGENT",
+            "error",
+            "Independent generations behave differently — redesign the spec/IR/blueprint and regenerate every shot.",
+            { details: { shots: behaviors } },
+          ),
+    )
+  }
+
   return {
-    ok: allConformant && (shotWorkspaces.length === 1 || interfaceEqual),
+    ok:
+      allConformant &&
+      interfaceEqual &&
+      behaviorEqual,
     shots,
     interfaces,
     interfaceEqual,
+    behaviors,
+    behaviorEqual,
     diagnostics,
     totalCostUsd,
   }

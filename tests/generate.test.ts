@@ -52,10 +52,12 @@ describe("spec generate (dry-run planning)", () => {
       expect(task.promptSha256).toMatch(/^[0-9a-f]{64}$/)
     }
     expect(tasks.conformanceFiles).toEqual([
+      "conformance/behavior_snapshot.py",
       "conformance/conftest.py",
       "conformance/contract.json",
       "conformance/helpers.py",
       "conformance/test_contract.py",
+      "conformance/test_infrastructure.py",
     ])
     expect(tasks.verification.check.map((c: { name: string }) => c.name)).toEqual([
       "import",

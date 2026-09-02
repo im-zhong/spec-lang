@@ -11,11 +11,11 @@ the [blueprint reference](/reference/blueprint).
 
 ## Prerequisites
 
-- the `claude` CLI on `PATH` (driven headlessly, tool-restricted)
+- the `claude` CLI on `PATH` (driven headlessly with its configured defaults)
 - `uv` and Python 3.10+ (verification of generated apps)
-- a configured model/provider for Claude Code; cost and latency are
-  provider-dependent (the latest DeepSeek reference run cost about $10–12
-  per shot)
+- a working default Claude Code model configuration; the harness supplies a
+  scoped headless file/Python allowlist because print mode cannot ask a person
+  to approve writes
 
 ## 1. Write the backend specification
 
@@ -167,6 +167,7 @@ own conformance suite into the workspace and verifies — once:
 ✓ shot-1: conformance passed (first attempt, no repair) · $12.25 → out/bookingapi-1
 ✓ shot-2: conformance passed (first attempt, no repair) · $11.66 → out/bookingapi-2
 ✓ All shots expose an identical OpenAPI interface
+✓ All shots produce an identical compiler-owned behavior snapshot
 ✓ Generation repeatable across 2 shot(s), zero repairs
 ```
 
@@ -243,9 +244,9 @@ repeatability report (.spec/agent.result.json) — no repair, ever
    `pytest conformance`). **There is no repair**: a failed first
    verification is a specification defect — pin the contract and
    regenerate (see [the golden rule](/guide/golden-rule)).
-4. **Repeat** — N independent shots (default 3) must all pass the
+4. **Repeat** — N independent shots (default 3) run in parallel and must all pass the
    *same* suite on the first attempt and expose the *same* normalized
-   OpenAPI interface.
+   OpenAPI interface and compiler-owned behavior snapshot.
 
 An agent-run infrastructure failure may retry the identical task prompt once.
 This is not generated-code repair: final conformance still runs exactly once
@@ -253,12 +254,11 @@ and is never patched or retried.
 
 ## Model selection
 
-`--model <id>` sends an explicit model override to Claude Code. Without an
-explicit override, `SPEC_AGENT_MODEL` is read by the CLI; the current CLI
-fallback is `glm-5.3-flash`. The lower-level runner appends Claude Code's
-`--model` flag only for a non-empty value, so integrations may instead allow
-Claude Code to resolve `ANTHROPIC_MODEL` from its own settings. The reference
-2-shot run used that path with `deepseek-v4-flash[1m]`.
+`--model <id>` sends an explicit model override to Claude Code. Without that
+flag, Claude Code resolves its model normally. The harness adds
+`--permission-mode acceptEdits` and its audited generation-tool allowlist so a
+headless session can write its scoped workspace; this does not select a model.
+`--max-turns` is also opt-in rather than an implicit default override.
 
 ## CLI options
 
@@ -267,8 +267,8 @@ Claude Code to resolve `ANTHROPIC_MODEL` from its own settings. The reference
 | `--shots <n>` | independent generations per spec | `3` |
 | `--dry-run` | plan only (blueprint + DAG), no agent | — |
 | `--out <dir>` | generated-app root | `out/` |
-| `--model <id>` | agent model | `SPEC_AGENT_MODEL` or `glm-5.3-flash` |
-| `--max-turns <n>` | agent turn budget per task | `60` |
+| `--model <id>` | explicit Claude Code model override | Claude Code default |
+| `--max-turns <n>` | explicit task turn-budget override | Claude Code default |
 
 Exit code `1` means a shot failed its first verification or shots
 diverged — the golden rule was not satisfied. There is deliberately no
@@ -285,3 +285,11 @@ repair option: fix the spec/blueprint and regenerate.
 
 The agent never grades itself: verification commands and the conformance
 suite are produced by the compiler and dropped after generation.
+
+## Infrastructure packages
+
+Cache, broker and blob packages contribute exact dependency pins, task-scoped
+Python/provider guidance, blueprint contracts and compiler-owned tests. The DAG
+adds `cache`, `messaging` and `blob` tasks only when the spec uses them. See
+[Backend infrastructure](/guide/infrastructure) and the larger
+`examples/media-platform/app.spec.ts` acceptance system.

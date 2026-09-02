@@ -1,9 +1,11 @@
 {
   "conformanceFiles": [
+    "conformance/behavior_snapshot.py",
     "conformance/conftest.py",
     "conformance/contract.json",
     "conformance/helpers.py",
-    "conformance/test_contract.py"
+    "conformance/test_contract.py",
+    "conformance/test_infrastructure.py"
   ],
   "dag": {
     "edges": [
@@ -113,7 +115,7 @@
         "dependsOn": [],
         "id": "project",
         "label": "project skeleton",
-        "promptSha256": "75a611c3fbc9c30f013c319c51f92c9996a6cde549a233080b9bf5e8f831c79d",
+        "promptSha256": "4b9f8682ac495a46a661b85fdf6002d96d80f9a62bc110fecdf8effbbc2c226b",
         "scope": [
           "pyproject.toml",
           "app/__init__.py",
@@ -129,7 +131,7 @@
         ],
         "id": "database",
         "label": "database layer",
-        "promptSha256": "a08ed57653f0e53c0bf748c387c469ed1235df24fa045b001b03472fbf89c4b3",
+        "promptSha256": "4d6ca3c493ba94c1b9255d92ba8e937aafd47cf91171375425351d1d83731216",
         "scope": [
           "app/config.py",
           "app/database.py"
@@ -144,7 +146,7 @@
         ],
         "id": "models",
         "label": "data models",
-        "promptSha256": "167998839ebc925eb87f1d8ffcdb6233e25a5f97dc64d4762b60fd21991a965a",
+        "promptSha256": "1d304e6ede27fd36828b335c9e20844055f82813f1e4d5cb61f29a4ceebd8dc7",
         "scope": [
           "app/models.py"
         ],
@@ -160,7 +162,7 @@
         ],
         "id": "schemas",
         "label": "pydantic schemas",
-        "promptSha256": "c09ae5cc2c3ca5c91808c28266c8bb93f876463e15d84ee7f145bf33aad7b642",
+        "promptSha256": "3d8881eb1596e33b08252ca6f5e0dcea160529a159cb4dbf32a27c9ee4dbf67a",
         "scope": [
           "app/schemas.py"
         ],
@@ -177,7 +179,7 @@
         ],
         "id": "security",
         "label": "auth security",
-        "promptSha256": "efa981e5ec2d623a7e798f6773de0f53ca13b74e0e090b5c6ec9ee3abfc80b7f",
+        "promptSha256": "437e0bcebda76ba93ad3bac3b534f08bde3b287246f2a91e1683076562ccd9bf",
         "scope": [
           "app/security.py",
           "app/deps.py"
@@ -195,7 +197,7 @@
         ],
         "id": "router:Booking",
         "label": "router: Booking",
-        "promptSha256": "9b0065bc0df516ee07ca52d7f474dab14edee8ffda147f872021e5191ed5d878",
+        "promptSha256": "4dff47305929affeab84e6c63dc7649a42aa75c2d0a06d97088044460b020e6f",
         "scope": [
           "app/routers/booking.py"
         ],
@@ -213,7 +215,7 @@
         ],
         "id": "router:User",
         "label": "router: User",
-        "promptSha256": "ce8edc21c2d8c562913b8c0630558c420ba28170f6115b655e495255e19b9c76",
+        "promptSha256": "5a13b3551ba99d2151cae14754aacfa75a4dcd270c9c4d0db1b6fc32e03c0a94",
         "scope": [
           "app/routers/user.py"
         ],
@@ -229,7 +231,7 @@
         ],
         "id": "router:Venue",
         "label": "router: Venue",
-        "promptSha256": "22b184bda7d82899f4aee01c8776c5855347463314269fab591c35fa0fe47838",
+        "promptSha256": "af5372cbaf69131c3c248a013be540cd77a20c36bd0b49331eb938c91dc8ee2b",
         "scope": [
           "app/routers/venue.py"
         ],
@@ -246,7 +248,7 @@
         ],
         "id": "router:auth",
         "label": "router: auth",
-        "promptSha256": "a0ef360e7d7da1c1434c39c89361f2ddaec1415d7ea02b64bd489065dfb6a14f",
+        "promptSha256": "565da28521233e576ad74f40bdc0eb8f5de7e8d01c6a4ddfa1887b31fa08b569",
         "scope": [
           "app/routers/auth.py"
         ],
@@ -264,7 +266,7 @@
         ],
         "id": "app",
         "label": "application wiring",
-        "promptSha256": "7971624f444cbad657a73d50caa0498fe934ed43faa4390c702211c278b153ce",
+        "promptSha256": "b24927e11042efa0a33eae1525f9219c91458119cbef39f4e8fce95b4ebfc20a",
         "scope": [
           "app/main.py"
         ],

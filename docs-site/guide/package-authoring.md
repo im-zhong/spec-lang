@@ -183,7 +183,53 @@ The compiler loads `@alice/spec-redis` through ordinary module resolution,
 runs its validators, links its capabilities and renders its nodes — all
 without a single change to `@spec/compiler`.
 
-## 8. Backend target packages
+## 8. Generation contributions
+
+Domain and provider packages can contribute deterministic engineering guidance
+and exact dependency pins to a target without making the target hard-code every
+package:
+
+```ts
+import { defineGeneration, definePackage } from "@spec/package-sdk"
+
+export default definePackage({
+  name: "@alice/spec-redis",
+  version: "0.1.0",
+  generation: [
+    defineGeneration({
+      id: "redis-python",
+      target: "fastapi-python",
+      nodeKinds: ["redis"],
+      tasks: ["project", "cache", "app"],
+      dependencies: { redis: "8.1.0" },
+      instructions: [
+        "Use one application-scoped redis.asyncio connection pool.",
+        "Apply explicit connect and operation timeouts.",
+        "Do not connect during module import.",
+      ],
+    }),
+  ],
+})
+```
+
+The compiler selects a contribution only when one of its `nodeKinds` is
+present, adds package/version provenance, sorts contributions by target,
+package and id, and writes them into `SpecIR.generation.contributions`.
+Conflicting dependency pins are compile errors. Identical IR therefore produces
+identical dependency sets and prompt text.
+
+`tasks` contains target-defined task kinds, not arbitrary prompt locations.
+The FastAPI target currently defines `project`, `models`, `database`, `schemas`,
+`security`, `router`, `cache`, `messaging`, `blob` and `app`. Guidance is scoped
+to matching tasks and is subordinate to the compiler-derived blueprint.
+
+Generation contributions should be concise and enforceable. If a rule affects
+observable behavior, add it to the blueprint and compiler-owned conformance
+suite as well; prompt prose alone is not a contract. Exact dependencies,
+prompt contributions, blueprint data and oracle assertions form one package
+feature.
+
+## 9. Backend target packages
 
 A package can go further than vocabulary + validation: it can be a
 **generation target**. `@spec/fastapi` is the reference implementation,

@@ -9,6 +9,11 @@ export {
   type BlueprintEntity,
   type BlueprintField,
   type BlueprintRoute,
+  type BlueprintProviderRef,
+  type BlueprintCache,
+  type BlueprintMessage,
+  type BlueprintQueue,
+  type BlueprintBlob,
   type RouteOperation,
   type HttpMethod,
 } from "./blueprint"
@@ -33,6 +38,9 @@ export {
   routerPrompt,
   authRouterPrompt,
   appPrompt,
+  cachePrompt,
+  messagingPrompt,
+  blobPrompt,
   type TaskPromptInput,
 } from "./prompt"
 export { fastApiVerification, type VerificationPlan, type VerificationCommand } from "./verify"

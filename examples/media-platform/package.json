@@ -1,0 +1,20 @@
+{
+  "name": "@spec/example-media-platform",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@spec/core": "workspace:*",
+    "@spec/web": "workspace:*",
+    "@spec/auth": "workspace:*",
+    "@spec/postgres": "workspace:*",
+    "@spec/cache": "workspace:*",
+    "@spec/redis": "workspace:*",
+    "@spec/messaging": "workspace:*",
+    "@spec/rabbitmq": "workspace:*",
+    "@spec/kafka": "workspace:*",
+    "@spec/sqs": "workspace:*",
+    "@spec/blob": "workspace:*",
+    "@spec/s3": "workspace:*",
+    "@spec/fastapi": "workspace:*"
+  }
+}

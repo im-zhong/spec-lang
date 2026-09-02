@@ -22,7 +22,7 @@ features:
     details: Specifications are ordinary .spec.ts files. You keep type inference, editors and tooling — but the compiler reads the AST, it never executes your code.
   - icon: 📦
     title: Semantic packages
-    details: Domain vocabulary (entity, crud, auth, postgres, fastapi) lives in packages that also carry validation rules and capabilities. Add @alice/spec-redis without touching the compiler.
+    details: Domain vocabulary and providers (web, auth, Postgres, cache/Redis, messaging/RabbitMQ/Kafka/SQS, blob/S3, FastAPI) carry validation, capabilities and deterministic generation guidance without compiler domain logic.
   - icon: 🔒
     title: Deterministic Spec IR
     details: The same source, package and compiler versions always produce a byte-identical spec.ir.json — verified 100 compiles at a time.
@@ -31,7 +31,7 @@ features:
     details: spec generate lowers the IR to a pinned behavioral blueprint and lets a headless coding agent implement it — FastAPI backends today, more targets via the package interface.
   - icon: ⚖️
     title: The golden rule
-    details: Same spec, several independent generations, identical behavior — real HTTP requests, state changes, errors, transitions and invariants. Enforced by a compiler-owned runtime conformance suite plus cross-shot OpenAPI equality.
+    details: Same spec, parallel independent generations, identical behavior — real HTTP and infrastructure contracts. Enforced by a compiler-owned runtime suite plus cross-shot OpenAPI and behavior snapshots.
   - icon: 🩺
     title: Structured diagnostics
     details: Every problem carries a code, level, source location and structured details — one machine protocol for static compilation, generation, verification and repeatability verdicts.

@@ -25,6 +25,16 @@ const SKIP_DIRS = new Set([
 /** Marker file written into workspaces this compiler created. */
 export const MARKER_FILE = ".spec-generated"
 
+/**
+ * Diagnostics file the runner tees agent stderr into. Harness-owned, like
+ * the marker: it changes on every run and must never surface as an agent
+ * artifact or a scope violation.
+ */
+export const STDERR_LOG_FILE = ".agent-stderr.log"
+
+/** Files that belong to the harness, not to the agent's output. */
+const SKIP_FILES = new Set([MARKER_FILE, STDERR_LOG_FILE])
+
 export function sha256(content: string | Buffer): string {
   return createHash("sha256").update(content).digest("hex")
 }
@@ -58,7 +68,7 @@ export function scanArtifacts(workspace: string, options: ScanOptions): Artifact
       return
     }
     for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
-      if (entry.name === MARKER_FILE) continue
+      if (SKIP_FILES.has(entry.name)) continue
       const entryRel = rel === "" ? entry.name : `${rel}/${entry.name}`
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name) || exclude.has(entryRel)) continue

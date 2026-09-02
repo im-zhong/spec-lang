@@ -115,6 +115,10 @@ packages/web          entity / field / crud / count / lifecycle / invariant /
                       expressions / effects + validators
 packages/auth         auth / password + validators
 packages/postgres     postgres resource + RelationalStore provider
+packages/cache redis  portable cache policies + Redis provider
+packages/messaging    message schemas, queues and portable delivery behavior
+packages/rabbitmq kafka sqs  broker providers
+packages/blob s3      portable object behavior + S3 provider
 packages/fastapi      backend target: blueprint, conformance suite, prompts,
                       verification plan (the traditional↔agentic bridge)
 packages/agent        Claude Code bridge: headless runner, shot orchestration,

@@ -65,6 +65,35 @@ export interface PackageReference {
   version: string
 }
 
+/**
+ * A deterministic, package-owned contribution to an agent generation
+ * target. Contributions are data (and therefore become part of the IR),
+ * not callbacks: the same package versions and spec always yield the same
+ * dependency pins and prompt guidance.
+ */
+export interface GenerationContribution {
+  /** Stable id within the package, e.g. "python-baseline". */
+  id: string
+  /** Generation target profile, e.g. "fastapi-python". */
+  target: string
+  /** Node kinds which activate this contribution. Empty/omitted = always. */
+  nodeKinds?: string[]
+  /** Target-defined task kinds which receive the instructions. */
+  tasks: string[]
+  /** Concise, imperative guidance composed into matching task prompts. */
+  instructions: string[]
+  /** Exact runtime dependency pins contributed to the generated project. */
+  dependencies?: Record<string, string>
+  /** Exact development dependency pins contributed to the generated project. */
+  devDependencies?: Record<string, string>
+}
+
+/** A selected contribution with package provenance attached by the compiler. */
+export interface MaterializedGenerationContribution extends GenerationContribution {
+  package: string
+  version: string
+}
+
 /** A package needs a capability provided by someone else. */
 export interface CapabilityRequirement {
   capability: string
@@ -89,6 +118,9 @@ export interface SpecIR {
     required: CapabilityRequirement[]
     provided: CapabilityProvider[]
   }
+  generation: {
+    contributions: MaterializedGenerationContribution[]
+  }
   diagnostics: Diagnostic[]
   metadata: {
     compilerVersion: string
@@ -100,7 +132,7 @@ export interface SpecIR {
   }
 }
 
-export const SPEC_IR_VERSION = "spec-ir/0.1"
+export const SPEC_IR_VERSION = "spec-ir/0.2"
 
 /* ------------------------------------------------------------------ */
 /* Package model                                                       */
@@ -168,6 +200,8 @@ export interface SpecPackage {
   capabilities?: CapabilityDefinition[]
   validators?: SpecValidator[]
   lowerings?: SpecLowering[]
+  /** Deterministic target guidance and dependency pins owned by the package. */
+  generation?: GenerationContribution[]
   /** Optional per-node-kind rendering hooks used by `spec inspect`. */
   inspectors?: Record<string, NodeInspector>
   metadata?: Record<string, unknown>

@@ -36,7 +36,10 @@ blueprint's own dependencies:
 project ──► models ──► schemas ─────────► router:<entity> ─┐
    │           │  ╲                              ▲         │
    │           │   ╲► security (auth only) ──────┘         │
-   └──► database ──────────────────────────────────────────┤
+   ├──► database ──────────────────────────────────────────┤
+   ├──► cache ─────────────────────────────────────────────┤
+   ├──► messaging ─────────────────────────────────────────┤
+   └──► blob ──────────────────────────────────────────────┤
                                       router:auth ──────────┤
                                                            ▼
                                                     app (wiring)
@@ -45,6 +48,7 @@ project ──► models ──► schemas ─────────► router
 ```ts
 interface DagTask {
   id: string          // "models" | "router:User" | "app" | …
+  kind: string        // stable selector for package guidance
   label: string
   dependsOn: string[]
   scope: string[]     // files this task owns — audited by the harness
@@ -56,8 +60,9 @@ interface DagTask {
 Derivation rules (all deterministic): one router task per served entity
 (count routes merge into their entity's router); `security` and
 `router:auth` exist only when the blueprint has auth; a router gains the
-`security` dependency only when one of its routes is protected; `app`
-depends on every router and on `database`. The DAG is topologically
+`security` dependency only when one of its routes is protected; `cache`,
+`messaging` and `blob` exist only when their contracts are present; `app`
+depends on every router, the database and active infrastructure tasks. The DAG is topologically
 sorted (Kahn, stable by id) and fingerprinted with prompts included —
 `agent.tasks.json` records the task list, edges and per-task prompt
 SHA-256 hashes.
@@ -69,16 +74,18 @@ SHA-256 hashes.
 
 ```
 claude -p --output-format json --permission-mode acceptEdits \
-       --max-turns <n> [--model <id>] \
-       --allowedTools Read Glob Grep LS Edit Write \
-                     Bash(uv:*) Bash(python:*) Bash(pytest:*) …
+  --allowedTools <generation file/Python allowlist>
 ```
 
 - the prompt arrives on **stdin**; the result is parsed from the JSON on
   stdout (session id, cost, turns, duration)
-- the tool allowlist is deliberately narrow: file tools plus the Python
-  toolchain. `rm` is absent — agents must not be able to destroy
-  workspaces
+- headless sessions receive the minimal file/Python tool authorization needed
+  to write and verify the scoped workspace; without it, print mode cannot ask
+  a person to approve writes and returns permission denials
+- model and turn-budget settings are not overridden; Claude Code uses its
+  configured/default model and budget
+- `--model` and `--max-turns` are appended only when the user explicitly
+  supplies the corresponding CLI option
 - wall-clock budget per run (45 min default), because slow model gateways
   otherwise hang shots forever
 
@@ -127,7 +134,7 @@ generation — **no repair, by policy**:
 
 ### The conformance suite
 
-Four files, generated from the blueprint (`packages/fastapi/src/conformance.ts`),
+Six files, generated from the blueprint (`packages/fastapi/src/conformance.ts`),
 dropped into every workspace:
 
 | File | Content |
@@ -135,6 +142,8 @@ dropped into every workspace:
 | `conformance/conftest.py` | `client` fixture — fresh `create_app(database_url="sqlite:///<tmp>")` + `TestClient` per test |
 | `conformance/helpers.py` | `body_for(entity)` builds valid create bodies (seeding ref targets recursively, principals via `/auth/register`), `create_row`, `auth_user` / `auth_token` |
 | `conformance/test_contract.py` | the assertions (below) |
+| `conformance/test_infrastructure.py` | cache, messaging and blob behavior using deterministic in-memory adapters; provider class presence |
+| `conformance/behavior_snapshot.py` | canonical cross-shot probe of HTTP interface and infrastructure behavior |
 | `conformance/contract.json` | the blueprint itself, shipped with the app |
 
 `test_contract.py` asserts, per blueprint:
@@ -160,6 +169,12 @@ dropped into every workspace:
 - **invariants** — compiler-derived minimally violating worlds for row
   checks and cross-row counts; the mutation rolls back with the pinned
   `409` body
+- **cache** — policy map, set/get/delete, mutation isolation, cache-aside
+  loading, policy/key errors
+- **messaging** — message schema rejection, stable envelopes, queue allowlists,
+  ordering and at-least-once deduplication
+- **blob** — key normalization and traversal rejection, byte/MIME limits,
+  put/get/delete and exact in-memory signed URLs
 
 Test values that must be unique are generated per call
 (`uuid`-based), so the suite itself never collides with unique
@@ -208,8 +223,10 @@ for each shot:            runShot()            (independent workspace)
 all shots conformant?                          → REPEATABLE (info)
 capture OpenAPI snapshot per shot               (deterministic python -c)
 snapshots identical?                           → INTERFACE_IDENTICAL
+run behavior_snapshot.py per shot
+snapshots identical?                           → BEHAVIOR_IDENTICAL
 else                                            → INTERFACE_DIVERGENT (error)
-ok = all conformant AND (single shot OR interfaces identical)
+ok = all conformant AND interfaces identical AND behaviors identical
 ```
 
 The snapshot normalizes each shot's `/openapi.json` to exactly:
@@ -221,13 +238,11 @@ The snapshot normalizes each shot's `/openapi.json` to exactly:
 Agent naming (operationIds, tags, descriptions) is dropped by
 construction — only client-observable interface facts are compared.
 
-The two gates prove complementary properties: every shot independently
+The three gates prove complementary properties: every shot independently
 passes the same functional runtime oracle, and every shot exposes the
-same normalized OpenAPI surface. The harness does **not yet** replay one
-shared request trace across all shots and compare response bytes or
-database snapshots directly; behavioral equality is therefore inferred
-from common-oracle conformance, not measured by a cross-shot differential
-runner.
+same normalized OpenAPI surface, and every shot produces the same canonical
+infrastructure behavior snapshot. The harness does **not** claim exhaustive
+equivalence for request sequences outside the compiler-derived contract.
 
 ## `agent.result.json`
 
@@ -238,6 +253,8 @@ session ids, costs, timings — and therefore gitignored):
 {
   ok: boolean
   interfaceEqual: boolean
+  behaviorEqual: boolean
+  behaviors: Array<{ shot: string, snapshot: string | null }>
   totalCostUsd: number
   shots: Array<{
     shot: string                       // "shot-1"

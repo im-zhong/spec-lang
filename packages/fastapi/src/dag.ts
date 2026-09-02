@@ -26,7 +26,10 @@ import type { BackendBlueprint } from "./blueprint"
 import {
   appPrompt,
   authRouterPrompt,
+  blobPrompt,
+  cachePrompt,
   databasePrompt,
+  messagingPrompt,
   modelsPrompt,
   projectPrompt,
   routerPrompt,
@@ -37,6 +40,8 @@ import {
 
 export interface DagTask {
   id: string
+  /** Stable target-defined kind used to select package guidance. */
+  kind: string
   label: string
   dependsOn: string[]
   /** Files this task owns (create/modify). */
@@ -55,7 +60,7 @@ export interface GenerationDag {
 }
 
 function irNodeIds(ir: SpecIR): string[] {
-  return ir.nodes.map((n) => n.id).filter((id) => /^(app|entity|crud|auth|api|fastapi|postgres):/.test(id)).sort()
+  return ir.nodes.map((n) => n.id).sort()
 }
 
 export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
@@ -69,6 +74,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
   /* ---- project skeleton (root) ---- */
   tasks.push({
     id: "project",
+    kind: "project",
     label: "project skeleton",
     dependsOn: [],
     scope: ["pyproject.toml", "app/__init__.py", ".gitignore"],
@@ -79,6 +85,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
   /* ---- data models ---- */
   tasks.push({
     id: "models",
+    kind: "models",
     label: "data models",
     dependsOn: ["project"],
     scope: ["app/models.py"],
@@ -89,6 +96,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
   /* ---- database layer ---- */
   tasks.push({
     id: "database",
+    kind: "database",
     label: "database layer",
     dependsOn: ["project"],
     scope: ["app/config.py", "app/database.py"],
@@ -99,6 +107,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
   /* ---- pydantic schemas ---- */
   tasks.push({
     id: "schemas",
+    kind: "schemas",
     label: "pydantic schemas",
     dependsOn: ["models"],
     scope: ["app/schemas.py"],
@@ -110,6 +119,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
   if (bp.auth) {
     tasks.push({
       id: "security",
+      kind: "security",
       label: "auth security",
       dependsOn: ["models", "database"],
       scope: ["app/security.py", "app/deps.py"],
@@ -128,6 +138,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     const file = routerFile(entityName)
     tasks.push({
       id: `router:${entityName}`,
+      kind: "router",
       label: `router: ${entityName}`,
       dependsOn: deps,
       scope: [file],
@@ -145,6 +156,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
   if (bp.auth) {
     tasks.push({
       id: "router:auth",
+      kind: "router",
       label: "router: auth",
       dependsOn: ["models", "schemas", "database", "security"],
       scope: ["app/routers/auth.py"],
@@ -153,10 +165,53 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     })
   }
 
+  /* ---- infrastructure adapters ---- */
+  if (bp.caches.length > 0) {
+    tasks.push({
+      id: "cache",
+      kind: "cache",
+      label: "cache infrastructure",
+      dependsOn: ["project"],
+      scope: ["app/cache.py"],
+      prompt: cachePrompt(bp, ctx(["app/cache.py"], ["app/__init__.py"])),
+      specNodeIds: all.filter((id) => id.startsWith("cache:") || id.startsWith("redis:")),
+    })
+  }
+  if (bp.queues.length > 0) {
+    tasks.push({
+      id: "messaging",
+      kind: "messaging",
+      label: "messaging infrastructure",
+      dependsOn: ["project"],
+      scope: ["app/messaging.py"],
+      prompt: messagingPrompt(bp, ctx(["app/messaging.py"], ["app/__init__.py"])),
+      specNodeIds: all.filter((id) => /^(message|queue|rabbitmq|kafka|sqs):/.test(id)),
+    })
+  }
+  if (bp.blobs.length > 0) {
+    tasks.push({
+      id: "blob",
+      kind: "blob",
+      label: "blob infrastructure",
+      dependsOn: ["project"],
+      scope: ["app/blob.py"],
+      prompt: blobPrompt(bp, ctx(["app/blob.py"], ["app/__init__.py"])),
+      specNodeIds: all.filter((id) => id.startsWith("blob:") || id.startsWith("s3:")),
+    })
+  }
+
   /* ---- application wiring (sink) ---- */
-  const appDeps = [...tasks.filter((t) => t.id.startsWith("router:")).map((t) => t.id), "database"]
+  const infrastructureDeps = ["cache", "messaging", "blob"].filter((id) =>
+    tasks.some((task) => task.id === id),
+  )
+  const appDeps = [
+    ...tasks.filter((t) => t.id.startsWith("router:")).map((t) => t.id),
+    "database",
+    ...infrastructureDeps,
+  ]
   tasks.push({
     id: "app",
+    kind: "app",
     label: "application wiring",
     dependsOn: appDeps,
     scope: ["app/main.py"],
@@ -185,6 +240,9 @@ function contextFor(depIds: string[]): string[] {
     database: ["app/config.py", "app/database.py"],
     schemas: ["app/schemas.py"],
     security: ["app/security.py", "app/deps.py"],
+    cache: ["app/cache.py"],
+    messaging: ["app/messaging.py"],
+    blob: ["app/blob.py"],
     "router:auth": ["app/routers/auth.py"],
   }
   const files: string[] = []
@@ -222,6 +280,7 @@ export function dagFingerprint(dag: GenerationDag): string {
   return stableStringify({
     tasks: dag.tasks.map((t) => ({
       id: t.id,
+      kind: t.kind,
       label: t.label,
       dependsOn: [...t.dependsOn].sort(),
       scope: t.scope,

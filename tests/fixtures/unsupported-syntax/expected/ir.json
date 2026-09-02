@@ -28,6 +28,9 @@
       }
     }
   ],
+  "generation": {
+    "contributions": []
+  },
   "metadata": {
     "compilerVersion": "0.1.0"
   },
@@ -78,5 +81,5 @@
       "version": "0.1.0"
     }
   ],
-  "version": "spec-ir/0.1"
+  "version": "spec-ir/0.2"
 }

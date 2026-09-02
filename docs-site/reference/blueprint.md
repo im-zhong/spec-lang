@@ -32,11 +32,74 @@ interface BackendBlueprint {
     columns: { id: "uuid"; event: "text"; payload: "json"; created_at: "datetime" }
   }
   auth?: BlueprintAuth
+  caches: BlueprintCache[]
+  messages: BlueprintMessage[]
+  queues: BlueprintQueue[]
+  blobs: BlueprintBlob[]
+  generation: {
+    target: "fastapi-python"
+    contributions: MaterializedGenerationContribution[]
+  }
   database: { engine: "postgres" | "sqlite"; urlEnv: string; fallback: string; urlFormat: "sqlalchemy-url" }
   stack: BackendStack
   contract: BackendContract
 }
 ```
+
+### Infrastructure contracts
+
+`caches`, `messages`, `queues` and `blobs` pin infrastructure behavior just
+as `routes` pins HTTP behavior. Provider references include provider name,
+kind and deterministic configuration:
+
+```ts
+interface BlueprintCache {
+  name: string
+  provider: BlueprintProviderRef       // redis
+  keyPrefix: string
+  ttlSeconds: number
+  failureMode: "bypass" | "fail-closed"
+  stampedeProtection: boolean
+}
+
+interface BlueprintMessage {
+  name: string
+  fields: Record<string, "string" | "int" | "boolean" | "uuid" | "datetime">
+}
+
+interface BlueprintQueue {
+  name: string
+  provider: BlueprintProviderRef       // rabbitmq | kafka | sqs
+  messages: string[]
+  delivery: "at-least-once" | "at-most-once"
+  maxAttempts: number
+  backoffSeconds: number
+  deadLetter?: string
+  orderingKey?: string
+}
+
+interface BlueprintBlob {
+  name: string
+  provider: BlueprintProviderRef       // s3
+  bucket: string
+  keyPrefix: string
+  maxBytes: number
+  contentTypes: string[]
+  signedUrlTtlSeconds: number
+  retentionDays?: number
+}
+```
+
+The generated conformance suite exercises portable behavior through
+in-memory adapters and checks that selected provider adapters exist. No live
+infrastructure is required by the oracle.
+
+### `generation`
+
+Package-owned contributions selected by the compiler are preserved with
+package/version provenance. The target merges exact dependency pins into
+`stack` and composes instructions only into matching task kinds. This block is
+part of blueprint and DAG fingerprints.
 
 ### `entities`
 
@@ -187,8 +250,9 @@ interface BlueprintAuth {
 The generated technology stack is contract data, not an agent choice.
 Defaults pin Python `3.13` and exact versions of FastAPI, Uvicorn,
 SQLAlchemy, Pydantic, PyJWT, bcrypt, pytest and httpx. A spec may override
-individual values through `fastapi({ stack: ... })`; the resolved, sorted
-map is written to the blueprint and prompts.
+individual values through `fastapi({ stack: ... })`; active package
+contributions add their exact provider dependencies. The resolved, sorted map
+is written to the blueprint and prompts.
 
 ```ts
 interface BackendStack {

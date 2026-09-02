@@ -10,6 +10,8 @@
  *                         spec; verify against the compiler's conformance
  *                         suite; repeat N independent shots and require
  *                         identical behavior (the golden rule)
+ *   spec generate-frontend <file>  same protocol for a React frontend,
+ *                                  including Playwright visual equality
  *
  * Exit codes:
  *   0  success
@@ -22,7 +24,8 @@ import { createHash } from "node:crypto"
 import { compile, renderSpecTree, stableStringify, writeArtifacts, COMPILER_VERSION } from "@spec/compiler"
 import { InternalCompilerError, createLogger, type Diagnostic } from "@spec/core"
 import { planGeneration } from "@spec/fastapi"
-import { runRepeatability, type ShotSpec } from "@spec/agent"
+import { compareFrontendShots, planFrontendGeneration } from "@spec/react"
+import { runRepeatability, runShot, type ShotSpec } from "@spec/agent"
 
 interface CliArgs {
   command: string | undefined
@@ -33,7 +36,7 @@ interface CliArgs {
   out: string | undefined
   shots: number
   model: string | undefined
-  maxTurns: number
+  maxTurns: number | undefined
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -45,8 +48,8 @@ function parseArgs(argv: string[]): CliArgs {
     dryRun: false,
     out: undefined,
     shots: 3,
-    model: process.env.SPEC_AGENT_MODEL,
-    maxTurns: 60,
+    model: undefined,
+    maxTurns: undefined,
   }
   const positional: string[] = []
   for (let i = 0; i < argv.length; i++) {
@@ -76,19 +79,26 @@ Usage:
                                   shot must pass the compiler's conformance suite
                                   on the FIRST attempt and all shots must expose
                                   the same interface (the golden rule)
+  spec generate-frontend <file.spec.ts>
+                                  Generate independent React shots from the UI
+                                  blueprint; Playwright verifies behavior and
+                                  pixel-identical layout on the first attempt
 
 Options:
   --dry-run                 Plan only: write blueprint + DAG, no agent
   --out <dir>               Generation output root (default "out/")
   --shots <n>               Independent generations per spec (default 3)
-  --model <id>              Agent model (default SPEC_AGENT_MODEL or glm-5.3-flash)
-  --max-turns <n>           Agent turn budget per task (default 60)
+  --model <id>              Override Claude Code's configured/default model
+  --max-turns <n>           Override Claude Code's configured/default turn budget
   --debug                   Show internal stack traces
   --help                    Show this help
 
 There is deliberately no repair option: a nonconformant shot is a
 specification defect. Pin the behavior in the spec/blueprint, then
 regenerate all shots.
+
+Headless sessions authorize only the audited generation file/Python tools;
+model selection and turn budget remain Claude Code defaults unless overridden.
 `
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -97,7 +107,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stdout.write(USAGE)
     return args.command === undefined && !args.help ? 2 : 0
   }
-  if (!["check", "build", "inspect", "generate"].includes(args.command!)) {
+  if (!["check", "build", "inspect", "generate", "generate-frontend"].includes(args.command!)) {
     process.stderr.write(`Unknown command "${args.command}".\n\n${USAGE}`)
     return 2
   }
@@ -149,11 +159,94 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return 0
     }
 
-    // ---------------- generate ----------------
+    // ---------------- generate / generate-frontend ----------------
     if (!result.ok) {
       process.stderr.write("✗ Specification invalid — fix these before generating:\n\n")
       printDiagnostics(result.diagnostics)
       return 1
+    }
+
+    if (args.command === "generate-frontend") {
+      const plan = planFrontendGeneration(result.ir)
+      const specDir = path.resolve(projectRoot, result.outputDir)
+      fs.mkdirSync(specDir, { recursive: true })
+      fs.writeFileSync(path.join(specDir, "frontend.blueprint.json"), stableStringify(plan.blueprint) + "\n", "utf8")
+      fs.writeFileSync(
+        path.join(specDir, "frontend.agent.tasks.json"),
+        stableStringify({
+          dag: {
+            tasks: plan.dag.tasks.map((task) => ({
+              id: task.id,
+              label: task.label,
+              dependsOn: task.dependsOn,
+              scope: task.scope,
+              promptSha256: createHash("sha256").update(task.prompt).digest("hex"),
+              specNodeIds: task.specNodeIds,
+            })),
+            edges: plan.dag.edges,
+          },
+          verification: plan.verification,
+          seedFiles: Object.keys(plan.seedFiles).sort(),
+          conformanceFiles: Object.keys(plan.conformance.files).sort(),
+        }) + "\n",
+        "utf8",
+      )
+      process.stdout.write(
+        `✓ Frontend plan derived: ${plan.blueprint.screens.length} screen(s), ${plan.blueprint.components.length} component kind(s), ${plan.dag.tasks.length} DAG task(s)\n`,
+      )
+      if (args.dryRun) {
+        process.stdout.write(`✓ Frontend dry run complete — artifacts in ${path.relative(projectRoot, specDir)}\n`)
+        return 0
+      }
+
+      const outRoot = args.out ? path.resolve(projectRoot, args.out) : path.join(projectRoot, "out")
+      const workspaces = Array.from({ length: args.shots }, (_, index) => ({
+        shot: `shot-${index + 1}`,
+        workspace: path.join(outRoot, `${plan.blueprint.app.name.toLowerCase()}-frontend-${index + 1}`),
+      }))
+      const shotSpec: ShotSpec = {
+        tasks: plan.dag.tasks,
+        seedFiles: plan.seedFiles,
+        conformanceFiles: plan.conformance.files,
+        conformanceDirs: ["conformance", "conformance-output"],
+        verification: plan.verification,
+        generatedBy: "react:dag",
+      }
+      process.stdout.write(`⟳ Generating ${args.shots} independent frontend shot(s) in parallel; each receives the same immutable runtime and oracle…\n`)
+      const shots = await Promise.all(workspaces.map(({ shot, workspace }) => runShot(shot, workspace, shotSpec, {
+        model: args.model,
+        maxTurns: args.maxTurns,
+      })))
+      const equality = compareFrontendShots(workspaces)
+      const ok = shots.every((shot) => shot.ok) && equality.ok
+      for (const shot of shots) {
+        process.stdout.write(`${shot.ok ? "✓" : "✗"} ${shot.shot}: ${shot.ok ? "Playwright conformance passed (first attempt, no repair)" : "FAILED"} → ${path.relative(projectRoot, shot.workspace)}\n`)
+      }
+      process.stdout.write(equality.layoutEqual ? "✓ Initial layout screenshots are pixel-identical\n" : "✗ Initial layout screenshots differ\n")
+      process.stdout.write(equality.behaviorImageEqual ? "✓ Post-interaction screenshots are pixel-identical\n" : "✗ Post-interaction screenshots differ\n")
+      process.stdout.write(equality.behaviorEqual ? "✓ Browser behavior snapshots are identical\n" : "✗ Browser behavior snapshots differ\n")
+      fs.writeFileSync(
+        path.join(specDir, "frontend.result.json"),
+        stableStringify({
+          ok,
+          equality,
+          shots: shots.map((shot) => ({
+            shot: shot.shot,
+            workspace: shot.workspace,
+            ok: shot.ok,
+            tasks: shot.tasks,
+            verification: shot.verification,
+            diagnostics: shot.diagnostics,
+            artifacts: shot.artifacts,
+            totalCostUsd: shot.totalCostUsd,
+          })),
+        }) + "\n",
+        "utf8",
+      )
+      process.stdout.write(ok
+        ? `✓ Frontend generation satisfies the golden rule across ${shots.length} shots\n`
+        : `✗ Frontend generation violated the golden rule; redesign the spec/runtime and regenerate every shot\n`)
+      return ok ? 0 : 1
     }
 
     const plan = planGeneration(result.ir)
@@ -215,9 +308,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stdout.write(
       `⟳ Generating ${args.shots} independent shot(s) in parallel, ${plan.dag.tasks.length} DAG tasks each (this takes a while)…\n`,
     )
-    const model = args.model ?? "glm-5.3-flash"
     const report = await runRepeatability(shotSpec, workspaces, {
-      model,
+      model: args.model,
       maxTurns: args.maxTurns,
     })
 
@@ -240,6 +332,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
           ? "✓ All shots expose an identical OpenAPI interface\n"
           : "✗ Shots expose DIFFERENT interfaces (golden rule violated)\n",
       )
+      process.stdout.write(
+        report.behaviorEqual
+          ? "✓ All shots produce an identical compiler-owned behavior snapshot\n"
+          : "✗ Shots behave DIFFERENTLY (golden rule violated)\n",
+      )
     }
 
     fs.writeFileSync(
@@ -247,6 +344,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       stableStringify({
         ok: report.ok,
         interfaceEqual: report.interfaceEqual,
+        behaviorEqual: report.behaviorEqual,
+        behaviors: report.behaviors,
         totalCostUsd: report.totalCostUsd,
         shots: report.shots.map((s) => ({
           shot: s.shot,

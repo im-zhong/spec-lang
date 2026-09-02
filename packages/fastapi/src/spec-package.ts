@@ -1,4 +1,4 @@
-import { definePackage, defineNode, defineValidator, diag } from "@spec/package-sdk"
+import { defineGeneration, definePackage, defineNode, defineValidator, diag } from "@spec/package-sdk"
 import type { Diagnostic, SpecNode } from "@spec/core"
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -25,7 +25,7 @@ export const validateFastApi = defineValidator("fastapi/validate-server", (ctx) 
   const byId = new Map(all.map((n) => [n.id, n]))
 
   for (const server of ctx.findNodes("fastapi")) {
-    const serviceKinds = new Set(["crud", "api", "auth", "lifecycle", "invariant"])
+    const serviceKinds = new Set(["crud", "api", "auth", "lifecycle", "invariant", "cache", "queue", "blob"])
     const services = server.attributes.services
     if (!Array.isArray(services) || services.length === 0) {
       diagnostics.push(
@@ -66,7 +66,7 @@ export const validateFastApi = defineValidator("fastapi/validate-server", (ctx) 
             diag(
               "FASTAPI_SERVICE_KIND_UNSUPPORTED",
               "error",
-              `FastAPI cannot serve "${target.id}" of kind "${target.kind}" (supported: crud, api, auth, lifecycle, invariant).`,
+              `FastAPI cannot serve "${target.id}" of kind "${target.kind}" (supported: crud, api, auth, lifecycle, invariant, cache, queue, blob).`,
               { nodeId: server.id, details: { service: ref.nodeId, kind: target.kind } },
             ),
           )
@@ -193,4 +193,20 @@ export default definePackage({
   nodeKinds: [defineNode("fastapi")],
   validators: [validateFastApi],
   inspectors: { fastapi: inspectFastApi },
+  generation: [
+    defineGeneration({
+      id: "python-fastapi-baseline",
+      target: "fastapi-python",
+      nodeKinds: ["fastapi"],
+      tasks: ["project", "models", "database", "schemas", "security", "router", "cache", "messaging", "blob", "app"],
+      instructions: [
+        "Use Python 3.13 type hints on public functions and concrete return types; avoid Any except at serialization boundaries.",
+        "Keep asynchronous I/O non-blocking and move unavoidable blocking SDK calls to asyncio.to_thread.",
+        "Create network clients and pools in FastAPI lifespan, inject them into services, and close them in reverse order.",
+        "Use typed settings for configuration, explicit timeouts, bounded retries, and structured logging without secrets or payload bodies.",
+        "Keep provider adapters behind small protocols and make every behavior independently testable with deterministic in-memory adapters.",
+        "Do not catch broad exceptions unless translating them into a contract-defined typed error while preserving the original cause.",
+      ],
+    }),
+  ],
 })

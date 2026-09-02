@@ -10,7 +10,7 @@ generation DAGs, compiler-owned conformance suites and agent runs.
 
 ```json
 {
-  "version": "spec-ir/0.1",
+  "version": "spec-ir/0.2",
   "app": { "name": "ExampleApp" },
   "packages": [
     { "name": "@spec/auth", "version": "0.1.0" },
@@ -23,6 +23,7 @@ generation DAGs, compiler-owned conformance suites and agent runs.
     "required": [{ "capability": "RelationalStore", "requester": "auth:MainAuth" }],
     "provided": [{ "capability": "RelationalStore", "provider": "postgres:MainDB" }]
   },
+  "generation": { "contributions": [ /* package-owned target guidance */ ] },
   "diagnostics": [ /* ... */ ],
   "metadata": { "compilerVersion": "0.1.0" }
 }
@@ -68,10 +69,10 @@ reproduce a build months later from the manifest.
 
 ## Versioning
 
-The IR carries `version: "spec-ir/0.1"`. Breaking changes will bump to
-`spec-ir/0.2`, then `spec-ir/1.0` — consumers can dispatch on the version
-string. Future formats (e.g. Protobuf) may be added; JSON is the current
-format.
+The IR carries `version: "spec-ir/0.2"`. Version 0.2 adds deterministic,
+package-provenanced generation contributions and exact dependency pins.
+Breaking changes bump the version string so consumers can dispatch safely.
+Future formats (e.g. Protobuf) may be added; JSON is the current format.
 
 ## The manifest
 

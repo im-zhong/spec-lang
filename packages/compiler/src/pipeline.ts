@@ -18,6 +18,7 @@ import type {
   CapabilityProvider,
   CapabilityRequirement,
   Diagnostic,
+  MaterializedGenerationContribution,
   SpecIR,
   SpecNode,
   ValidationContext,
@@ -50,6 +51,7 @@ export interface Compilation {
     provided: CapabilityProvider[]
   }
   diagnostics: Diagnostic[]
+  generationContributions: MaterializedGenerationContribution[]
   ir?: SpecIR
 }
 
@@ -280,8 +282,77 @@ function compareCapabilities(
 }
 
 export function lowerPass(compilation: Compilation): Compilation {
-  // Extension point for package lowerings, formal verification passes and
-  // future agentic passes. No lowerings are registered in the MVP.
+  const activeKinds = new Set(flattenAll(compilation.nodes).map((node) => node.kind))
+  const selected: MaterializedGenerationContribution[] = []
+
+  for (const loaded of compilation.loadedPackages) {
+    for (const contribution of loaded.definition.generation ?? []) {
+      if (
+        contribution.nodeKinds &&
+        contribution.nodeKinds.length > 0 &&
+        !contribution.nodeKinds.some((kind) => activeKinds.has(kind))
+      ) {
+        continue
+      }
+      selected.push({
+        ...serializeValue(contribution) as typeof contribution,
+        package: loaded.name,
+        version: loaded.version,
+      })
+    }
+  }
+
+  selected.sort((left, right) => {
+    const leftKey = `${left.target}\0${left.package}\0${left.id}`
+    const rightKey = `${right.target}\0${right.package}\0${right.id}`
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
+  })
+
+  const ids = new Set<string>()
+  const dependencyPins = new Map<string, { version: string; owner: string }>()
+  for (const contribution of selected) {
+    const id = `${contribution.target}:${contribution.package}:${contribution.id}`
+    if (ids.has(id)) {
+      compilation.diagnostics.push(
+        diagnostic(
+          "GENERATION_CONTRIBUTION_DUPLICATE",
+          "error",
+          `Generation contribution "${id}" is registered more than once.`,
+          { details: { contribution: id } },
+        ),
+      )
+    }
+    ids.add(id)
+
+    for (const [name, version] of Object.entries({
+      ...(contribution.dependencies ?? {}),
+      ...(contribution.devDependencies ?? {}),
+    })) {
+      const key = `${contribution.target}:${name}`
+      const previous = dependencyPins.get(key)
+      if (previous && previous.version !== version) {
+        compilation.diagnostics.push(
+          diagnostic(
+            "GENERATION_DEPENDENCY_CONFLICT",
+            "error",
+            `Generation target "${contribution.target}" received conflicting pins for "${name}": "${previous.version}" from ${previous.owner} and "${version}" from ${contribution.package}.`,
+            {
+              details: {
+                target: contribution.target,
+                dependency: name,
+                versions: [previous.version, version].sort(),
+                packages: [previous.owner, contribution.package].sort(),
+              },
+            },
+          ),
+        )
+      } else {
+        dependencyPins.set(key, { version, owner: contribution.package })
+      }
+    }
+  }
+
+  compilation.generationContributions = selected
   return compilation
 }
 
@@ -293,6 +364,7 @@ export function emitPass(compilation: Compilation): Compilation {
     packages: compilation.loadedPackages.map((p) => ({ name: p.name, version: p.version })),
     nodes: compilation.nodes,
     capabilities: compilation.capabilities,
+    generation: { contributions: compilation.generationContributions },
     diagnostics: compilation.diagnostics,
     metadata: { compilerVersion: COMPILER_VERSION },
   }

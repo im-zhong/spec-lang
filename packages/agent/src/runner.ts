@@ -63,6 +63,23 @@ export const DEFAULT_ALLOWED_TOOLS = [
   "Bash(sed:*)",
 ]
 
+/** Build CLI arguments without silently overriding Claude Code settings. */
+export function buildClaudeArgs(options: AgentRunnerOptions = {}): string[] {
+  const permissionMode = options.permissionMode ?? "acceptEdits"
+  const allowedTools = options.allowedTools ?? DEFAULT_ALLOWED_TOOLS
+  const args = [
+    "-p",
+    "--output-format",
+    "json",
+    "--permission-mode",
+    permissionMode,
+  ]
+  if (options.model) args.push("--model", options.model)
+  if (options.maxTurns !== undefined) args.push("--max-turns", String(options.maxTurns))
+  if (allowedTools.length > 0) args.push("--allowedTools", ...allowedTools)
+  return args
+}
+
 export class ClaudeCodeAgentRunner {
   readonly model?: string
   private readonly options: AgentRunnerOptions
@@ -76,26 +93,12 @@ export class ClaudeCodeAgentRunner {
   run(prompt: string, cwd: string): Promise<AgentRunResult> {
     const {
       cli = "claude",
-      model,
-      maxTurns = 60,
-      permissionMode = "acceptEdits",
-      allowedTools = DEFAULT_ALLOWED_TOOLS,
       env,
       timeoutMs = 45 * 60_000,
       stderrLogFile,
     } = this.options
 
-    const args = [
-      "-p",
-      "--output-format",
-      "json",
-      "--permission-mode",
-      permissionMode,
-      "--max-turns",
-      String(maxTurns),
-    ]
-    if (model) args.push("--model", model)
-    if (allowedTools.length > 0) args.push("--allowedTools", ...allowedTools)
+    const args = buildClaudeArgs(this.options)
 
     return new Promise<AgentRunResult>((resolve) => {
       const child = spawn(cli, args, {

@@ -22,7 +22,7 @@ describe("compiler pipeline", () => {
   it("IR expresses the full acceptance surface (spec §59)", async () => {
     const result = await fixture("valid-basic-app")
     const ir = result.ir
-    expect(ir.version).toBe("spec-ir/0.1")
+    expect(ir.version).toBe("spec-ir/0.2")
     expect(ir.app.name).toBe("ExampleApp")
     expect(ir.metadata.compilerVersion).toBe("0.1.0")
 

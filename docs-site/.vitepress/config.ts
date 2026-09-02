@@ -37,6 +37,7 @@ export default defineConfig({
           text: "Deep Dive",
           items: [
             { text: "Source walkthrough: booking, end to end", link: "/deep-dive/source-walkthrough" },
+            { text: "Source walkthrough: frontend-golden", link: "/deep-dive/frontend-walkthrough" },
           ],
         },
       ],
@@ -56,6 +57,8 @@ export default defineConfig({
             { text: "REST resources", link: "/guide/rest-resources" },
             { text: "Authentication", link: "/guide/authentication" },
             { text: "Databases", link: "/guide/database" },
+            { text: "Backend infrastructure", link: "/guide/infrastructure" },
+            { text: "Frontend UIs", link: "/guide/frontend" },
             { text: "The application root", link: "/guide/app-root" },
           ],
         },

@@ -150,6 +150,10 @@ pinned by the compiler — and provably identical across generations.
 | `@spec/web`          | Domain package: `entity`, `field`, `crud`, `count`, `page`, `api` |
 | `@spec/auth`         | Domain package: `auth`, `password` (requires `RelationalStore`) |
 | `@spec/postgres`     | Domain package: `postgres` (provides `RelationalStore`)     |
+| `@spec/cache` / `@spec/redis` | Portable cache policies + Redis provider (`CacheStore`) |
+| `@spec/messaging` | Messages, queues, delivery, retry, ordering and dead letters |
+| `@spec/rabbitmq` / `@spec/kafka` / `@spec/sqs` | Message broker providers |
+| `@spec/blob` / `@spec/s3` | Portable object-storage behavior + S3 provider |
 | `@spec/fastapi`      | Backend target: blueprint + generation DAG + conformance suite + verification plan |
 | `@spec/agent`        | Agent harness: headless Claude Code runner, DAG execution, shot orchestration, repeatability |
 | `@spec/compiler`     | Static compiler: TS AST → Spec IR (deterministic, structured diagnostics) |
@@ -184,8 +188,8 @@ spec generate <file>  compile → blueprint → agent shots → conformance + re
                     on the FIRST attempt and expose an identical interface
 --dry-run           plan only (blueprint + DAG), no agent
 --out <dir>         generated-app root (default "out/")
---model <id>        agent model (default SPEC_AGENT_MODEL)
---max-turns <n>     agent turn budget per DAG task (default 60)
+--model <id>        explicit Claude Code model override (default: Claude settings)
+--max-turns <n>     explicit turn-budget override (default: Claude settings)
 ```
 
 There is deliberately no repair option: a nonconformant shot is a
@@ -224,18 +228,20 @@ ordinary Node.js module resolution from your spec file.
 
 ## Test projects (anti-overfitting)
 
-Three structurally different applications, all held to the golden rule:
+Four structurally different applications, all held to the golden rule:
 
 | Example | Purpose | Size | Features |
 | --- | --- | --- | --- |
 | `examples/cblog` | content CMS | 3 entities | auth, two-level refs, full CRUD, all routes protected |
 | `examples/inventory` | inventory service | 2 entities | **no auth**, string uniques, defaults, count endpoint, `/api/v1` prefix |
 | `examples/booking` | reservation service | 3 entities | mixed public/protected, datetime fields, partial CRUD subsets, count |
+| `examples/media-platform` | production-style media operations | 10 entities / 324 spec lines | all infrastructure packages, auth, 3 lifecycles, 4 invariants, 62 routes |
 
 ```bash
 pnpm spec generate examples/cblog/app.spec.ts --shots 2
 pnpm spec generate examples/inventory/app.spec.ts --shots 2
 pnpm spec generate examples/booking/app.spec.ts --shots 2
+pnpm spec generate examples/media-platform/app.spec.ts --shots 2
 ```
 
 Each run generates 3 independent applications via the generation DAG,

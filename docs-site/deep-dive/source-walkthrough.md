@@ -357,7 +357,7 @@ No package-specific branch exists in the compiler. The resulting capability
 edges are sorted into the IR.
 
 The static `lowerPass()` is currently a no-op. `emitPass()` writes
-`spec-ir/0.1`; target-specific lowering starts later from `spec generate`.
+`spec-ir/0.2`; target-specific lowering starts later from `spec generate`.
 `stableStringify()` recursively sorts keys, and generated timestamps are
 omitted, so repeated static builds are byte-identical.
 
@@ -623,7 +623,7 @@ Entry: `packages/agent/src/runner.ts` and
 The runner launches Claude Code headlessly:
 
 ```text
-claude -p --output-format json --permission-mode acceptEdits
+claude -p --output-format json
        --max-turns 60
        --allowedTools Read Glob Grep LS Edit Write Bash(uv:*) Bash(python:*) ...
 ```

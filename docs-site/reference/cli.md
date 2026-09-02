@@ -68,16 +68,16 @@ Artifacts written to the output dir: `blueprint.json`,
 | `--shots <n>`          | Independent generations per spec              | `3`     |
 | `--dry-run`            | Plan only (blueprint + DAG), no agent         | —       |
 | `--out <dir>`          | Generated-app root                            | `out/`  |
-| `--model <id>`         | Agent model                                   | `SPEC_AGENT_MODEL` or `glm-5.3-flash` |
-| `--max-turns <n>`      | Agent turn budget per DAG task                | `60`    |
+| `--model <id>`         | Explicit Claude Code model override           | Claude Code default |
+| `--max-turns <n>`      | Explicit turn-budget override per DAG task    | Claude Code default |
 
 There is deliberately no repair option: a shot that fails its first
 verification is a specification defect (pin the contract, regenerate).
 
-The CLI resolves `--model` from the explicit option, then
-`SPEC_AGENT_MODEL`, then `glm-5.3-flash`, and passes that value to the
-agent runner. At the lower-level runner API, `--model` is omitted when no
-model is supplied, so Claude Code's own settings can select the model.
+Without explicit model/turn overrides Claude Code selects its normal model and
+budget. The headless runner still supplies `acceptEdits` plus an audited
+generation file/Python allowlist because print mode cannot interactively
+approve writes. The CLI appends model or turn-budget flags only when requested.
 
 ## Configuration
 

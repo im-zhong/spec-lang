@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { parseResultJson } from "../src/runner"
+import { buildClaudeArgs, parseResultJson } from "../src/runner"
 import { normalizeJson, OPENAPI_SNIPPET } from "../src/repeatability"
 import { isCompilerWorkspace, MARKER_FILE, prepareWorkspace, scanArtifacts, sha256 } from "../src/artifacts"
 import { runCommand } from "../src/orchestrate"
@@ -10,6 +10,18 @@ import { AgentHarness, schedule, type HarnessTask } from "../src/harness"
 import type { AgentRunResult, ClaudeCodeAgentRunner } from "../src/runner"
 
 describe("parseResultJson", () => {
+  it("uses Claude Code defaults unless overrides are explicit", () => {
+    const defaults = buildClaudeArgs()
+    expect(defaults.slice(0, 5)).toEqual([
+      "-p", "--output-format", "json", "--permission-mode", "acceptEdits",
+    ])
+    expect(defaults).not.toContain("--model")
+    expect(defaults).not.toContain("--max-turns")
+    expect(defaults).toContain("--allowedTools")
+    const overridden = buildClaudeArgs({ model: "custom", maxTurns: 12 })
+    expect(overridden).toContain("custom")
+    expect(overridden).toContain("12")
+  })
   it("parses a clean result payload", () => {
     const payload = parseResultJson(
       '{"is_error":false,"result":"done","session_id":"s1","total_cost_usd":0.5,"num_turns":3}',

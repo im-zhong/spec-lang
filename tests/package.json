@@ -12,6 +12,14 @@
     "@spec/cli": "workspace:*",
     "@spec/fastapi": "workspace:*",
     "@spec/agent": "workspace:*"
+    ,"@spec/cache": "workspace:*"
+    ,"@spec/redis": "workspace:*"
+    ,"@spec/messaging": "workspace:*"
+    ,"@spec/rabbitmq": "workspace:*"
+    ,"@spec/kafka": "workspace:*"
+    ,"@spec/sqs": "workspace:*"
+    ,"@spec/blob": "workspace:*"
+    ,"@spec/s3": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^2.1.8"

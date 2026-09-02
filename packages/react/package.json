@@ -1,0 +1,24 @@
+{
+  "name": "@spec/react",
+  "version": "0.1.0",
+  "description": "React frontend target: deterministic blueprint, compiler-owned UI runtime, agent task, and Playwright conformance",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@spec/core": "workspace:*",
+    "@spec/package-sdk": "workspace:*",
+    "@spec/ui": "workspace:*"
+  },
+  "spec": {
+    "package": true,
+    "entry": "./dist/spec-package.js"
+  },
+  "devDependencies": {
+    "@spec/compiler": "workspace:*",
+    "vitest": "^2.1.8"
+  }
+}

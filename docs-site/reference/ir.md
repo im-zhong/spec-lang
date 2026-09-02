@@ -1,18 +1,21 @@
 # Spec IR format reference
 
-Current version: **`spec-ir/0.1`**
+Current version: **`spec-ir/0.2`**
 
 ## Top level
 
 ```ts
 interface SpecIR {
-  version: string                  // "spec-ir/0.1"
+  version: string                  // "spec-ir/0.2"
   app: { name: string }
   packages: PackageReference[]     // sorted by name
   nodes: SpecNode[]                // sorted by id
   capabilities: {
     required: CapabilityRequirement[]  // sorted by capability
     provided: CapabilityProvider[]     // sorted by capability
+  }
+  generation: {
+    contributions: MaterializedGenerationContribution[]
   }
   diagnostics: Diagnostic[]        // sorted by source location
   metadata: {
@@ -21,6 +24,11 @@ interface SpecIR {
   }
 }
 ```
+
+`spec-ir/0.2` adds deterministic generation contributions. Every selected
+contribution is plain JSON data with `package` and `version` provenance, target,
+activating node kinds, task kinds, instructions, and optional exact runtime/dev
+dependency pins. Contributions are sorted by target, package and id.
 
 ## SpecNode
 
@@ -78,6 +86,12 @@ of strings under `requires` / `provides`.
 | `auth` (`@spec/auth`)       | `auth({...})`                    | `principal: ref`, `requires: [...]`           |
 | `passwordStrategy` (`@spec/auth`) | `password({...})` child      | `identity: fieldRef`                          |
 | `postgres` (`@spec/postgres`) | `postgres({...})`              | `entities: [ref]`, `provides: [...]`          |
+| `cache` (`@spec/cache`) | `cache({...})` | provider ref, key prefix, TTL, failure and stampede behavior |
+| `redis` (`@spec/redis`) | `redis({...})` | URL env, timeouts, `CacheStore` capabilities |
+| `message` / `queue` (`@spec/messaging`) | `message(...)` / `queue(...)` | field schema; provider/messages refs, delivery, retry, DLQ, ordering |
+| `rabbitmq` / `kafka` / `sqs` | provider builders | provider configuration and `MessageBroker` capabilities |
+| `blob` (`@spec/blob`) | `blob(...)` | provider ref, bucket, prefix, limits, MIME types, URL TTL, retention |
+| `s3` (`@spec/s3`) | `s3({...})` | region/endpoint envs, addressing mode and timeouts |
 | `fastapi` (`@spec/fastapi`) | `fastapi({...})`                 | `title`, `version`, `prefix`, `port`, `services: [ref]`, `resources: [ref]`, `requires?` |
 
 Notes:
