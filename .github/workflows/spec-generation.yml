@@ -31,7 +31,7 @@ jobs:
             --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace" \
             --workdir /workspace \
             spec-agent:ci \
-            sh -lc 'git config --global --add safe.directory /workspace && pnpm install --frozen-lockfile && pnpm test'
+            sh -lc 'mkdir -p "$HOME" && git config --global --add safe.directory /workspace && pnpm install --frozen-lockfile && pnpm test'
 
       - name: Re-run generated backend conformance when present
         run: |
@@ -44,6 +44,7 @@ jobs:
             spec-agent:ci \
             sh -lc '
               set -eu
+              mkdir -p "$HOME"
               find . -type f -path "*/conformance/contract.json" -print | while IFS= read -r contract; do
                 backend="${contract%/conformance/contract.json}"
                 cd "/workspace/$backend"
