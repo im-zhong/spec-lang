@@ -65,11 +65,10 @@ pnpm spec build   examples/basic-web-app/app.spec.ts   # writes .spec/ artifacts
 pnpm spec inspect examples/basic-web-app/app.spec.ts   # human-readable tree
 ```
 
-Generate a RESTful API server from a backend specification (requires the
-`claude` CLI on PATH):
+Plan a RESTful API server from a backend specification:
 
 ```bash
-pnpm spec generate examples/booking/app.spec.ts --shots 3
+pnpm spec generate examples/booking/app.spec.ts --dry-run
 ```
 
 `spec build` writes deterministic artifacts:
@@ -81,10 +80,10 @@ pnpm spec generate examples/booking/app.spec.ts --shots 3
 └── manifest.json     # spec + compiler + package versions (reproducibility)
 ```
 
-`spec generate` additionally writes `blueprint.json` (the pinned behavioral
-contract), `agent.tasks.json` (the agentic lowering), and
-`agent.result.json` (per-shot verification + repeatability report), and
-places the generated applications in `out/<app>-<n>/`.
+`spec generate --dry-run` writes `blueprint.json` and `agent.tasks.json`.
+Execution publishes the canonical plan at `spec/generate/<run>/plan`, then
+places generated products on task/final PR branches; `.spec/generation/<run>/`
+is only a disposable local cache of the remote plan and result.
 
 ## A specification
 
@@ -154,6 +153,8 @@ pinned by the compiler — and provably identical across generations.
 | `@spec/messaging` | Messages, queues, delivery, retry, ordering and dead letters |
 | `@spec/rabbitmq` / `@spec/kafka` / `@spec/sqs` | Message broker providers |
 | `@spec/blob` / `@spec/s3` | Portable object-storage behavior + S3 provider |
+| `@spec/container` | Digest-pinned generic/backend/frontend OCI container contracts |
+| `@spec/execution` | GitHub/container/commit/PR execution backend for the compiler-owned agent DAG |
 | `@spec/fastapi`      | Backend target: blueprint + generation DAG + conformance suite + verification plan |
 | `@spec/agent`        | Agent harness: headless Claude Code runner, DAG execution, shot orchestration, repeatability |
 | `@spec/compiler`     | Static compiler: TS AST → Spec IR (deterministic, structured diagnostics) |
@@ -165,6 +166,32 @@ Dependency direction (enforced by architecture):
 core ◄─ package-sdk ◄─ domain packages (web, auth, postgres, fastapi)
 core ◄─ compiler ◄─ cli ──► agent (Claude Code bridge)
 ```
+
+The generator treats uncommitted worktrees as disposable execution state. Each
+node of the existing compiler-owned generation DAG gets its own branch,
+digest-pinned container, commit, PR, and clean GitHub check. Children consume
+only pushed parent SHAs. This is the execution model of `spec generate`, not a
+second development DAG. The full contract and container-spec hierarchy are in
+[`docs/generation-workflow.md`](docs/generation-workflow.md).
+
+Plan locally without running an agent:
+
+```bash
+spec generate examples/media-platform/app.spec.ts --dry-run
+```
+
+Execute the generator DAG through GitHub:
+
+```bash
+spec generate examples/media-platform/app.spec.ts \
+  --run-id media-platform-v1 \
+  --image ghcr.io/OWNER/spec-agent@sha256:DIGEST \
+  --target-dir products/media-platform/backend \
+  --shots 1 --concurrency 5
+```
+
+Add `--resume` with the same immutable arguments to reconstruct the run from
+GitHub after deleting all local worktrees and containers.
 
 The compiler contains **no** domain logic — all web/auth/postgres
 semantics live in their packages and are registered as validators,
@@ -187,9 +214,13 @@ spec generate <file>  compile → blueprint → agent shots → conformance + re
 --shots <n>         independent generations (default 3) — all must conform
                     on the FIRST attempt and expose an identical interface
 --dry-run           plan only (blueprint + DAG), no agent
---out <dir>         generated-app root (default "out/")
 --model <id>        explicit Claude Code model override (default: Claude settings)
 --max-turns <n>     explicit turn-budget override (default: Claude settings)
+--run-id <id>       stable GitHub run id (required unless --dry-run)
+--image <ref>       digest-pinned agent image (required unless --dry-run)
+--target-dir <dir>  repository-relative generated product directory
+--concurrency <n>   parallel ready generator nodes (default 4)
+--resume            continue the same run from GitHub branches/checks
 ```
 
 There is deliberately no repair option: a nonconformant shot is a
@@ -238,10 +269,10 @@ Four structurally different applications, all held to the golden rule:
 | `examples/media-platform` | production-style media operations | 10 entities / 324 spec lines | all infrastructure packages, auth, 3 lifecycles, 4 invariants, 62 routes |
 
 ```bash
-pnpm spec generate examples/cblog/app.spec.ts --shots 2
-pnpm spec generate examples/inventory/app.spec.ts --shots 2
-pnpm spec generate examples/booking/app.spec.ts --shots 2
-pnpm spec generate examples/media-platform/app.spec.ts --shots 2
+pnpm spec generate examples/cblog/app.spec.ts --dry-run
+pnpm spec generate examples/inventory/app.spec.ts --dry-run
+pnpm spec generate examples/booking/app.spec.ts --dry-run
+pnpm spec generate examples/media-platform/app.spec.ts --dry-run
 ```
 
 Each run generates 3 independent applications via the generation DAG,

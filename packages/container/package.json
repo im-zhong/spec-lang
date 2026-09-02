@@ -1,0 +1,23 @@
+{
+  "name": "@spec/container",
+  "version": "0.1.0",
+  "description": "Reproducible OCI container contracts for generic, backend, and frontend services",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@spec/core": "workspace:*",
+    "@spec/package-sdk": "workspace:*"
+  },
+  "spec": {
+    "package": true,
+    "entry": "./dist/spec-package.js"
+  },
+  "devDependencies": {
+    "@spec/compiler": "workspace:*",
+    "vitest": "^2.1.8"
+  }
+}

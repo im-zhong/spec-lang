@@ -1925,7 +1925,6 @@ React code generation
 Express/NestJS generation
 database migrations
 actual authentication
-Docker
 Kubernetes
 LLM calls
 Agent orchestration
@@ -1943,6 +1942,13 @@ custom parser
 这些都属于后续阶段。
 
 Coding Agent 不应主动扩展范围。
+
+> Scope amendment: Docker/OCI container vocabulary is no longer a non-goal.
+> `@spec/container` now models generic, backend, and frontend container
+> contracts and deterministically lowers them to OCI build/runtime artifacts
+> with compiler-owned verification. GitHub-native execution of the existing
+> compiler-owned generation DAG is specified in
+> `docs/generation-workflow.md`; it is not a separate development DAG.
 
 ---
 

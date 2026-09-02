@@ -44,6 +44,10 @@ export interface ShotSpec {
   conformanceFiles: Record<string, string>
   /** Directories excluded from artifact scanning (compiler-owned). */
   conformanceDirs?: string[]
+  /** Compiler-declared evidence produced by verification and committed with the conformance node. */
+  evidenceFiles?: string[]
+  /** Compiler-owned commands that create evidenceFiles after conformance succeeds. */
+  evidenceCommands?: VerificationCommand[]
   verification: { setup: VerificationCommand[]; check: VerificationCommand[] }
   /** Artifact provenance label; defaults to the historical fastapi target. */
   generatedBy?: string
@@ -122,7 +126,9 @@ export async function runShot(
     maxTurns: options.maxTurns,
     stderrLogFile: path.join(workspace, STDERR_LOG_FILE),
   })
-  const harness = new AgentHarness({ runner })
+  // taskRetries is infrastructure tolerance only (identical prompt re-issued
+  // when a run itself fails) — it never repairs conformance failures.
+  const harness = new AgentHarness({ runner, taskRetries: 2 })
   const diagnostics: Diagnostic[] = []
 
   prepareWorkspace(workspace)

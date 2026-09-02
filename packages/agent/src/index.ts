@@ -31,3 +31,10 @@ export {
 } from "./repeatability"
 export { scanArtifacts, prepareWorkspace, isCompilerWorkspace, sha256, MARKER_FILE } from "./artifacts"
 export { diagnostic } from "./diagnostics"
+export {
+  createGitHubGenerationPlan,
+  runGitHubGeneration,
+  type CompilerMaterialization,
+  type GitHubGenerationPlanInput,
+  type GitHubGenerationRunOptions,
+} from "./github-generation"

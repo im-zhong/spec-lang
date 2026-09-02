@@ -1,0 +1,16 @@
+{
+  "name": "spec agent execution",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "node",
+  "workspaceFolder": "/workspace",
+  "mounts": [
+    "source=spec-pnpm-cache,target=/home/node/.local/share/pnpm,type=volume",
+    "source=spec-uv-cache,target=/home/node/.cache/uv,type=volume"
+  ],
+  "containerEnv": {
+    "CI": "1"
+  }
+}

@@ -14,6 +14,7 @@ describe("@spec/react frontend lowering", () => {
     expect(first.blueprint.components).toEqual(expect.arrayContaining(["appShell", "tabs", "form", "input", "select", "table"]))
     expect(first.dag.tasks.map((task) => task.id)).toEqual(["frontend"])
     expect(Object.keys(first.seedFiles).sort()).toEqual([
+      ".gitignore",
       "src/frontend.blueprint.json",
       "src/spec-runtime.css",
       "src/spec-runtime.tsx",

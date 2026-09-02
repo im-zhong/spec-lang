@@ -1,0 +1,66 @@
+name: publish-spec-agent-image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".devcontainer/**"
+      - ".github/workflows/publish-agent-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Authenticate to GHCR with the job-scoped token
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and publish the immutable multi-platform agent image
+        id: image
+        run: |
+          set -eu
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/$owner/spec-agent:$GITHUB_SHA"
+          docker buildx create --name spec-publisher --driver docker-container --use
+          docker buildx inspect --bootstrap
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --file .devcontainer/Dockerfile \
+            --sbom=true \
+            --provenance=mode=max \
+            --tag "$image" \
+            --iidfile /tmp/spec-agent.iid \
+            --push \
+            .
+          digest="$(cat /tmp/spec-agent.iid)"
+          case "$digest" in sha256:????????????????????????????????????????????????????????????????) ;; *) exit 1 ;; esac
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          {
+            echo '### Published spec agent image'
+            echo
+            echo '`'"ghcr.io/$owner/spec-agent@$digest"'`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify the pushed index and attestations are discoverable
+        run: |
+          set -eu
+          inspection="$(docker buildx imagetools inspect "${{ steps.image.outputs.image }}")"
+          printf '%s\n' "$inspection"
+          actual="$(printf '%s\n' "$inspection" | awk '$1 == "Digest:" { print $2; exit }')"
+          test "${{ steps.image.outputs.digest }}" = "$actual"
+          docker buildx imagetools inspect "${{ steps.image.outputs.image }}" \
+            --format '{{ json (index .SBOM "linux/amd64").SPDX }}' \
+            | jq -e '.SPDXID == "SPDXRef-DOCUMENT"'
+          docker buildx imagetools inspect "${{ steps.image.outputs.image }}" \
+            --format '{{ json (index .Provenance "linux/amd64").SLSA }}' \
+            | jq -e 'type == "object" and length > 0'

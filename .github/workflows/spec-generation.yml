@@ -1,0 +1,97 @@
+name: spec-generation
+
+on:
+  pull_request:
+    branches:
+      - main
+      - "spec/generate/**"
+
+permissions:
+  contents: read
+
+jobs:
+  clean-container:
+    name: spec-generation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Build the repository-owned agent image
+        run: docker build --platform linux/amd64 --file .devcontainer/Dockerfile --tag spec-agent:ci .
+
+      - name: Validate repository in the clean agent image
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp/spec-home \
+            --env UV_CACHE_DIR=/tmp/spec-home/.cache/uv \
+            --env UV_PYTHON_CACHE_DIR=/tmp/spec-home/.cache/uv \
+            --tmpfs /tmp:rw,nosuid,exec,size=4g \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace" \
+            --workdir /workspace \
+            spec-agent:ci \
+            sh -lc 'mkdir -p "$HOME" && git config --global --add safe.directory /workspace && pnpm install --frozen-lockfile && pnpm test'
+
+      - name: Re-run generated backend conformance when present
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp/spec-home \
+            --env UV_CACHE_DIR=/tmp/spec-home/.cache/uv \
+            --env UV_PYTHON_CACHE_DIR=/tmp/spec-home/.cache/uv \
+            --tmpfs /tmp:rw,nosuid,exec,size=4g \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace" \
+            --workdir /workspace \
+            spec-agent:ci \
+            sh -lc '
+              set -eu
+              mkdir -p "$HOME"
+              find . -type f -path "*/conformance/contract.json" -print | while IFS= read -r contract; do
+                backend="${contract%/conformance/contract.json}"
+                cd "/workspace/$backend"
+                uv venv .venv --clear --quiet --python 3.13
+                uv pip install --quiet -e ".[dev]"
+                .venv/bin/python -c "from app.main import app, create_app; assert app.title"
+                .venv/bin/python -m pytest conformance -q
+              done
+            '
+
+      - name: Build and verify compiler-owned OCI contracts when present
+        env:
+          SPEC_SOURCE_REVISION: ${{ github.event.pull_request.head.sha }}
+          SPEC_TASK_ID: containers
+        run: |
+          set -eu
+          find . -type f -path "*/.spec/container/*/runtime-contract.json" -print | while IFS= read -r contract; do
+            backend="${contract%%/.spec/container/*}"
+            container_dir="${contract%/runtime-contract.json}"
+            slug="$(basename "$container_dir")"
+            fingerprint="$(jq -r .fingerprint "$contract")"
+            platform="$(jq -r .platform "$contract")"
+            short="${fingerprint#sha256:}"
+            image="spec-local/$slug:${short:0:12}"
+            archive="$container_dir/image.oci.tar"
+            docker buildx build \
+              --sbom=true --provenance=mode=max \
+              --platform "$platform" \
+              --file "$container_dir/Dockerfile" \
+              --build-arg SPEC_SOURCE_REVISION \
+              --build-arg SPEC_TASK_ID \
+              --tag "$image" \
+              --output "type=oci,dest=$archive" \
+              "$backend"
+            docker buildx build \
+              --load \
+              --platform "$platform" \
+              --file "$container_dir/Dockerfile" \
+              --build-arg SPEC_SOURCE_REVISION \
+              --build-arg SPEC_TASK_ID \
+              --tag "$image" \
+              "$backend"
+            node "$container_dir/verify-attestations.mjs" "$archive"
+            node "$container_dir/verify-config.mjs" "$contract" "$image"
+            node "$container_dir/verify-runtime.mjs" "$contract" "$image"
+          done

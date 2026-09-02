@@ -1,7 +1,7 @@
 {
-  "name": "@spec/agent",
+  "name": "@spec/execution",
   "version": "0.1.0",
-  "description": "Coding-agent bridge: drives Claude Code headless for the agentic compiler passes",
+  "description": "GitHub-native branch/container/commit/PR execution for compiler-owned agent DAGs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -9,8 +9,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@spec/core": "workspace:*",
-    "@spec/execution": "workspace:*"
+    "@spec/core": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^2.1.8"

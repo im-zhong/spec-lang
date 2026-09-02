@@ -24,8 +24,9 @@ import { createHash } from "node:crypto"
 import { compile, renderSpecTree, stableStringify, writeArtifacts, COMPILER_VERSION } from "@spec/compiler"
 import { InternalCompilerError, createLogger, type Diagnostic } from "@spec/core"
 import { planGeneration } from "@spec/fastapi"
-import { compareFrontendShots, planFrontendGeneration } from "@spec/react"
-import { runRepeatability, runShot, type ShotSpec } from "@spec/agent"
+import { planFrontendGeneration } from "@spec/react"
+import { OPENAPI_SNIPPET, type ShotSpec } from "@spec/agent"
+import { assertGitHubGenerationCheckout, runGitHubGenerate } from "./generate-github"
 
 interface CliArgs {
   command: string | undefined
@@ -33,10 +34,20 @@ interface CliArgs {
   debug: boolean
   help: boolean
   dryRun: boolean
-  out: string | undefined
   shots: number
   model: string | undefined
   maxTurns: number | undefined
+  runId: string | undefined
+  image: string | undefined
+  repository: string | undefined
+  targetDir: string | undefined
+  concurrency: number
+  requiredCheck: string
+  resume: boolean
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -46,10 +57,16 @@ function parseArgs(argv: string[]): CliArgs {
     debug: false,
     help: false,
     dryRun: false,
-    out: undefined,
     shots: 3,
     model: undefined,
     maxTurns: undefined,
+    runId: undefined,
+    image: undefined,
+    repository: undefined,
+    targetDir: undefined,
+    concurrency: 4,
+    requiredCheck: "spec-generation",
+    resume: false,
   }
   const positional: string[] = []
   for (let i = 0; i < argv.length; i++) {
@@ -57,10 +74,16 @@ function parseArgs(argv: string[]): CliArgs {
     if (arg === "--debug") args.debug = true
     else if (arg === "--help" || arg === "-h") args.help = true
     else if (arg === "--dry-run") args.dryRun = true
-    else if (arg === "--out") args.out = argv[++i]
     else if (arg === "--model") args.model = argv[++i]
     else if (arg === "--shots") args.shots = Number(argv[++i])
     else if (arg === "--max-turns") args.maxTurns = Number(argv[++i])
+    else if (arg === "--run-id") args.runId = argv[++i]
+    else if (arg === "--image") args.image = argv[++i]
+    else if (arg === "--repository") args.repository = argv[++i]
+    else if (arg === "--target-dir") args.targetDir = argv[++i]
+    else if (arg === "--concurrency") args.concurrency = Number(argv[++i])
+    else if (arg === "--check") args.requiredCheck = argv[++i]
+    else if (arg === "--resume") args.resume = true
     else positional.push(arg)
   }
   args.command = positional[0]
@@ -83,13 +106,18 @@ Usage:
                                   Generate independent React shots from the UI
                                   blueprint; Playwright verifies behavior and
                                   pixel-identical layout on the first attempt
-
 Options:
   --dry-run                 Plan only: write blueprint + DAG, no agent
-  --out <dir>               Generation output root (default "out/")
   --shots <n>               Independent generations per spec (default 3)
   --model <id>              Override Claude Code's configured/default model
   --max-turns <n>           Override Claude Code's configured/default turn budget
+  --run-id <id>             Stable GitHub generation run id (required to execute)
+  --image <repo@sha256:...> Digest-pinned generator container (required to execute)
+  --target-dir <dir>        Repository-relative generated product directory
+  --repository <owner/name> Assert the GitHub origin identity
+  --concurrency <n>         Maximum parallel generator nodes (default 4)
+  --check <name>            Required GitHub check (default spec-generation)
+  --resume                  Resume the same immutable run from GitHub refs
   --debug                   Show internal stack traces
   --help                    Show this help
 
@@ -118,6 +146,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   const projectRoot = process.cwd()
   try {
+    if ((args.command === "generate" || args.command === "generate-frontend") && !args.dryRun) {
+      if (!args.runId || !args.image) {
+        throw new Error("GitHub generation requires --run-id and a digest-pinned --image; use --dry-run to plan without executing")
+      }
+      if (!Number.isInteger(args.shots) || args.shots < 1) throw new Error("--shots must be a positive integer")
+      if (!Number.isInteger(args.concurrency) || args.concurrency < 1) throw new Error("--concurrency must be a positive integer")
+      if (!args.requiredCheck.trim()) throw new Error("--check must be non-empty")
+      assertGitHubGenerationCheckout(projectRoot, args.repository)
+    }
     const result = await compile(args.file, {
       projectRoot,
       logger: createLogger({ level: "error" }),
@@ -199,11 +236,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         return 0
       }
 
-      const outRoot = args.out ? path.resolve(projectRoot, args.out) : path.join(projectRoot, "out")
-      const workspaces = Array.from({ length: args.shots }, (_, index) => ({
-        shot: `shot-${index + 1}`,
-        workspace: path.join(outRoot, `${plan.blueprint.app.name.toLowerCase()}-frontend-${index + 1}`),
-      }))
       const shotSpec: ShotSpec = {
         tasks: plan.dag.tasks,
         seedFiles: plan.seedFiles,
@@ -211,41 +243,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         conformanceDirs: ["conformance", "conformance-output"],
         verification: plan.verification,
         generatedBy: "react:dag",
+        evidenceFiles: [
+          "pnpm-lock.yaml",
+          ...plan.blueprint.screens.map((_, index) => `conformance-output/layout-${index}.png`),
+          "conformance-output/behavior.png",
+          "conformance-output/behavior.json",
+        ],
       }
-      process.stdout.write(`⟳ Generating ${args.shots} independent frontend shot(s) in parallel; each receives the same immutable runtime and oracle…\n`)
-      const shots = await Promise.all(workspaces.map(({ shot, workspace }) => runShot(shot, workspace, shotSpec, {
-        model: args.model,
-        maxTurns: args.maxTurns,
-      })))
-      const equality = compareFrontendShots(workspaces)
-      const ok = shots.every((shot) => shot.ok) && equality.ok
-      for (const shot of shots) {
-        process.stdout.write(`${shot.ok ? "✓" : "✗"} ${shot.shot}: ${shot.ok ? "Playwright conformance passed (first attempt, no repair)" : "FAILED"} → ${path.relative(projectRoot, shot.workspace)}\n`)
-      }
-      process.stdout.write(equality.layoutEqual ? "✓ Initial layout screenshots are pixel-identical\n" : "✗ Initial layout screenshots differ\n")
-      process.stdout.write(equality.behaviorImageEqual ? "✓ Post-interaction screenshots are pixel-identical\n" : "✗ Post-interaction screenshots differ\n")
-      process.stdout.write(equality.behaviorEqual ? "✓ Browser behavior snapshots are identical\n" : "✗ Browser behavior snapshots differ\n")
-      fs.writeFileSync(
-        path.join(specDir, "frontend.result.json"),
-        stableStringify({
-          ok,
-          equality,
-          shots: shots.map((shot) => ({
-            shot: shot.shot,
-            workspace: shot.workspace,
-            ok: shot.ok,
-            tasks: shot.tasks,
-            verification: shot.verification,
-            diagnostics: shot.diagnostics,
-            artifacts: shot.artifacts,
-            totalCostUsd: shot.totalCostUsd,
-          })),
-        }) + "\n",
-        "utf8",
-      )
-      process.stdout.write(ok
-        ? `✓ Frontend generation satisfies the golden rule across ${shots.length} shots\n`
-        : `✗ Frontend generation violated the golden rule; redesign the spec/runtime and regenerate every shot\n`)
+      const ok = await runGitHubGenerate({
+        repoRoot: projectRoot, runId: args.runId!, image: args.image!, repository: args.repository,
+        targetDirectory: args.targetDir, appName: plan.blueprint.app.name, target: "frontend",
+        shots: args.shots, concurrency: args.concurrency, requiredCheck: args.requiredCheck,
+        resume: args.resume, model: args.model, maxTurns: args.maxTurns, shotSpec, ir: result.ir,
+      })
       return ok ? 0 : 1
     }
 
@@ -291,92 +301,33 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return 0
     }
 
-    const outRoot = args.out ? path.resolve(projectRoot, args.out) : path.join(projectRoot, "out")
-    const appName = plan.blueprint.app.name
-    const workspaces = Array.from({ length: args.shots }, (_, i) => ({
-      shot: `shot-${i + 1}`,
-      workspace: path.join(outRoot, `${appName.toLowerCase()}-${i + 1}`),
-    }))
-
     const shotSpec: ShotSpec = {
       tasks: plan.dag.tasks,
       conformanceFiles: plan.conformance.files,
       conformanceDirs: ["conformance"],
       verification: plan.verification,
+      evidenceFiles: ["conformance-output/openapi.json", "conformance-output/behavior.json"],
+      evidenceCommands: [
+        {
+          name: "openapi-evidence",
+          command: `mkdir -p conformance-output && .venv/bin/python -W ignore -c ${shellQuote(OPENAPI_SNIPPET)} > conformance-output/openapi.json`,
+          timeoutMs: 120_000,
+        },
+        {
+          name: "behavior-evidence",
+          command: ".venv/bin/python -W ignore conformance/behavior_snapshot.py > conformance-output/behavior.json",
+          timeoutMs: 120_000,
+        },
+      ],
     }
 
-    process.stdout.write(
-      `⟳ Generating ${args.shots} independent shot(s) in parallel, ${plan.dag.tasks.length} DAG tasks each (this takes a while)…\n`,
-    )
-    const report = await runRepeatability(shotSpec, workspaces, {
-      model: args.model,
-      maxTurns: args.maxTurns,
+    const ok = await runGitHubGenerate({
+      repoRoot: projectRoot, runId: args.runId!, image: args.image!, repository: args.repository,
+      targetDirectory: args.targetDir, appName: plan.blueprint.app.name, target: "backend",
+      shots: args.shots, concurrency: args.concurrency, requiredCheck: args.requiredCheck,
+      resume: args.resume, model: args.model, maxTurns: args.maxTurns, shotSpec, ir: result.ir,
     })
-
-    for (const shot of report.shots) {
-      const mark = shot.ok ? "✓" : "✗"
-      const cost = shot.totalCostUsd !== undefined ? ` · $${shot.totalCostUsd.toFixed(2)}` : ""
-      const violations = shot.tasks
-        .filter((t) => t.scopeViolations.length > 0)
-        .map((t) => `${t.id}→${t.scopeViolations.length} out-of-scope file(s)`)
-        .join(", ")
-      process.stdout.write(
-        `${mark} ${shot.shot}: ${shot.ok ? "conformance passed (first attempt, no repair)" : "FAILED"}${cost} → ${path.relative(projectRoot, shot.workspace)}\n` +
-          (violations ? `    scope violations: ${violations}\n` : ""),
-      )
-    }
-
-    if (workspaces.length > 1) {
-      process.stdout.write(
-        report.interfaceEqual
-          ? "✓ All shots expose an identical OpenAPI interface\n"
-          : "✗ Shots expose DIFFERENT interfaces (golden rule violated)\n",
-      )
-      process.stdout.write(
-        report.behaviorEqual
-          ? "✓ All shots produce an identical compiler-owned behavior snapshot\n"
-          : "✗ Shots behave DIFFERENTLY (golden rule violated)\n",
-      )
-    }
-
-    fs.writeFileSync(
-      path.join(specDir, "agent.result.json"),
-      stableStringify({
-        ok: report.ok,
-        interfaceEqual: report.interfaceEqual,
-        behaviorEqual: report.behaviorEqual,
-        behaviors: report.behaviors,
-        totalCostUsd: report.totalCostUsd,
-        shots: report.shots.map((s) => ({
-          shot: s.shot,
-          workspace: s.workspace,
-          ok: s.ok,
-          tasks: s.tasks.map((t) => ({
-            id: t.id,
-            ok: t.ok,
-            run: { sessionId: t.run.sessionId, turns: t.run.turns, costUsd: t.run.costUsd },
-            produced: t.produced,
-            scopeViolations: t.scopeViolations,
-            durationMs: t.durationMs,
-          })),
-          verification: s.verification,
-          artifactCount: s.artifacts.length,
-          artifacts: s.artifacts,
-          diagnostics: s.diagnostics,
-        })),
-        diagnostics: report.diagnostics,
-      }) + "\n",
-      "utf8",
-    )
-
-    const errors = report.diagnostics.filter((d) => d.level === "error")
-    if (errors.length > 0) printDiagnostics(errors)
-    process.stdout.write(
-      report.ok
-        ? `✓ Generation repeatable across ${workspaces.length} shot(s), zero repairs — results in ${path.relative(projectRoot, specDir)}/agent.result.json\n`
-        : `✗ Generation did not satisfy the golden rule — fix the spec/blueprint and regenerate; see ${path.relative(projectRoot, specDir)}/agent.result.json\n`,
-    )
-    return report.ok ? 0 : 1
+    return ok ? 0 : 1
   } catch (err) {
     if (err instanceof InternalCompilerError) {
       process.stderr.write(`✗ Internal compiler error: ${err.message}\n`)

@@ -129,8 +129,11 @@ packages/auth         auth / password + validators (principal, identity, uniquen
 packages/postgres     postgres resource + RelationalStore provider
 packages/fastapi      backend target: blueprint lowering, conformance suite, prompts,
                       verification plan (the traditional↔agentic bridge)
-packages/agent        Claude Code bridge: headless runner, shot orchestration,
-                      repeatability harness (openapi equality)
+packages/agent        Claude Code bridge: generation-DAG → GitHub execution,
+                      shot orchestration and repeatability evidence
+packages/container    OCI contracts + deterministic Dockerfile/runtime lowering
+packages/execution    generic Git branch/worktree/container/PR/check/resume backend;
+                      owns no application DAG
 packages/compiler     parse, evaluate, loader, passes, config, inspect
 packages/cli          spec check / build / inspect / generate, exit codes 0/1/2
 examples/basic-web-app/           §59 acceptance specification (static only)
@@ -152,8 +155,9 @@ Spec IR ──(buildBlueprint, pure)──► BackendBlueprint
         ├──(buildTaskDag, deterministic)──► generation DAG
         │        project → models → schemas/security → routers → app
         │        one narrow prompt + file scope per task
-        ├──(AgentHarness)──► claude -p per task, topological order,
-        │                    per-task scope auditing  → out/<app>-<n>/
+        ├──(@spec/agent)──► one branch/worktree/container/PR per DAG task,
+        │                   parallel ready nodes, exact-scope commits,
+        │                   published parent SHAs as the only child input
         ├──(buildConformanceSuite, deterministic)──► compiler-owned pytest
         │                                            dropped into every shot
         └──(fastApiVerification)──► uv venv / install / import / pytest
@@ -180,6 +184,14 @@ the SpecNodes it derives from.
 
 - `SpecLowering` + the `lower` pass — more backend targets (the fastapi
   package is the reference implementation of a target).
+- GitHub-native generation execution — the original target-derived generator
+  DAG is projected directly onto one digest-pinned container, branch, commit,
+  PR and exact-head check per node. `@spec/execution` supplies generic durable
+  mechanics but defines no second DAG. See `docs/generation-workflow.md`.
+- `@spec/container` — generic, backend, and frontend OCI contracts are
+  represented and validated in Spec IR, then lowered to deterministic
+  Dockerfiles, context/runtime contracts, fingerprints, SBOM/provenance
+  requirements and compiler-owned config/lifecycle verification.
 - `AgentTask` / `AgentResult` / `Artifact` / `Constraint` types in
   `@spec/core` — the provenance chain
   `Artifact → AgentTask → SpecNode → SourceLocation` is navigable in
