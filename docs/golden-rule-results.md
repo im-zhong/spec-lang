@@ -33,6 +33,23 @@ expose the same interface.
 | 7 | Duplicate-identity register test omitted `password` → 422 instead of 409 | cblog run 2 | suite generator emits the full register body |
 | 8 | 30-min wall-clock budget too tight for slow-gateway first turns | cblog run 1 | runner budget 45 min |
 | 9 | Repair agents could destroy workspaces | cblog run 2 | `rm` removed from the tool allowlist |
+| 10 | **Consistent-but-wrong**: both frontend shots pixel-identical, yet the sidebar's Projects/Reports links were dead — the spec declared one screen while nav pointed at undeclared routes, and the oracle only tested `screens[0]`, never clicking nav | frontend-golden 2-shot run (2026-09-02) | **Golden rule extended: cross-shot equality is necessary, not sufficient.** Added `UI_NAV_TARGET_UNKNOWN` compile gate (nav href must equal a declared screen path); oracle now renders EVERY declared screen (per-screen `layout-N.png` pixel evidence), clicks every nav item and asserts the landed screen, and equality compares all per-screen captures |
 
 Each fix made the *contract or harness* more precise; generation quality
 improved accordingly (cblog's final run needed zero repairs).
+
+## Correctness clause (the golden rule, complete form)
+
+> Same spec → N shots that are (a) individually conformant, (b) mutually
+> identical, **and (c) correct against the declared contract** — including
+> that every navigation target, control, and state transition the spec
+> declares actually exists and works. Identical-wrong output is a
+> specification defect, not a pass. The oracle must encode (c), not just
+> (a)+(b).
+
+## Frontend runs
+
+| Project | Shape | Shots | Repairs | Cost | Layout | Behavior | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `examples/frontend-golden` (1 screen, dead nav) | 1 screen, 13 components, 1 DAG task | 2/2 conformant | 0 + 0 | $0.75 | identical | identical | **consistent, WRONG → spec defect #10** (fixed, regenerated) |
+
