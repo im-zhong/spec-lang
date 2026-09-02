@@ -27,7 +27,9 @@ jobs:
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --env HOME=/tmp/spec-home \
-            --tmpfs /tmp:rw,nosuid,size=4g \
+            --env UV_CACHE_DIR=/tmp/spec-home/.cache/uv \
+            --env UV_PYTHON_CACHE_DIR=/tmp/spec-home/.cache/uv \
+            --tmpfs /tmp:rw,nosuid,exec,size=4g \
             --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace" \
             --workdir /workspace \
             spec-agent:ci \
@@ -38,7 +40,9 @@ jobs:
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --env HOME=/tmp/spec-home \
-            --tmpfs /tmp:rw,nosuid,size=4g \
+            --env UV_CACHE_DIR=/tmp/spec-home/.cache/uv \
+            --env UV_PYTHON_CACHE_DIR=/tmp/spec-home/.cache/uv \
+            --tmpfs /tmp:rw,nosuid,exec,size=4g \
             --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace" \
             --workdir /workspace \
             spec-agent:ci \

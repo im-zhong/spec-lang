@@ -64,6 +64,10 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python \
     UV_NO_PROGRESS=1 \
     PATH=/opt/spec-tools/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
 RUN UV_CACHE_DIR=/tmp/uv-cache UV_PYTHON_CACHE_DIR=/tmp/uv-cache uv python install 3.13.7 \
+    && python_dir="$(find /opt/uv-python -maxdepth 1 -type l -name 'cpython-3.13-linux-*' -print -quit)" \
+    && test -n "$python_dir" \
+    && ln -s "$python_dir/bin/python" /usr/local/bin/python \
+    && ln -s "$python_dir/bin/python3" /usr/local/bin/python3 \
     && rm -rf /tmp/uv-cache
 
 USER node
