@@ -77,6 +77,39 @@ applies to every command that touches them:
 - Agents may write only their declared scope; the harness audits every
   file change, and conformance is the only judge.
 
+## Repository boundary — never confuse the tool with its target
+
+`spec-lang` is the source repository for the specification compiler,
+generator, execution engine, and their tests. It is **not** the repository in
+which a generator run stores generated products or its GitHub control-plane
+state.
+
+- The GitHub-native workflow is a facility used **by the spec generator** to
+  operate on an explicitly selected, separate target/generation repository.
+  That target repository owns the immutable plan refs, task/base branches,
+  generated commits, task/final PRs, and required checks.
+- Never infer that the current `spec-lang` checkout or its `origin` is the
+  generation target. Never default generated output to `products/*` in this
+  repository, and never create `spec/generate/**` refs, generator-produced
+  commits, or generator-produced PRs here.
+- A target repository/checkout must be supplied explicitly. If it is absent,
+  stop with a clear error instead of falling back to the current repository.
+  A `--repository` option must select the target; it must not merely assert
+  that the current checkout's origin has the same name.
+- Keep the roles physically and conceptually separate:
+
+  ```text
+  spec-lang repository                 target/generation repository
+  --------------------                 ----------------------------
+  compiler + generator code   ----->   plan refs + task branches
+  execution/container tooling          generated product commits
+  framework tests                      generator PRs + GitHub checks
+  ```
+
+- Ordinary development branches and review PRs that change `spec-lang`
+  itself are separate from the generator workflow; do not use their existence
+  as evidence that a generator run belongs in this repository.
+
 ## Pointers
 
 - Pinned gaps and run history: `docs/golden-rule-results.md`
