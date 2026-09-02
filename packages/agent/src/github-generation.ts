@@ -37,6 +37,7 @@ export interface GitHubGenerationPlanInput {
   shot: ShotSpec
   runId: string
   repository: string
+  defaultBranch?: string
   rootBaseSha: string
   targetDirectory: string
   environment: AgentExecutionEnvironment
@@ -170,6 +171,7 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
   return createAgentExecutionPlan({
     runId: input.runId,
     repository: input.repository,
+    defaultBranch: input.defaultBranch,
     rootBaseSha: input.rootBaseSha,
     branchPrefix: "spec/generate",
     environment: input.environment,

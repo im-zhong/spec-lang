@@ -1,41 +1,31 @@
-import { execFileSync } from "node:child_process"
-import * as fs from "node:fs"
-import * as os from "node:os"
 import * as path from "node:path"
 import { describe, expect, it } from "vitest"
-import { assertGitHubGenerationCheckout } from "../packages/cli/src/generate-github"
+import {
+  TEMPORARY_REPOSITORY_WORKFLOW,
+  temporaryShotLocalRoot,
+  temporaryShotRepositoryName,
+} from "../packages/cli/src/generate-github"
 
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim()
-}
+describe("GitHub generator per-shot repository topology", () => {
+  it("derives a distinct remote repository and local checkout for every shot", () => {
+    const firstRemote = temporaryShotRepositoryName("owner", "media-golden", "run-7", "shot-1")
+    const secondRemote = temporaryShotRepositoryName("owner", "media-golden", "run-7", "shot-2")
+    const firstLocal = temporaryShotLocalRoot("/source", "run-7", "shot-1")
+    const secondLocal = temporaryShotLocalRoot("/source", "run-7", "shot-2")
 
-describe("GitHub generator checkout gate", () => {
-  it("accepts only a clean, published commit from the asserted repository", () => {
-    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "spec-generate-gate-"))
-    const source = path.join(temporary, "source")
-    const remote = path.join(temporary, "github.com", "owner", "repo.git")
-    fs.mkdirSync(source, { recursive: true })
-    fs.mkdirSync(path.dirname(remote), { recursive: true })
-    git(temporary, ["init", "--bare", remote])
-    git(source, ["init", "-b", "main"])
-    git(source, ["config", "user.name", "test"])
-    git(source, ["config", "user.email", "test@example.com"])
-    fs.writeFileSync(path.join(source, "spec.ts"), "export default {}\n")
-    git(source, ["add", "spec.ts"])
-    git(source, ["commit", "-m", "base"])
-    git(source, ["remote", "add", "origin", remote])
-    git(source, ["push", "-u", "origin", "main"])
+    expect(firstRemote).toBe("owner/media-golden-run-7-shot-1")
+    expect(secondRemote).toBe("owner/media-golden-run-7-shot-2")
+    expect(firstRemote).not.toBe(secondRemote)
+    expect(firstLocal).not.toBe(secondLocal)
+    expect(path.dirname(firstLocal)).toBe(path.dirname(secondLocal))
+  })
 
-    expect(assertGitHubGenerationCheckout(source, "owner/repo")).toMatchObject({ repository: "owner/repo" })
-    expect(() => assertGitHubGenerationCheckout(source, "someone/else")).toThrow(/repository mismatch/)
-
-    fs.writeFileSync(path.join(source, "untracked.txt"), "discard me\n")
-    expect(() => assertGitHubGenerationCheckout(source)).toThrow(/completely clean/)
-    fs.rmSync(path.join(source, "untracked.txt"))
-
-    fs.writeFileSync(path.join(source, "spec.ts"), "export default { changed: true }\n")
-    git(source, ["add", "spec.ts"])
-    git(source, ["commit", "-m", "unpublished"])
-    expect(() => assertGitHubGenerationCheckout(source)).toThrow(/not published/)
+  it("bootstraps a required check from the immutable plan and pinned image", () => {
+    expect(TEMPORARY_REPOSITORY_WORKFLOW).toContain("name: spec-generation")
+    expect(TEMPORARY_REPOSITORY_WORKFLOW).toContain("pull_request:")
+    expect(TEMPORARY_REPOSITORY_WORKFLOW).toContain("spec/generate/$run_id/plan")
+    expect(TEMPORARY_REPOSITORY_WORKFLOW).toContain(".acceptance.commands[]")
+    expect(TEMPORARY_REPOSITORY_WORKFLOW).toContain(".environment.image")
+    expect(TEMPORARY_REPOSITORY_WORKFLOW).toContain('docker pull "$image"')
   })
 })

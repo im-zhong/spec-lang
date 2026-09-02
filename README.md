@@ -219,6 +219,9 @@ spec generate <file>  compile → blueprint → agent shots → conformance + re
 --run-id <id>       stable GitHub run id (required unless --dry-run)
 --image <ref>       digest-pinned agent image (required unless --dry-run)
 --target-dir <dir>  repository-relative generated product directory
+--repository <owner/base>
+                     optional temporary repository prefix; the generator
+                     creates a distinct private repository for every shot
 --concurrency <n>   parallel ready generator nodes (default 4)
 --resume            continue the same run from GitHub branches/checks
 ```

@@ -26,7 +26,7 @@ import { InternalCompilerError, createLogger, type Diagnostic } from "@spec/core
 import { planGeneration } from "@spec/fastapi"
 import { planFrontendGeneration } from "@spec/react"
 import { OPENAPI_SNIPPET, type ShotSpec } from "@spec/agent"
-import { assertGitHubGenerationCheckout, runGitHubGenerate } from "./generate-github"
+import { runGitHubGenerate } from "./generate-github"
 
 interface CliArgs {
   command: string | undefined
@@ -114,7 +114,7 @@ Options:
   --run-id <id>             Stable GitHub generation run id (required to execute)
   --image <repo@sha256:...> Digest-pinned generator container (required to execute)
   --target-dir <dir>        Repository-relative generated product directory
-  --repository <owner/name> Assert the GitHub origin identity
+  --repository <owner/base> Temporary per-shot repository name prefix
   --concurrency <n>         Maximum parallel generator nodes (default 4)
   --check <name>            Required GitHub check (default spec-generation)
   --resume                  Resume the same immutable run from GitHub refs
@@ -153,7 +153,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       if (!Number.isInteger(args.shots) || args.shots < 1) throw new Error("--shots must be a positive integer")
       if (!Number.isInteger(args.concurrency) || args.concurrency < 1) throw new Error("--concurrency must be a positive integer")
       if (!args.requiredCheck.trim()) throw new Error("--check must be non-empty")
-      assertGitHubGenerationCheckout(projectRoot, args.repository)
     }
     const result = await compile(args.file, {
       projectRoot,

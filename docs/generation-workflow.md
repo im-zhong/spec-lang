@@ -104,8 +104,12 @@ spec generate examples/media-platform/app.spec.ts \
   --resume
 ```
 
-Multiple shots use independent run ids and output directories. Each shot uses
-the identical compiler-owned DAG and conformance oracle.
+Multiple shots use independent temporary GitHub repositories, independent
+local checkout/worktree roots, and independent run ids. The generator creates
+the repositories through `gh`; callers may supply an owner/name prefix but do
+not pre-create concrete shot targets. Different directories or branches in one
+remote do not qualify as independent shots. Each repository receives the
+identical compiler-owned DAG, conformance oracle, and pinned environment.
 
 ## Reproducible agent environment
 
