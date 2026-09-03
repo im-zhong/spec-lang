@@ -93,7 +93,12 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
   }
 
   const tasks: AgentExecutionTask[] = []
-  const seedFiles = input.shot.seedFiles ?? {}
+  const seedFiles = {
+    ...(input.shot.seedFiles ?? {}),
+    ...Object.fromEntries(
+      Object.entries(input.shot.semanticFiles ?? {}).map(([file, content]) => [`.spec-input/${file}`, content]),
+    ),
+  }
   const hasSeed = Object.keys(seedFiles).length > 0
   if (hasSeed) {
     tasks.push({
@@ -111,6 +116,9 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
   }
 
   for (const task of input.shot.tasks) {
+    const taskDirectory = task.workingDirectory
+      ? inTarget(directory, task.workingDirectory)
+      : directory
     tasks.push({
       id: ids.get(task.id)!,
       objective: task.label ?? task.id,
@@ -119,10 +127,26 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
       dependsOn: task.dependsOn.length > 0
         ? task.dependsOn.map((dependency) => ids.get(dependency)!).sort()
         : hasSeed ? ["compiler-seed"] : [],
-      workingDirectory: directory,
+      workingDirectory: taskDirectory,
       scope: task.scope.map((file) => inTarget(directory, file)).sort(),
       specNodeIds: [...(task.specNodeIds ?? [])].sort(),
-      acceptance: { requiredChecks: input.requiredChecks, commands: ["true"] },
+      ...(task.loop ? {
+        loop: {
+          ...task.loop,
+          implementation: {
+            ...task.loop.implementation,
+            scope: task.loop.implementation.scope.map((file) => inTarget(directory, file)).sort(),
+          },
+          tests: {
+            ...task.loop.tests,
+            scope: task.loop.tests.scope.map((file) => inTarget(directory, file)).sort(),
+          },
+        },
+      } : {}),
+      acceptance: {
+        requiredChecks: input.requiredChecks,
+        commands: task.acceptanceCommands?.length ? [...task.acceptanceCommands] : ["git diff --check"],
+      },
     })
   }
 
@@ -217,6 +241,20 @@ export async function runGitHubGeneration(
     "/bin/sh", "-lc", bootstrap, "spec-agent",
     ...buildClaudeArgs({ model: options.model, effort: options.effort, maxTurns: options.maxTurns }),
   ]
+  const reviewerCommand = [
+    "/bin/sh", "-lc", bootstrap, "spec-reviewer",
+    ...buildClaudeArgs({
+      model: options.model,
+      effort: options.effort,
+      maxTurns: options.maxTurns,
+      permissionMode: "plan",
+      allowedTools: [
+        "Read", "Glob", "Grep", "LS", "Bash(uv:*)", "Bash(python:*)", "Bash(python3:*)",
+        "Bash(.venv/bin/python:*)", "Bash(pytest:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)",
+        "Bash(tail:*)", "Bash(wc:*)", "Bash(grep:*)", "Bash(find:*)", "Bash(sed:*)",
+      ],
+    }),
+  ]
 
   return runAgentExecutionPlan(plan, {
     repository: new GitAgentExecutionRepository({ repoRoot, worktreeRoot }),
@@ -224,6 +262,7 @@ export async function runGitHubGeneration(
       mounts,
       environmentVariables,
       agentCommand,
+      reviewerAgentCommand: reviewerCommand,
     }),
     github: new GitHubCliAdapter({ cwd: repoRoot }),
     concurrency: options.concurrency,

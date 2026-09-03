@@ -117,6 +117,27 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ui
 
+  examples/interface-workspace:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:../../packages/fastapi
+      '@spec/postgres':
+        specifier: workspace:*
+        version: link:../../packages/postgres
+      '@spec/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@spec/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@spec/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+
   examples/inventory:
     dependencies:
       '@spec/core':

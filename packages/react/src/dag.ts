@@ -1,4 +1,4 @@
-import { stableStringify, type SpecIR } from "@spec/core"
+import { stableStringify, type AgentExecutionLoop, type SpecIR } from "@spec/core"
 import type { FrontendBlueprint } from "./blueprint"
 
 export interface FrontendTask {
@@ -9,6 +9,8 @@ export interface FrontendTask {
   scope: string[]
   prompt: string
   specNodeIds: string[]
+  loop?: AgentExecutionLoop
+  acceptanceCommands?: string[]
 }
 
 export interface FrontendDag {
@@ -70,9 +72,26 @@ Do not reinterpret the blueprint. Do not add CSS, components, content, state, ro
       kind: "frontend",
       label: "React frontend integration shell",
       dependsOn: [],
-      scope: ["package.json", "index.html", "src/main.tsx"],
+      scope: ["package.json", "index.html", "src/main.tsx", "tests/frontend.contract.test.mjs"],
       prompt,
       specNodeIds: ir.nodes.map((node) => node.id).filter((id) => /^(app|frontend|screen|react):/.test(id)).sort(),
+      loop: {
+        schemaVersion: "spec-agent-task-loop/0.1",
+        maxRounds: 3,
+        implementation: {
+          instruction: prompt,
+          scope: ["package.json", "index.html", "src/main.tsx"],
+        },
+        tests: {
+          scope: ["tests/frontend.contract.test.mjs"],
+          instruction: `You are the unit-test author for the frozen React integration-shell contract below. Create tests/frontend.contract.test.mjs using only node:test and node:assert. Inspect the generated files as text/JSON and verify every declared import, mount, package pin, and forbidden extra. Do not edit implementation or compiler-owned files.\n\n${prompt}`,
+        },
+        reviewer: {
+          instruction: "Review the React shell and its tests against the frozen blueprint. Run the declared test command, inspect for missing constraints or implementation-shaped tests, and return actionable feedback without editing files.",
+          commands: ["node --test tests/frontend.contract.test.mjs"],
+        },
+      },
+      acceptanceCommands: ["node --test tests/frontend.contract.test.mjs"],
     }],
     edges: [],
   }

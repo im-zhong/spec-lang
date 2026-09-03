@@ -360,7 +360,7 @@ No package-specific branch exists in the compiler. The resulting capability
 edges are sorted into the IR.
 
 The static `lowerPass()` is currently a no-op. `emitPass()` writes
-`spec-ir/0.2`; target-specific lowering starts later from `spec generate`.
+`spec-ir/0.3`; target-specific lowering starts later from `spec generate`.
 `stableStringify()` recursively sorts keys, and generated timestamps are
 omitted, so repeated static builds are byte-identical.
 

@@ -31,15 +31,25 @@ For run `R` and generator node `T`:
 3. A ready node gets an immutable integration-base ref and branch
    `spec/generate/R/T`.
 4. A fresh digest-pinned container receives a disposable detached worktree.
-   One agent conversation may write only the node's compiler-owned file scope.
-5. The host adapter audits exact changed paths and whitespace, creates a commit
+   An agent node runs a bounded synthesis loop. Its implementation and unit-test
+   Claude instances start concurrently from separate snapshots of the same
+   frozen spec progress and have disjoint exact scopes. The harness audits each
+   snapshot before merging it into the node workspace.
+5. A read-only reviewer Claude runs the declared tests, reviews code and tests
+   against the frozen spec, and returns a structured approve/reject verdict.
+   Rejection starts the next bounded synthesis round with feedback for both
+   writers. Reviewer changes to files are rejected by the harness.
+6. After reviewer approval, the compiler-owned node acceptance runs exactly
+   once. Its result never becomes repair feedback. The final compiler-owned
+   conformance node still runs exactly once after the generated-code sink.
+7. The host adapter audits exact changed paths and whitespace, creates a commit
    with run/task/fingerprint/dependency trailers, and pushes it.
-6. One PR records the node result. A clean GitHub check must pass for the exact
+8. One PR records the node result. A clean GitHub check must pass for the exact
    pushed head SHA before a child can consume it.
-7. A child consumes only published dependency commit SHAs. It never reads a
+9. A child consumes only published dependency commit SHAs. It never reads a
    parent's local directory, stash, patch, or agent session.
-8. The compiler-owned conformance node runs once after the generated-code sink.
-   Failure is a spec/compiler defect; the agent does not repair toward tests.
+10. Conformance failure is a spec/compiler defect; no agent repairs toward the
+    compiler oracle.
 
 Independent ready nodes run concurrently because they have distinct worktrees,
 containers, branches, conversations, scopes, and logs. An unordered overlap in
@@ -75,6 +85,24 @@ plan from the published root commit, fingerprints it, and publishes it to an
 immutable Git ref before any prompt or acceptance command runs. Agent
 credentials are exposed only to agent nodes, through read-only mounts or named
 environment variables; compiler materialization nodes receive no credentials.
+
+Every plan also carries a shot-independent `semanticInputDigest`. The immutable
+compiler seed embeds `.spec-input/` source, manifest, Spec IR, blueprint, DAG
+with full prompts, verification plan, and oracle bytes. Repository/run identity
+changes the execution-plan fingerprint but not this semantic digest, allowing
+cross-shot input equality to be proven before output comparison.
+Local planning writes the same inputs atomically to
+`.spec/inputs/<content-sha256>/`; the legacy root artifacts are refreshed from
+that same compile so IR/manifest and blueprint/DAG cannot silently describe
+different examples.
+
+When Spec IR declares `spec.module` units, `spec generate` emits a composite
+workspace instead of selecting one global target. FastAPI and React module
+DAGs use disjoint namespaced directories and run concurrently from the same
+frozen interface contract. No provider-to-caller scheduler edge is added.
+All module sinks feed one compiler conformance node, which materializes and
+runs every module oracle once. HTTP providers are rejected during lowering if
+their blueprint lacks a route declared by the interface transport ABI.
 
 ## CLI
 

@@ -40,6 +40,8 @@ export interface ShotSpec {
   tasks: HarnessTask[]
   /** Compiler-owned target runtime/contract files available to generation tasks. */
   seedFiles?: Record<string, string>
+  /** Frozen source/IR/blueprint/DAG/oracle bundle embedded in the immutable plan. */
+  semanticFiles?: Record<string, string>
   /** Compiler-owned files written into the workspace after generation. */
   conformanceFiles: Record<string, string>
   /** Directories excluded from artifact scanning (compiler-owned). */

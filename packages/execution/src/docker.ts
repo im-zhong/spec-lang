@@ -1,5 +1,6 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
+import { createHash } from "node:crypto"
 import type { AgentExecutionCheckResult, ResolvedAgentExecutionTask } from "@spec/core"
 import { commandFailure, runProcess } from "./process"
 import type { ContainerExecutionResult, AgentExecutionContainerPort } from "./ports"
@@ -13,6 +14,8 @@ export interface DockerMount {
 export interface DockerAgentExecutorOptions {
   dockerCli?: string
   agentCommand?: string[]
+  /** Read-only Claude command used for the reviewer role. */
+  reviewerAgentCommand?: string[]
   environmentVariables?: string[]
   mounts?: DockerMount[]
   timeoutMs?: number
@@ -28,8 +31,108 @@ const DEFAULT_AGENT_COMMAND = [
   "Bash(wc:*)", "Bash(grep:*)", "Bash(find:*)", "Bash(mkdir:*)", "Bash(sed:*)",
 ]
 
+const DEFAULT_REVIEWER_COMMAND = [
+  "claude", "-p", "--output-format", "json", "--safe-mode", "--no-session-persistence",
+  "--permission-mode", "plan", "--allowedTools",
+  "Read", "Glob", "Grep", "LS", "Bash(uv:*)", "Bash(python:*)", "Bash(python3:*)",
+  "Bash(.venv/bin/python:*)", "Bash(pytest:*)", "Bash(ls:*)", "Bash(cat:*)",
+  "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(grep:*)", "Bash(find:*)", "Bash(sed:*)",
+]
+
+function parseAgentEnvelope(stdout: string): Record<string, unknown> | undefined {
+  const starts = [stdout.lastIndexOf("\n{"), stdout.indexOf("{")]
+    .map((index) => index < 0 ? -1 : index + (stdout[index] === "\n" ? 1 : 0))
+    .filter((index, position, values) => index >= 0 && values.indexOf(index) === position)
+  for (const start of starts) {
+    try {
+      const value = JSON.parse(stdout.slice(start).trim())
+      if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>
+    } catch {
+      // Try the next complete JSON object after bounded CLI noise.
+    }
+  }
+  return undefined
+}
+
+function agentCost(stdout: string): number {
+  const payload = parseAgentEnvelope(stdout)
+  return typeof payload?.total_cost_usd === "number" ? payload.total_cost_usd : 0
+}
+
+function reviewerVerdict(stdout: string): { approved: boolean; feedback: string } | undefined {
+  try {
+    const envelope = parseAgentEnvelope(stdout)
+    if (!envelope) return undefined
+    const candidate = typeof envelope.result === "string" ? JSON.parse(envelope.result) as Record<string, unknown> : envelope
+    if (typeof candidate.approved !== "boolean") return undefined
+    return {
+      approved: candidate.approved,
+      feedback: typeof candidate.feedback === "string" ? candidate.feedback : "",
+    }
+  } catch {
+    return undefined
+  }
+}
+
 function safeName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120)
+}
+
+function snapshot(root: string): Map<string, string> {
+  const files = new Map<string, string>()
+  const visit = (directory: string): void => {
+    if (!fs.existsSync(directory)) return
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name === ".git" || entry.name === ".spec-loop") continue
+      const absolute = path.join(directory, entry.name)
+      if (entry.isDirectory()) visit(absolute)
+      else if (entry.isFile()) {
+        const relative = path.relative(root, absolute).replaceAll("\\", "/")
+        files.set(relative, createHash("sha256").update(fs.readFileSync(absolute)).digest("hex"))
+      }
+    }
+  }
+  visit(root)
+  return files
+}
+
+function changedPaths(before: Map<string, string>, after: Map<string, string>): string[] {
+  return [...new Set([...before.keys(), ...after.keys()])]
+    .filter((file) => before.get(file) !== after.get(file))
+    .sort()
+}
+
+function roleScope(task: ResolvedAgentExecutionTask, files: string[]): string[] {
+  const prefix = task.workingDirectory ? `${task.workingDirectory.replace(/\/$/, "")}/` : ""
+  return files.map((file) => {
+    if (prefix && !file.startsWith(prefix)) throw new Error(`loop role scope ${file} is outside ${task.workingDirectory}`)
+    return prefix ? file.slice(prefix.length) : file
+  })
+}
+
+function mergeRoleChanges(
+  taskDirectory: string,
+  roleDirectory: string,
+  before: Map<string, string>,
+  allowedFiles: string[],
+  role: string,
+): string | undefined {
+  const after = snapshot(roleDirectory)
+  const changes = changedPaths(before, after)
+  const allowed = new Set(allowedFiles)
+  const violations = changes.filter((file) => !allowed.has(file))
+  if (violations.length > 0) return `${role} agent wrote outside its declared scope: ${violations.join(", ")}`
+  for (const file of changes) {
+    const source = path.join(roleDirectory, file)
+    const destination = path.join(taskDirectory, file)
+    if (!fs.existsSync(source)) {
+      if (fs.existsSync(destination)) fs.rmSync(destination)
+      continue
+    }
+    fs.mkdirSync(path.dirname(destination), { recursive: true })
+    fs.copyFileSync(source, destination)
+  }
+  return undefined
 }
 
 export class DockerAgentExecutor implements AgentExecutionContainerPort {
@@ -106,20 +209,110 @@ export class DockerAgentExecutor implements AgentExecutionContainerPort {
         }
         checks.push({ name: "generation/materialize", status: error ? "failure" : "success" })
       } else {
-        const agent = await runProcess(
-          docker,
-          ["exec", "-i", name, ...(this.options.agentCommand ?? DEFAULT_AGENT_COMMAND)],
-          { input: task.instruction, timeoutMs },
-        )
-        checks.push({ name: "generation/agent", status: agent.ok ? "success" : "failure" })
-        if (!agent.ok) error = commandFailure(agent).message
-        if (agent.ok) {
-          try {
-            const payload = JSON.parse(agent.stdout) as { total_cost_usd?: unknown }
-            if (typeof payload.total_cost_usd === "number") costUsd = payload.total_cost_usd
-          } catch {
-            // Agent output is evidence only; its exit code is authoritative here.
+        if (task.loop) {
+          let feedback = ""
+          let approved = false
+          costUsd = 0
+          for (let round = 1; round <= task.loop.maxRounds; round++) {
+            const shared = `\n\n# Frozen node context\nTask: ${task.id}\nRound: ${round}/${task.loop.maxRounds}\n` +
+              (feedback ? `Reviewer feedback from the prior round:\n${feedback}\n` : "This is the first round.\n")
+            const implementationPrompt = `${task.loop.implementation.instruction}${shared}\nYou own only: ${task.loop.implementation.scope.join(", ")}. Do not edit tests.`
+            const testsPrompt = `${task.loop.tests.instruction}${shared}\nYou own only: ${task.loop.tests.scope.join(", ")}. Do not edit implementation files.`
+            const loopRoot = path.join(path.resolve(workspace), ".spec-loop", safeName(task.id), String(round))
+            const implementationDirectory = path.join(loopRoot, "implementation")
+            const testsDirectory = path.join(loopRoot, "tests")
+            fs.rmSync(loopRoot, { recursive: true, force: true })
+            fs.mkdirSync(loopRoot, { recursive: true })
+            fs.cpSync(taskDirectory, implementationDirectory, { recursive: true })
+            fs.cpSync(taskDirectory, testsDirectory, { recursive: true })
+            const before = snapshot(taskDirectory)
+            const implementationWorkdir = `/workspace/${path.relative(path.resolve(workspace), implementationDirectory).replaceAll("\\", "/")}`
+            const testsWorkdir = `/workspace/${path.relative(path.resolve(workspace), testsDirectory).replaceAll("\\", "/")}`
+            const [implementation, tests] = await Promise.all([
+              runProcess(docker, ["exec", "-w", implementationWorkdir, "-i", name, ...(this.options.agentCommand ?? DEFAULT_AGENT_COMMAND)], { input: implementationPrompt, timeoutMs }),
+              runProcess(docker, ["exec", "-w", testsWorkdir, "-i", name, ...(this.options.agentCommand ?? DEFAULT_AGENT_COMMAND)], { input: testsPrompt, timeoutMs }),
+            ])
+            checks.push({ name: `generation/loop/${round}/implementation`, status: implementation.ok ? "success" : "failure" })
+            checks.push({ name: `generation/loop/${round}/tests`, status: tests.ok ? "success" : "failure" })
+            costUsd += agentCost(implementation.stdout) + agentCost(tests.stdout)
+            if (!implementation.ok || !tests.ok) {
+              error = commandFailure(!implementation.ok ? implementation : tests).message
+              fs.rmSync(loopRoot, { recursive: true, force: true })
+              break
+            }
+            const directWrites = changedPaths(before, snapshot(taskDirectory))
+            if (directWrites.length > 0) {
+              error = `parallel loop agents bypassed their isolated snapshots: ${directWrites.join(", ")}`
+              fs.rmSync(loopRoot, { recursive: true, force: true })
+              break
+            }
+            const implementationViolation = mergeRoleChanges(
+              taskDirectory,
+              implementationDirectory,
+              before,
+              roleScope(task, task.loop.implementation.scope),
+              "implementation",
+            )
+            const testsViolation = mergeRoleChanges(
+              taskDirectory,
+              testsDirectory,
+              before,
+              roleScope(task, task.loop.tests.scope),
+              "tests",
+            )
+            fs.rmSync(loopRoot, { recursive: true, force: true })
+            if (implementationViolation || testsViolation) {
+              error = implementationViolation ?? testsViolation
+              break
+            }
+
+            const testEvidence: string[] = []
+            for (const command of task.loop.reviewer.commands) {
+              const result = await runProcess(docker, ["exec", name, "/bin/sh", "-lc", command], { timeoutMs })
+              testEvidence.push(`$ ${command}\nexit=${result.exitCode}\n${result.stdout}\n${result.stderr}`)
+            }
+            const reviewPrompt = `${task.loop.reviewer.instruction}${shared}
+Review the implementation and generated tests against the frozen task/spec. The test evidence is:
+${testEvidence.join("\n\n")}
+Do not edit any file. Return only JSON in your result: {"approved":boolean,"feedback":"specific changes for both code and tests"}. Approve only when code, tests, and constraints all conform.`
+            const beforeReviewer = snapshot(taskDirectory)
+            const review = await runProcess(
+              docker,
+              ["exec", "-i", name, ...(this.options.reviewerAgentCommand ?? DEFAULT_REVIEWER_COMMAND)],
+              { input: reviewPrompt, timeoutMs },
+            )
+            checks.push({ name: `generation/loop/${round}/review`, status: review.ok ? "success" : "failure" })
+            costUsd += agentCost(review.stdout)
+            if (!review.ok) {
+              error = commandFailure(review).message
+              break
+            }
+            const reviewerWrites = changedPaths(beforeReviewer, snapshot(taskDirectory))
+            if (reviewerWrites.length > 0) {
+              error = `reviewer for ${task.id} modified files despite its read-only role: ${reviewerWrites.join(", ")}`
+              break
+            }
+            const verdict = reviewerVerdict(review.stdout)
+            if (!verdict) {
+              error = `reviewer for ${task.id} round ${round} returned no structured verdict`
+              break
+            }
+            if (verdict.approved) {
+              approved = true
+              break
+            }
+            feedback = verdict.feedback || "Reviewer rejected the round without actionable feedback. Re-check the complete task contract."
           }
+          if (!error && !approved) error = `agent loop for ${task.id} exhausted ${task.loop.maxRounds} rounds without approval`
+        } else {
+          const agent = await runProcess(
+            docker,
+            ["exec", "-i", name, ...(this.options.agentCommand ?? DEFAULT_AGENT_COMMAND)],
+            { input: task.instruction, timeoutMs },
+          )
+          checks.push({ name: "generation/agent", status: agent.ok ? "success" : "failure" })
+          if (!agent.ok) error = commandFailure(agent).message
+          if (agent.ok) costUsd = agentCost(agent.stdout)
         }
       }
       if (!error) {

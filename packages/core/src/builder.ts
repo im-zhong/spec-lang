@@ -113,6 +113,12 @@ export function serializeValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(serializeValue)
   if (typeof value === "object") {
     const record = value as Record<string, unknown>
+    if (record.__specInterfaceCall === true) {
+      return {
+        interface: serializeValue(record.interface),
+        operations: serializeValue(record.operations),
+      }
+    }
     // field-spec style builders: flatten to their plain data properties
     // (data lives under non-colliding keys; see @spec/web field.ts)
     if (record.__specFieldSpec === true) {

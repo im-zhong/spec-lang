@@ -8,6 +8,7 @@ import { compile } from "@spec/compiler"
 import { planGeneration } from "@spec/fastapi"
 import { lowerContainers } from "@spec/container"
 import { createGitHubGenerationPlan, type ShotSpec } from "@spec/agent"
+import { planCompositeGeneration } from "@spec/cli"
 
 const projectRoot = path.resolve(__dirname, "..")
 const cliDist = path.join(projectRoot, "packages", "cli", "dist", "index.js")
@@ -27,6 +28,67 @@ function runCli(args: string[], cwd: string): { status: number; stdout: string; 
 }
 
 describe("spec generate (dry-run planning)", () => {
+  it("lowers interface-bound backend and frontend modules as parallel isolated roots", async () => {
+    const exampleDir = path.join(projectRoot, "examples", "interface-workspace")
+    const result = runCli(["generate", "app.spec.ts", "--dry-run"], exampleDir)
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("Composite plan derived: 2 independent module(s), 1 interface(s)")
+
+    const artifact = JSON.parse(fs.readFileSync(path.join(exampleDir, ".spec", "composite.agent.tasks.json"), "utf8"))
+    expect(artifact.modules.map((item: { name: string; target: string }) => [item.name, item.target])).toEqual([
+      ["backend", "fastapi"],
+      ["frontend", "react"],
+    ])
+    expect(artifact.interfaceContract.definitions[0]).toMatchObject({
+      id: "interface:MediaApi",
+      protocol: "http-json",
+      hash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    })
+    for (const task of artifact.dag.tasks as Array<{ id: string; dependsOn: string[]; workingDirectory: string; scope: string[] }>) {
+      const module = task.id.split(":")[0]
+      expect(task.workingDirectory).toBe(module)
+      expect(task.scope.every((file) => file.startsWith(`${module}/`))).toBe(true)
+      expect(task.dependsOn.every((dependency) => dependency.startsWith(`${module}:`))).toBe(true)
+    }
+
+    const compiled = await compile("examples/interface-workspace/app.spec.ts", { projectRoot })
+    expect(compiled.ok).toBe(true)
+    const composite = planCompositeGeneration(compiled.ir)
+    expect(composite.shot.seedFiles?.["frontend/src/spec-interface-client.ts"]).toContain(
+      '"path": "/medias"',
+    )
+    const execution = createGitHubGenerationPlan({
+      shot: composite.shot,
+      runId: "interface-workspace-test",
+      repository: "owner/repo",
+      rootBaseSha: "a".repeat(40),
+      targetDirectory: "products/interface-workspace/workspace",
+      environment: {
+        image: `ghcr.io/owner/spec-agent@sha256:${"b".repeat(64)}`,
+        devcontainerHash: "c".repeat(64),
+        toolchainLockHash: "d".repeat(64),
+        agent: { model: "test-model", effort: "high", maxTurns: 20, maxConcurrency: 4 },
+      },
+      requiredChecks: ["spec-generation"],
+    })
+    const backendRoot = execution.tasks.find((task) => task.id === "backend-project")
+    const frontendRoot = execution.tasks.find((task) => task.id === "frontend-frontend")
+    expect(backendRoot?.dependsOn).toEqual(["compiler-seed"])
+    expect(frontendRoot?.dependsOn).toEqual(["compiler-seed"])
+    expect(backendRoot?.workingDirectory).toBe("products/interface-workspace/workspace/backend")
+    expect(frontendRoot?.workingDirectory).toBe("products/interface-workspace/workspace/frontend")
+    expect(execution.tasks.find((task) => task.id === "conformance")?.dependsOn).toEqual([
+      "backend-app",
+      "frontend-frontend",
+    ])
+
+    const invalid = structuredClone(compiled.ir)
+    invalid.interfaces.definitions[0].operations.list.transport!.path = "/not-implemented"
+    expect(() => planCompositeGeneration(invalid)).toThrow(
+      "claims to provide MediaApi.list at GET /not-implemented",
+    )
+  })
+
   it("projects the media generator DAG itself onto GitHub task execution", async () => {
     const compiled = await compile("examples/media-platform/app.spec.ts", { projectRoot })
     expect(compiled.ok).toBe(true)
@@ -34,6 +96,7 @@ describe("spec generate (dry-run planning)", () => {
     const containers = lowerContainers(compiled.ir)
     const shot: ShotSpec = {
       tasks: generation.dag.tasks,
+      seedFiles: generation.seedFiles,
       conformanceFiles: generation.conformance.files,
       verification: generation.verification,
       evidenceFiles: ["conformance-output/openapi.json", "conformance-output/behavior.json"],
@@ -65,9 +128,10 @@ describe("spec generate (dry-run planning)", () => {
       maxTurns: 20,
       maxConcurrency: 2,
     })
-    expect(plan.tasks).toHaveLength(generation.dag.tasks.length + 2)
+    expect(plan.tasks).toHaveLength(generation.dag.tasks.length + 3)
     expect(plan.tasks.find((task) => task.id === "models")?.scope).toEqual([
       "products/media-platform/backend/app/models.py",
+      "products/media-platform/backend/tests/spec_tasks/test_models.py",
     ])
     expect(plan.tasks.find((task) => task.id === "conformance")?.dependsOn).toEqual(["app"])
     expect(plan.tasks.find((task) => task.id === "containers")?.dependsOn).toEqual(["conformance"])
@@ -120,6 +184,14 @@ describe("spec generate (dry-run planning)", () => {
       status: 409,
       body: { detail: "Already exists" },
     })
+    const rootIr = JSON.parse(fs.readFileSync(path.join(specDir, "spec.ir.json"), "utf8"))
+    expect(rootIr.app.name).toBe("BookingAPI")
+    const inputBundles = fs.readdirSync(path.join(specDir, "inputs"))
+    expect(inputBundles.some((digest) => {
+      if (!/^[0-9a-f]{64}$/.test(digest)) return false
+      const ir = JSON.parse(fs.readFileSync(path.join(specDir, "inputs", digest, "spec.ir.json"), "utf8"))
+      return ir.app.name === "BookingAPI"
+    })).toBe(true)
 
     // deterministic: replanning produces byte-identical artifacts
     const hash = (p: string) =>

@@ -61,6 +61,12 @@ export interface BlueprintRoute {
   /** Includes the prefix; path params use {id}. */
   path: string
   operation: RouteOperation
+  /** Exactly one compiler-owned producing task; entity is domain data only. */
+  owner: {
+    taskId: string
+    kind: "crud" | "api" | "lifecycle" | "auth"
+    sourceNodeId: string
+  }
   entity?: string
   /** Success status code. */
   status: number
@@ -168,6 +174,16 @@ export interface BlueprintBlob {
   retentionDays?: number
 }
 
+export interface BlueprintModuleAbi {
+  module: string
+  selector: { name: string; type: "declared-name-string"; unknown: "KeyError" }
+  exports: Array<{
+    name: string
+    kind: "function" | "class"
+    parameters: string[]
+  }>
+}
+
 /**
  * The behavioral contract every generation must satisfy identically.
  * These values are pinned (not agent choices) — that is the golden rule.
@@ -239,6 +255,10 @@ export interface BackendBlueprint {
   messages: BlueprintMessage[]
   queues: BlueprintQueue[]
   blobs: BlueprintBlob[]
+  /** One machine truth consumed by prompts, node tests, and conformance. */
+  moduleAbis: {
+    blob?: BlueprintModuleAbi
+  }
   /** Selected package-owned guidance with dependency and prompt provenance. */
   generation: {
     target: "fastapi-python"
@@ -515,6 +535,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
         method: "GET",
         path: base,
         operation: "list",
+        owner: { taskId: `router:${entityName}`, kind: "crud", sourceNodeId: node.id },
         entity: entityName,
         status: 200,
         auth,
@@ -527,6 +548,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
         method: "GET",
         path: `${base}/{id}`,
         operation: "get",
+        owner: { taskId: `router:${entityName}`, kind: "crud", sourceNodeId: node.id },
         entity: entityName,
         status: 200,
         auth,
@@ -539,6 +561,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
         method: "POST",
         path: base,
         operation: "create",
+        owner: { taskId: `router:${entityName}`, kind: "crud", sourceNodeId: node.id },
         entity: entityName,
         status: 201,
         auth,
@@ -552,6 +575,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
         method: "PATCH",
         path: `${base}/{id}`,
         operation: "update",
+        owner: { taskId: `router:${entityName}`, kind: "crud", sourceNodeId: node.id },
         entity: entityName,
         status: 200,
         auth,
@@ -565,6 +589,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
         method: "DELETE",
         path: `${base}/{id}`,
         operation: "delete",
+        owner: { taskId: `router:${entityName}`, kind: "crud", sourceNodeId: node.id },
         entity: entityName,
         status: 204,
         auth,
@@ -589,6 +614,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
       method: "GET",
       path: fullPath,
       operation: "count",
+      owner: { taskId: `router:${entityName}`, kind: "api", sourceNodeId: node.id },
       entity: entityName,
       status: 200,
       auth: authActive && node.attributes.auth !== false,
@@ -649,6 +675,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
         method: "POST",
         path,
         operation: "transition",
+        owner: { taskId: `router:${entityName}`, kind: "lifecycle", sourceNodeId: node.id },
         entity: entityName,
         status: 200,
         auth: authActive,
@@ -755,6 +782,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
           method: "POST",
           path: `${prefix}/auth/login`,
           operation: "login",
+          owner: { taskId: "router:auth", kind: "auth", sourceNodeId: authNode!.id },
           entity: principalName,
           status: 200,
           auth: false,
@@ -766,6 +794,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
           method: "POST",
           path: `${prefix}/auth/register`,
           operation: "register",
+          owner: { taskId: "router:auth", kind: "auth", sourceNodeId: authNode!.id },
           entity: principalName,
           status: 201,
           auth: false,
@@ -782,6 +811,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
           method: "GET",
           path: `${prefix}/auth/me`,
           operation: "me",
+          owner: { taskId: "router:auth", kind: "auth", sourceNodeId: authNode!.id },
           entity: principalName,
           status: 200,
           auth: true,
@@ -941,6 +971,17 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
     messages,
     queues,
     blobs,
+    moduleAbis: blobs.length > 0 ? {
+      blob: {
+        module: "app.blob",
+        selector: { name: "policy_name", type: "declared-name-string", unknown: "KeyError" },
+        exports: [
+          { name: "normalize_blob_key", kind: "function", parameters: ["policy_name", "key"] },
+          { name: "InMemoryBlobStore", kind: "class", parameters: [] },
+          { name: "S3BlobStore", kind: "class", parameters: ["client"] },
+        ],
+      },
+    } : {},
     generation: { target: "fastapi-python", contributions },
     database: { engine, urlEnv: "DATABASE_URL", fallback: "sqlite:///./dev.db", urlFormat: "sqlalchemy-url" },
     stack,

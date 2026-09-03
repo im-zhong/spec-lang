@@ -255,6 +255,7 @@ function infrastructureTests(bp: BackendBlueprint): string {
     messages: bp.messages,
     queues: bp.queues,
     blobs: bp.blobs,
+    moduleAbis: bp.moduleAbis,
   }
   return `"""Compiler-generated infrastructure conformance — DO NOT EDIT."""
 
@@ -507,6 +508,10 @@ def test_blob_contract():
     if not CONTRACT["blobs"]:
         return
     from app.blob import BLOB_POLICIES, BlobValidationError, InMemoryBlobStore, normalize_blob_key
+
+    assert CONTRACT["moduleAbis"]["blob"]["selector"] == {
+        "name": "policy_name", "type": "declared-name-string", "unknown": "KeyError"
+    }
 
     assert sorted(BLOB_POLICIES) == sorted(item["name"] for item in CONTRACT["blobs"])
 

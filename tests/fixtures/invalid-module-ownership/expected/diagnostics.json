@@ -1,0 +1,20 @@
+[
+  {
+    "code": "MODULE_NODE_UNOWNED",
+    "level": "error",
+    "message": "Implementation node \"entity:Unowned\" must be owned by exactly one spec.module via contains.",
+    "nodeId": "entity:Unowned"
+  },
+  {
+    "code": "MODULE_OWNERSHIP_OVERLAP",
+    "details": {
+      "modules": [
+        "module:first",
+        "module:second"
+      ]
+    },
+    "level": "error",
+    "message": "Implementation node \"entity:Shared\" is owned by multiple modules: module:first, module:second.",
+    "nodeId": "entity:Shared"
+  }
+]

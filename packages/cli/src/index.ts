@@ -27,6 +27,42 @@ import { planGeneration } from "@spec/fastapi"
 import { planFrontendGeneration } from "@spec/react"
 import { OPENAPI_SNIPPET, type ShotSpec } from "@spec/agent"
 import { runGitHubGenerate } from "./generate-github"
+import { compositePlanDigest, planCompositeGeneration } from "./composite-generation"
+
+function semanticBundle(
+  sourcePath: string,
+  result: Awaited<ReturnType<typeof compile>>,
+  generation: { blueprint: unknown; dag: unknown; verification: unknown; seedFiles?: Record<string, string>; conformance: { files: Record<string, string> } },
+): Record<string, string> {
+  return {
+    "source.spec.ts": fs.readFileSync(sourcePath, "utf8"),
+    "manifest.json": stableStringify(result.manifest) + "\n",
+    "spec.ir.json": stableStringify(result.ir) + "\n",
+    "blueprint.json": stableStringify(generation.blueprint) + "\n",
+    "dag.json": stableStringify(generation.dag) + "\n",
+    "verification.json": stableStringify(generation.verification) + "\n",
+    "seed-files.json": stableStringify(generation.seedFiles ?? {}) + "\n",
+    ...Object.fromEntries(
+      Object.entries(generation.conformance.files).map(([file, content]) => [`oracle/${file}`, content]),
+    ),
+  }
+}
+
+function writeRunAddressedBundle(specDir: string, files: Record<string, string>): { directory: string; digest: string } {
+  const digest = createHash("sha256").update(stableStringify(files)).digest("hex")
+  const directory = path.join(specDir, "inputs", digest)
+  if (fs.existsSync(directory)) return { directory, digest }
+  const staging = path.join(specDir, `.inputs-${digest}.tmp`)
+  if (fs.existsSync(staging)) throw new Error(`stale generation-input staging directory: ${staging}`)
+  for (const [relative, content] of Object.entries(files)) {
+    const target = path.join(staging, relative)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, content, "utf8")
+  }
+  fs.mkdirSync(path.dirname(directory), { recursive: true })
+  fs.renameSync(staging, directory)
+  return { directory, digest }
+}
 
 interface CliArgs {
   command: string | undefined
@@ -209,10 +245,80 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return 1
     }
 
+    if (args.command === "generate" && result.ir.modules.length > 0) {
+      const plan = planCompositeGeneration(result.ir)
+      const specDir = path.resolve(projectRoot, result.outputDir)
+      await writeArtifacts(result, projectRoot)
+      fs.mkdirSync(specDir, { recursive: true })
+      const semanticPlan = {
+        blueprint: {
+          schemaVersion: plan.schemaVersion,
+          modules: plan.modules,
+          interfaceContract: plan.interfaceContract,
+          targets: plan.blueprints,
+        },
+        dag: { tasks: plan.shot.tasks },
+        verification: plan.shot.verification,
+        seedFiles: plan.shot.seedFiles,
+        conformance: { files: plan.shot.conformanceFiles },
+      }
+      const frozenInputs = semanticBundle(path.resolve(projectRoot, args.file), result, semanticPlan)
+      writeRunAddressedBundle(specDir, frozenInputs)
+      const artifact = {
+        schemaVersion: plan.schemaVersion,
+        digest: compositePlanDigest(plan),
+        modules: plan.modules,
+        interfaceContract: plan.interfaceContract,
+        blueprintSha256: Object.fromEntries(
+          Object.entries(plan.blueprints).map(([directory, blueprint]) => [
+            directory,
+            createHash("sha256").update(stableStringify(blueprint)).digest("hex"),
+          ]),
+        ),
+        dag: {
+          tasks: plan.shot.tasks.map((task) => ({
+            id: task.id,
+            label: task.label,
+            dependsOn: task.dependsOn,
+            workingDirectory: task.workingDirectory,
+            scope: task.scope,
+            promptSha256: createHash("sha256").update(task.prompt).digest("hex"),
+            specNodeIds: task.specNodeIds,
+            loop: task.loop,
+            acceptanceCommands: task.acceptanceCommands,
+          })),
+        },
+        verification: plan.shot.verification,
+        seedFiles: Object.keys(plan.shot.seedFiles ?? {}).sort(),
+        conformanceFiles: Object.keys(plan.shot.conformanceFiles).sort(),
+        evidenceFiles: plan.shot.evidenceFiles,
+      }
+      fs.writeFileSync(path.join(specDir, "composite.agent.tasks.json"), stableStringify(artifact) + "\n", "utf8")
+      process.stdout.write(
+        `✓ Composite plan derived: ${plan.modules.length} independent module(s), ` +
+        `${plan.interfaceContract.definitions.length} interface(s), ${plan.shot.tasks.length} DAG task(s)\n`,
+      )
+      if (args.dryRun) {
+        process.stdout.write(`✓ Composite dry run complete — artifacts in ${path.relative(projectRoot, specDir)}\n`)
+        return 0
+      }
+      const shotSpec: ShotSpec = { ...plan.shot, semanticFiles: frozenInputs }
+      const ok = await runGitHubGenerate({
+        repoRoot: projectRoot, runId: args.runId!, image: args.image!, repository: args.repository,
+        targetDirectory: args.targetDir, appName: result.ir.app.name, target: "workspace",
+        shots: args.shots, concurrency: args.concurrency, requiredCheck: args.requiredCheck,
+        resume: args.resume, model: args.model!, effort: args.effort!, maxTurns: args.maxTurns!, shotSpec, ir: result.ir,
+      })
+      return ok ? 0 : 1
+    }
+
     if (args.command === "generate-frontend") {
       const plan = planFrontendGeneration(result.ir)
       const specDir = path.resolve(projectRoot, result.outputDir)
+      await writeArtifacts(result, projectRoot)
       fs.mkdirSync(specDir, { recursive: true })
+      const frozenInputs = semanticBundle(path.resolve(projectRoot, args.file), result, plan)
+      writeRunAddressedBundle(specDir, frozenInputs)
       fs.writeFileSync(path.join(specDir, "frontend.blueprint.json"), stableStringify(plan.blueprint) + "\n", "utf8")
       fs.writeFileSync(
         path.join(specDir, "frontend.agent.tasks.json"),
@@ -225,6 +331,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
               scope: task.scope,
               promptSha256: createHash("sha256").update(task.prompt).digest("hex"),
               specNodeIds: task.specNodeIds,
+              loop: task.loop,
+              acceptanceCommands: task.acceptanceCommands,
             })),
             edges: plan.dag.edges,
           },
@@ -245,6 +353,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       const shotSpec: ShotSpec = {
         tasks: plan.dag.tasks,
         seedFiles: plan.seedFiles,
+        semanticFiles: frozenInputs,
         conformanceFiles: plan.conformance.files,
         conformanceDirs: ["conformance", "conformance-output"],
         verification: plan.verification,
@@ -267,7 +376,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
     const plan = planGeneration(result.ir)
     const specDir = path.resolve(projectRoot, result.outputDir)
+    await writeArtifacts(result, projectRoot)
     fs.mkdirSync(specDir, { recursive: true })
+    const frozenInputs = semanticBundle(path.resolve(projectRoot, args.file), result, plan)
+    writeRunAddressedBundle(specDir, frozenInputs)
     fs.writeFileSync(
       path.join(specDir, "blueprint.json"),
       stableStringify(plan.blueprint) + "\n",
@@ -284,6 +396,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
             scope: t.scope,
             promptSha256: createHash("sha256").update(t.prompt).digest("hex"),
             specNodeIds: t.specNodeIds,
+            loop: t.loop,
+            acceptanceCommands: t.acceptanceCommands,
           })),
           edges: plan.dag.edges,
         },
@@ -309,6 +423,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
     const shotSpec: ShotSpec = {
       tasks: plan.dag.tasks,
+      seedFiles: plan.seedFiles,
+      semanticFiles: frozenInputs,
       conformanceFiles: plan.conformance.files,
       conformanceDirs: ["conformance"],
       verification: plan.verification,
@@ -370,3 +486,5 @@ if (require.main === module) {
       process.exit(2)
     })
 }
+
+export { planCompositeGeneration, compositePlanDigest } from "./composite-generation"

@@ -1,0 +1,179 @@
+{
+  "app": {
+    "name": "InvalidModuleOwnership"
+  },
+  "capabilities": {
+    "provided": [],
+    "required": []
+  },
+  "diagnostics": [
+    {
+      "code": "MODULE_NODE_UNOWNED",
+      "level": "error",
+      "message": "Implementation node \"entity:Unowned\" must be owned by exactly one spec.module via contains.",
+      "nodeId": "entity:Unowned"
+    },
+    {
+      "code": "MODULE_OWNERSHIP_OVERLAP",
+      "details": {
+        "modules": [
+          "module:first",
+          "module:second"
+        ]
+      },
+      "level": "error",
+      "message": "Implementation node \"entity:Shared\" is owned by multiple modules: module:first, module:second.",
+      "nodeId": "entity:Shared"
+    }
+  ],
+  "generation": {
+    "contributions": []
+  },
+  "interfaces": {
+    "bindings": [],
+    "definitions": [],
+    "dependencies": []
+  },
+  "metadata": {
+    "compilerVersion": "0.1.0"
+  },
+  "modules": [
+    {
+      "calls": [],
+      "contains": [
+        "entity:Shared"
+      ],
+      "id": "module:first",
+      "inputHash": "sha256:77b06961d2d817840f25043aa797bd57aacb6be7761877c78f8f3ab9d2cb444c",
+      "name": "first",
+      "provides": [],
+      "sourceNodeId": "module:first",
+      "target": "fastapi"
+    },
+    {
+      "calls": [],
+      "contains": [
+        "entity:Shared"
+      ],
+      "id": "module:second",
+      "inputHash": "sha256:77b06961d2d817840f25043aa797bd57aacb6be7761877c78f8f3ab9d2cb444c",
+      "name": "second",
+      "provides": [],
+      "sourceNodeId": "module:second",
+      "target": "fastapi"
+    }
+  ],
+  "nodes": [
+    {
+      "attributes": {
+        "entities": [
+          "Shared",
+          "Unowned"
+        ],
+        "modules": [
+          "first",
+          "second"
+        ],
+        "name": "InvalidModuleOwnership"
+      },
+      "id": "app:InvalidModuleOwnership",
+      "kind": "app",
+      "name": "InvalidModuleOwnership",
+      "package": "@spec/core",
+      "source": {
+        "column": 16,
+        "file": "tests/fixtures/invalid-module-ownership/app.spec.ts",
+        "line": 10
+      }
+    },
+    {
+      "attributes": {
+        "fields": {
+          "id": {
+            "type": "uuid"
+          }
+        }
+      },
+      "id": "entity:Shared",
+      "kind": "entity",
+      "name": "Shared",
+      "package": "@spec/web",
+      "source": {
+        "column": 16,
+        "file": "tests/fixtures/invalid-module-ownership/app.spec.ts",
+        "line": 4
+      }
+    },
+    {
+      "attributes": {
+        "fields": {
+          "id": {
+            "type": "uuid"
+          }
+        }
+      },
+      "id": "entity:Unowned",
+      "kind": "entity",
+      "name": "Unowned",
+      "package": "@spec/web",
+      "source": {
+        "column": 17,
+        "file": "tests/fixtures/invalid-module-ownership/app.spec.ts",
+        "line": 5
+      }
+    },
+    {
+      "attributes": {
+        "calls": [],
+        "contains": [
+          {
+            "nodeId": "entity:Shared"
+          }
+        ],
+        "provides": [],
+        "target": "fastapi"
+      },
+      "id": "module:first",
+      "kind": "module",
+      "name": "first",
+      "package": "@spec/core",
+      "source": {
+        "column": 15,
+        "file": "tests/fixtures/invalid-module-ownership/app.spec.ts",
+        "line": 7
+      }
+    },
+    {
+      "attributes": {
+        "calls": [],
+        "contains": [
+          {
+            "nodeId": "entity:Shared"
+          }
+        ],
+        "provides": [],
+        "target": "fastapi"
+      },
+      "id": "module:second",
+      "kind": "module",
+      "name": "second",
+      "package": "@spec/core",
+      "source": {
+        "column": 16,
+        "file": "tests/fixtures/invalid-module-ownership/app.spec.ts",
+        "line": 8
+      }
+    }
+  ],
+  "packages": [
+    {
+      "name": "@spec/core",
+      "version": "0.1.0"
+    },
+    {
+      "name": "@spec/web",
+      "version": "0.1.0"
+    }
+  ],
+  "version": "spec-ir/0.3"
+}

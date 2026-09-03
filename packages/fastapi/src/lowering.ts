@@ -31,6 +31,8 @@ export interface FastApiGenerationPlan {
   conformance: ConformanceFiles
   /** Deterministic verification executed by the orchestrator. */
   verification: VerificationPlan
+  /** Compiler-owned mechanical files available before any agent task. */
+  seedFiles: Record<string, string>
   /** Deterministic byte-stable form (DAG + prompts included). */
   stable: string
 }
@@ -40,6 +42,22 @@ export function planGeneration(ir: SpecIR): FastApiGenerationPlan {
   const dag = buildTaskDag(blueprint, ir)
   const conformance = buildConformanceSuite(blueprint)
   const verification = fastApiVerification()
+  const routerTasks = [...new Set(blueprint.routes.map((route) => route.owner.taskId))].sort()
+  const imports = routerTasks.map((taskId) => {
+    const suffix = taskId.slice("router:".length).toLowerCase()
+    const alias = `router_${suffix.replace(/[^a-z0-9_]/g, "_")}`
+    return { line: `from app.routers.${suffix} import router as ${alias}`, alias }
+  })
+  const seedFiles = {
+    "app/router_registry.py": [
+      '"""Compiler-owned router registry — DO NOT EDIT."""',
+      "",
+      ...imports.map((item) => item.line),
+      "",
+      `ROUTERS = (${imports.map((item) => item.alias).join(", ")}${imports.length === 1 ? "," : ""})`,
+      "",
+    ].join("\n"),
+  }
 
   const constraints: Constraint[] = [
     { kind: "interface", value: blueprint.routes.map((r) => r.id).sort() },
@@ -62,7 +80,12 @@ export function planGeneration(ir: SpecIR): FastApiGenerationPlan {
   const agentTasks: AgentTask[] = dag.tasks.map((task) => ({
     id: task.id,
     type: "generate",
-    input: { scope: task.scope, dependsOn: task.dependsOn },
+    input: {
+      scope: task.scope,
+      dependsOn: task.dependsOn,
+      loop: task.loop,
+      acceptanceCommands: task.acceptanceCommands,
+    },
     constraints,
     context: { specNodeIds: task.specNodeIds },
   }))
@@ -73,10 +96,12 @@ export function planGeneration(ir: SpecIR): FastApiGenerationPlan {
     agentTasks,
     conformance,
     verification,
+    seedFiles,
     stable: stableStringify({
       blueprint,
       dag: JSON.parse(dagFingerprint(dag)),
       verification,
+      seedFiles,
       conformance: conformance.files,
     }),
   }

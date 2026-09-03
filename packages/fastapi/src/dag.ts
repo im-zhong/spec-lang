@@ -20,7 +20,7 @@
  * agent can literally read. The harness (@spec/agent) executes tasks in
  * topological order — one agent run per node.
  */
-import type { SpecIR } from "@spec/core"
+import type { AgentExecutionLoop, SpecIR } from "@spec/core"
 import { stableStringify } from "@spec/core"
 import type { BackendBlueprint } from "./blueprint"
 import {
@@ -50,6 +50,8 @@ export interface DagTask {
   prompt: string
   /** Spec nodes this task derives from (provenance). */
   specNodeIds: string[]
+  loop?: AgentExecutionLoop
+  acceptanceCommands?: string[]
 }
 
 export interface GenerationDag {
@@ -61,6 +63,10 @@ export interface GenerationDag {
 
 function irNodeIds(ir: SpecIR): string[] {
   return ir.nodes.map((n) => n.id).sort()
+}
+
+function shellWord(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
 export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
@@ -129,15 +135,18 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
   }
 
   /* ---- one router per served entity (crud and/or count) ---- */
-  const servedEntities = [...new Set(bp.routes.filter((r) => r.entity).map((r) => r.entity!))].sort()
+  const servedEntities = [...new Set(
+    bp.routes.filter((route) => route.owner.taskId !== "router:auth" && route.entity).map((route) => route.entity!),
+  )].sort()
   const baseRouterDeps = ["models", "schemas", "database"]
   for (const entityName of servedEntities) {
-    const routes = bp.routes.filter((r) => r.entity === entityName)
+    const taskId = `router:${entityName}`
+    const routes = bp.routes.filter((route) => route.owner.taskId === taskId)
     const needsAuth = routes.some((r) => r.auth) || (bp.auth?.principal === entityName)
     const deps = [...baseRouterDeps, ...(needsAuth && bp.auth ? ["security"] : [])]
     const file = routerFile(entityName)
     tasks.push({
-      id: `router:${entityName}`,
+      id: taskId,
       kind: "router",
       label: `router: ${entityName}`,
       dependsOn: deps,
@@ -147,8 +156,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
         ctx([file], contextFor(deps)),
         entityName,
       ),
-      specNodeIds: [...(all.includes(`crud:${entityName}`) ? [`crud:${entityName}`] : []),
-        ...all.filter((id) => id.startsWith("api:") && routes.some((r) => r.operation === "count"))],
+      specNodeIds: [...new Set(routes.map((route) => route.owner.sourceNodeId))].sort(),
     })
   }
 
@@ -220,6 +228,49 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
   })
 
   /* ---- order & validate ---- */
+  const taskIds = new Set(tasks.map((task) => task.id))
+  const routeIds = new Set<string>()
+  for (const route of bp.routes) {
+    if (routeIds.has(route.id)) throw new Error(`backend blueprint has duplicate route id: ${route.id}`)
+    routeIds.add(route.id)
+    if (!taskIds.has(route.owner.taskId)) {
+      throw new Error(`route ${route.id} has no producing task: ${route.owner.taskId}`)
+    }
+  }
+  const packages = Object.entries({ ...bp.stack.dependencies, ...bp.stack.dev })
+    .sort(([left], [right]) => left.localeCompare(right))
+    .flatMap(([name, version]) => ["--with", shellWord(`${name}==${version}`)])
+  for (const task of tasks) {
+    const sourceScope = [...task.scope]
+    const safe = task.id.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
+    const testFile = `tests/spec_tasks/test_${safe}.py`
+    const testCommand = [
+      "uv", "run", "--no-project", "--python", shellWord(bp.stack.python),
+      ...packages,
+      "python", "-B", "-m", "pytest", "-p", "no:cacheprovider", "-q", testFile,
+    ].join(" ")
+    task.scope = [...sourceScope, testFile].sort()
+    task.loop = {
+      schemaVersion: "spec-agent-task-loop/0.1",
+      maxRounds: 3,
+      implementation: { instruction: task.prompt, scope: sourceScope },
+      tests: {
+        scope: [testFile],
+        instruction: `You are the unit-test author for generation node ${JSON.stringify(task.id)}.
+You and the implementation agent receive the same frozen specification progress. Read the dependency files and the complete node contract below, then create focused executable pytest tests in ${testFile}. Test declared behavior, exact public ABI, forbidden extras, and relevant failure cases. Do not weaken, delete, or rewrite tests to accommodate an implementation. Do not edit source files.
+
+Frozen implementation contract:
+${task.prompt}`,
+      },
+      reviewer: {
+        commands: [testCommand],
+        instruction: `You are the read-only code reviewer for generation node ${JSON.stringify(task.id)}. Verify both implementation and tests against the exact frozen specification. Look for missing behavior, extra public API/routes, ABI drift, invalid imports, tests that merely mirror the implementation, and uncovered constraints. Use test failures and direct code inspection. If rejecting, give actionable changes for both source and tests where applicable.`,
+      },
+    }
+    // This gate is outside the synthesis loop. Failure is the node's single
+    // compiler-owned judgment and must never be fed back as a repair prompt.
+    task.acceptanceCommands = [testCommand]
+  }
   const ordered = topologicalSort(tasks)
   const edges: GenerationDag["edges"] = []
   for (const task of ordered) {
@@ -286,6 +337,8 @@ export function dagFingerprint(dag: GenerationDag): string {
       scope: t.scope,
       prompt: t.prompt,
       specNodeIds: t.specNodeIds,
+      loop: t.loop,
+      acceptanceCommands: t.acceptanceCommands,
     })),
     edges: dag.edges,
   })

@@ -39,6 +39,14 @@ interface FastApiGenerationPlan {
 The blueprint is the complete application contract. The DAG is a lowering of
 that contract, not a suggestion to the agent.
 
+For an IR containing `spec.module` nodes, `planCompositeGeneration(ir)` slices
+the IR by declared ownership and lowers each FastAPI/React target independently.
+Module tasks have namespaced ids, cwd, scopes, seed files, and oracle files.
+They share only the frozen interface contract, have no provider/caller
+scheduling edge, and converge on one final conformance node. React callers
+receive a compiler-owned interface client; FastAPI providers must expose every
+HTTP operation's exact method/path.
+
 ## Generation DAG
 
 A typical backend graph is:
@@ -152,9 +160,12 @@ evidence, but the agent never declares conformance.
 
 ## Task acceptance versus conformance
 
-Agent tasks currently use a lightweight container acceptance command before
-their commit is published and checked. This establishes successful execution
-and durable publication, but it is not the application-level verdict.
+Agent tasks run a bounded implementation/test/reviewer synthesis loop before a
+non-vacuous container acceptance command. Implementation and tests use
+isolated, disjoint-scope snapshots; the reviewer is read-only. This establishes
+node-level readiness and durable publication, but it is not the
+application-level verdict and compiler conformance failures never re-enter the
+loop.
 
 The compiler-owned `conformance` node starts only after the generated app sink
 is complete. For FastAPI it materializes:

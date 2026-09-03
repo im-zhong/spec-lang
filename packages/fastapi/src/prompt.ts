@@ -399,7 +399,7 @@ export function routerPrompt(
   entityName: string,
 ): string {
   const entity = bp.entities.find((e) => e.name === entityName)!
-  const routes = bp.routes.filter((r) => r.entity === entityName)
+  const routes = bp.routes.filter((r) => r.owner.taskId === `router:${entityName}`)
   const transitions = bp.routes
     .filter((r) => r.operation === "transition" && r.entity === entityName && r.transition)
     .map((r) => ({
@@ -509,8 +509,9 @@ ${registrationOrder.map((r) => `- ${r}`).join("\n")}
   module-level \`app = create_app()\`.
 - Title \`${bp.app.title}\`, version \`${bp.app.version}\`.
 - Include every router produced by previous tasks; count routes must be
-  reachable (registered before same-prefix \`{id}\` routes — the routers
-  already encode this, just include them).
+  reachable. Import \`ROUTERS\` from the compiler-owned
+  \`app.router_registry\` and include each entry exactly once in tuple order.
+  Do not import or register routers by any other path.
 - Call \`create_engine_from_url(database_url)\` and
   \`create_session_factory(engine)\` once per application. Store the engine and
   factory on \`app.state\`, override \`get_db\` with
@@ -604,6 +605,7 @@ ${stableStringify({ messages: bp.messages, queues: bp.queues })}
 }
 
 export function blobPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
+  const abi = bp.moduleAbis.blob
   return `${taskHeader("blob infrastructure", ctx.scope, ctx.context)}
 
 ${guidanceSection(bp, "blob")}
@@ -614,13 +616,18 @@ Implement \`app/blob.py\` from this exact blob contract:
 ${stableStringify(bp.blobs)}
 \`\`\`
 
+## Exact module ABI (the only source of parameter names and selector type)
+\`\`\`json
+${stableStringify(abi)}
+\`\`\`
+
 ## Required public API
 - \`BlobValidationError\` and immutable \`BlobPolicy\`.
 - \`BLOB_POLICIES: dict[str, BlobPolicy]\` containing every declaration.
-- \`normalize_blob_key(policy, key)\` returns \`<keyPrefix>/<key>\` without
+- \`normalize_blob_key(${abi?.selector.name ?? "policy_name"}, key)\` receives the declared policy name as a string and returns \`<keyPrefix>/<key>\` without
   duplicate separators and rejects absolute paths, dot segments, and empty keys.
-- \`InMemoryBlobStore\` with async \`put(policy, key, data, content_type)\`,
-  \`get(policy, key)\`, \`delete(policy, key)\`, and \`signed_url(policy, key)\`.
+- \`InMemoryBlobStore\` with async \`put(policy_name, key, data, content_type)\`,
+  \`get(policy_name, key)\`, \`delete(policy_name, key)\`, and \`signed_url(policy_name, key)\`.
   Enforce byte limit and MIME allowlist before storing. Missing objects raise KeyError.
   Signed URLs are exactly \`memory://<bucket>/<normalized-key>?expires=<ttl>\`.
 - \`S3BlobStore(client)\` receives an already configured boto3-compatible client

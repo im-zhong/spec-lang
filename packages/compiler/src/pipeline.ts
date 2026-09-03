@@ -14,16 +14,21 @@
  * knows packages, nodes, validators, capabilities and passes.
  */
 import * as path from "node:path"
+import { createHash } from "node:crypto"
 import type {
   CapabilityProvider,
   CapabilityRequirement,
   Diagnostic,
   MaterializedGenerationContribution,
   SpecIR,
+  SpecInterfaceBinding,
+  SpecInterfaceDefinition,
+  SpecInterfaceDependency,
+  SpecModuleDefinition,
   SpecNode,
   ValidationContext,
 } from "@spec/core"
-import { isNodeBuilder, nodeId, serializeValue, type SpecNodeBuilder } from "@spec/core"
+import { isNodeBuilder, nodeId, serializeValue, stableStringify, type SpecNodeBuilder } from "@spec/core"
 import { diagnostic } from "./diagnostics"
 import { evaluateSpec, type EvaluationResult, type ImportedBinding } from "./evaluate"
 import { PackageLoader, loadFailureDiagnostic, type LoadedSpecPackage } from "./loader"
@@ -50,6 +55,12 @@ export interface Compilation {
     required: CapabilityRequirement[]
     provided: CapabilityProvider[]
   }
+  interfaces: {
+    definitions: SpecInterfaceDefinition[]
+    bindings: SpecInterfaceBinding[]
+    dependencies: SpecInterfaceDependency[]
+  }
+  modules: SpecModuleDefinition[]
   diagnostics: Diagnostic[]
   generationContributions: MaterializedGenerationContribution[]
   ir?: SpecIR
@@ -264,7 +275,229 @@ export function linkPass(compilation: Compilation): Compilation {
     required: required.sort(compareCapabilities),
     provided: provided.sort(compareCapabilities),
   }
+  linkInterfaces(compilation, all)
   return compilation
+}
+
+function sha256(value: unknown): string {
+  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`
+}
+
+function referenceId(value: unknown): string | undefined {
+  return isPlainRecord(value) && typeof value.nodeId === "string" ? value.nodeId : undefined
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function linkInterfaces(compilation: Compilation, all: SpecNode[]): void {
+  const interfaceNodes = all.filter((node) => node.kind === "interface").sort((a, b) => a.id.localeCompare(b.id))
+  const definitions: SpecInterfaceDefinition[] = []
+  for (const node of interfaceNodes) {
+    const operationsValue = node.attributes.operations
+    if (!isPlainRecord(operationsValue) || Object.keys(operationsValue).length === 0) {
+      compilation.diagnostics.push(diagnostic(
+        "INTERFACE_OPERATIONS_EMPTY",
+        "error",
+        `Interface "${node.name ?? node.id}" must declare at least one operation.`,
+        { nodeId: node.id },
+      ))
+      continue
+    }
+    const protocol = typeof node.attributes.protocol === "string" ? node.attributes.protocol : "request-response"
+    const operations: SpecInterfaceDefinition["operations"] = {}
+    for (const operationName of Object.keys(operationsValue).sort()) {
+      const operation = operationsValue[operationName]
+      if (!isPlainRecord(operation) || !("output" in operation)) {
+        compilation.diagnostics.push(diagnostic(
+          "INTERFACE_OPERATION_INVALID",
+          "error",
+          `Interface operation "${node.name ?? node.id}.${operationName}" must declare output.`,
+          { nodeId: node.id, details: { operation: operationName } },
+        ))
+        continue
+      }
+      const transport = isPlainRecord(operation.transport) &&
+        typeof operation.transport.method === "string" && /^[A-Za-z]+$/.test(operation.transport.method) &&
+        typeof operation.transport.path === "string" && operation.transport.path.startsWith("/")
+        ? { method: operation.transport.method.toUpperCase(), path: operation.transport.path }
+        : undefined
+      if (protocol === "http-json" && !transport) {
+        compilation.diagnostics.push(diagnostic(
+          "INTERFACE_HTTP_TRANSPORT_REQUIRED",
+          "error",
+          `HTTP interface operation "${node.name ?? node.id}.${operationName}" must declare transport { method, path } with an absolute path.`,
+          { nodeId: node.id, details: { operation: operationName } },
+        ))
+      }
+      operations[operationName] = {
+        ...(operation.input === undefined ? {} : { input: operation.input }),
+        output: operation.output,
+        ...(isPlainRecord(operation.errors) ? { errors: operation.errors } : {}),
+        ...(transport ? { transport } : {}),
+      }
+    }
+    const version = typeof node.attributes.version === "string" ? node.attributes.version : "1"
+    definitions.push({
+      id: node.id,
+      name: node.name ?? node.id,
+      protocol,
+      version,
+      operations,
+      hash: sha256({ protocol, version, operations }),
+      sourceNodeId: node.id,
+    })
+  }
+
+  const byInterface = new Map(definitions.map((definition) => [definition.id, definition]))
+  const byNode = new Map(all.map((node) => [node.id, node]))
+  const moduleNodes = all.filter((node) => node.kind === "module").sort((a, b) => a.id.localeCompare(b.id))
+  const bindings: SpecInterfaceBinding[] = []
+  const pendingModules: Array<Omit<SpecModuleDefinition, "inputHash">> = []
+
+  for (const node of moduleNodes) {
+    const providedIds = Array.isArray(node.attributes.provides)
+      ? node.attributes.provides.map(referenceId).filter((id): id is string => id !== undefined).sort()
+      : []
+    const calls: Array<{ interfaceId: string; operations: string[] }> = []
+    for (const raw of Array.isArray(node.attributes.calls) ? node.attributes.calls : []) {
+      if (!isPlainRecord(raw)) continue
+      const interfaceId = referenceId(raw.interface)
+      if (!interfaceId) continue
+      const operations = Array.isArray(raw.operations)
+        ? raw.operations.filter((name): name is string => typeof name === "string").sort()
+        : []
+      calls.push({ interfaceId, operations })
+    }
+    const contains = Array.isArray(node.attributes.contains)
+      ? node.attributes.contains.map(referenceId).filter((id): id is string => id !== undefined).sort()
+      : []
+    for (const interfaceId of providedIds) {
+      if (!byInterface.has(interfaceId)) {
+        compilation.diagnostics.push(diagnostic("INTERFACE_UNKNOWN", "error", `Module "${node.name ?? node.id}" provides unknown interface "${interfaceId}".`, { nodeId: node.id }))
+      }
+      bindings.push({ moduleId: node.id, interfaceId, role: "provides", operations: [] })
+    }
+    for (const call of calls) {
+      const definition = byInterface.get(call.interfaceId)
+      if (!definition) {
+        compilation.diagnostics.push(diagnostic("INTERFACE_UNKNOWN", "error", `Module "${node.name ?? node.id}" calls unknown interface "${call.interfaceId}".`, { nodeId: node.id }))
+      } else {
+        for (const operation of call.operations) {
+          if (!(operation in definition.operations)) {
+            compilation.diagnostics.push(diagnostic(
+              "INTERFACE_OPERATION_UNKNOWN",
+              "error",
+              `Module "${node.name ?? node.id}" calls unknown operation "${definition.name}.${operation}".`,
+              { nodeId: node.id, details: { interfaceId: call.interfaceId, operation } },
+            ))
+          }
+        }
+      }
+      bindings.push({ moduleId: node.id, interfaceId: call.interfaceId, role: "calls", operations: call.operations })
+    }
+    pendingModules.push({
+      id: node.id,
+      name: node.name ?? node.id,
+      target: typeof node.attributes.target === "string" ? node.attributes.target : "unknown",
+      sourceNodeId: node.id,
+      provides: providedIds,
+      calls,
+      contains,
+    })
+  }
+
+  if (moduleNodes.length > 0) {
+    const owners = new Map<string, string[]>()
+    for (const module of pendingModules) {
+      for (const contained of module.contains) {
+        const target = byNode.get(contained)
+        if (!target) {
+          compilation.diagnostics.push(diagnostic(
+            "MODULE_CONTAINS_UNKNOWN",
+            "error",
+            `Module "${module.name}" contains unknown node "${contained}".`,
+            { nodeId: module.id, details: { contained } },
+          ))
+          continue
+        }
+        if (["app", "interface", "module"].includes(target.kind)) {
+          compilation.diagnostics.push(diagnostic(
+            "MODULE_CONTAINS_BOUNDARY_NODE",
+            "error",
+            `Module "${module.name}" cannot own boundary node "${contained}".`,
+            { nodeId: module.id, details: { contained, kind: target.kind } },
+          ))
+          continue
+        }
+        const values = owners.get(contained) ?? []
+        values.push(module.id)
+        owners.set(contained, values)
+      }
+    }
+    for (const [contained, moduleIds] of [...owners].sort(([a], [b]) => a.localeCompare(b))) {
+      if (moduleIds.length > 1) {
+        compilation.diagnostics.push(diagnostic(
+          "MODULE_OWNERSHIP_OVERLAP",
+          "error",
+          `Implementation node "${contained}" is owned by multiple modules: ${moduleIds.sort().join(", ")}.`,
+          { nodeId: contained, details: { modules: moduleIds.sort() } },
+        ))
+      }
+    }
+    for (const node of compilation.nodes.filter((item) => !["app", "interface", "module"].includes(item.kind))) {
+      if (!owners.has(node.id)) {
+        compilation.diagnostics.push(diagnostic(
+          "MODULE_NODE_UNOWNED",
+          "error",
+          `Implementation node "${node.id}" must be owned by exactly one spec.module via contains.`,
+          { nodeId: node.id },
+        ))
+      }
+    }
+  }
+
+  const dependencies: SpecInterfaceDependency[] = []
+  for (const call of bindings.filter((binding) => binding.role === "calls")) {
+    const providers = bindings.filter((binding) => binding.role === "provides" && binding.interfaceId === call.interfaceId)
+    if (providers.length !== 1) {
+      compilation.diagnostics.push(diagnostic(
+        providers.length === 0 ? "INTERFACE_PROVIDER_MISSING" : "INTERFACE_PROVIDER_AMBIGUOUS",
+        "error",
+        `Called interface "${call.interfaceId}" must have exactly one provider; found ${providers.length}.`,
+        { nodeId: call.moduleId, details: { interfaceId: call.interfaceId, providers: providers.map((item) => item.moduleId).sort() } },
+      ))
+      continue
+    }
+    if (providers[0].moduleId === call.moduleId) {
+      compilation.diagnostics.push(diagnostic("INTERFACE_SELF_CALL", "error", `Module "${call.moduleId}" cannot call an interface it provides.`, { nodeId: call.moduleId }))
+      continue
+    }
+    dependencies.push({
+      providerModuleId: providers[0].moduleId,
+      consumerModuleId: call.moduleId,
+      interfaceId: call.interfaceId,
+      interfaceHash: byInterface.get(call.interfaceId)?.hash ?? sha256(null),
+      operations: [...call.operations],
+    })
+  }
+
+  const modules: SpecModuleDefinition[] = pendingModules.map((module) => ({
+    ...module,
+    inputHash: sha256({
+      target: module.target,
+      provides: module.provides.map((id) => ({ id, hash: byInterface.get(id)?.hash ?? null })),
+      calls: module.calls.map((call) => ({ ...call, hash: byInterface.get(call.interfaceId)?.hash ?? null })),
+      contains: module.contains.map((id) => ({ id, hash: sha256(byNode.get(id) ?? null) })),
+    }),
+  }))
+  compilation.interfaces = {
+    definitions,
+    bindings: bindings.sort((a, b) => `${a.moduleId}\0${a.role}\0${a.interfaceId}`.localeCompare(`${b.moduleId}\0${b.role}\0${b.interfaceId}`)),
+    dependencies: dependencies.sort((a, b) => `${a.providerModuleId}\0${a.consumerModuleId}\0${a.interfaceId}`.localeCompare(`${b.providerModuleId}\0${b.consumerModuleId}\0${b.interfaceId}`)),
+  }
+  compilation.modules = modules
 }
 
 function capabilityList(value: unknown): string[] {
@@ -364,6 +597,8 @@ export function emitPass(compilation: Compilation): Compilation {
     packages: compilation.loadedPackages.map((p) => ({ name: p.name, version: p.version })),
     nodes: compilation.nodes,
     capabilities: compilation.capabilities,
+    interfaces: compilation.interfaces,
+    modules: compilation.modules,
     generation: { contributions: compilation.generationContributions },
     diagnostics: compilation.diagnostics,
     metadata: { compilerVersion: COMPILER_VERSION },

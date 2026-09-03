@@ -41,7 +41,8 @@ const args = process.argv.slice(2)
 fs.appendFileSync(process.env.SPEC_DOCKER_LOG, JSON.stringify(args) + "\\n")
 if (args[0] === "inspect") process.exit(1)
 if (args[0] === "start" && process.env.SPEC_FAIL_START === "1") process.exit(2)
-if (args[0] === "exec" && args.includes("claude")) process.stdout.write('{"total_cost_usd":0.25}\\n')
+if (args[0] === "exec" && args.includes("--reviewer")) process.stdout.write('telemetry warning\\n{"total_cost_usd":0.1,"approved":true,"feedback":""}\\n')
+else if (args[0] === "exec" && args.includes("claude")) process.stdout.write('{"total_cost_usd":0.25}\\n')
 `, "utf8")
   fs.chmodSync(cli, 0o755)
   return { cli, log }
@@ -106,6 +107,48 @@ describe("Docker agent executor", () => {
       else process.env.SPEC_DOCKER_LOG = oldLog
       if (oldFail === undefined) delete process.env.SPEC_FAIL_START
       else process.env.SPEC_FAIL_START = oldFail
+    }
+  })
+
+  it("runs implementation and tests before a read-only reviewer, then judges once", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "spec-docker-loop-"))
+    const { cli, log } = fakeDocker(root)
+    const oldLog = process.env.SPEC_DOCKER_LOG
+    process.env.SPEC_DOCKER_LOG = log
+    try {
+      const workspace = path.join(root, "workspace")
+      fs.mkdirSync(workspace)
+      const loopTask = task()
+      loopTask.scope = ["product/app.ts", "product/app.test.ts"]
+      loopTask.acceptance.commands = ["node --test app.test.ts"]
+      loopTask.loop = {
+        schemaVersion: "spec-agent-task-loop/0.1",
+        maxRounds: 2,
+        implementation: { instruction: "write code", scope: ["product/app.ts"] },
+        tests: { instruction: "write tests", scope: ["product/app.test.ts"] },
+        reviewer: { instruction: "review", commands: ["node --test app.test.ts"] },
+      }
+      const result = await new DockerAgentExecutor({
+        dockerCli: cli,
+        agentCommand: ["claude", "--writer"],
+        reviewerAgentCommand: ["claude", "--reviewer"],
+      }).execute(loopTask, workspace)
+      expect(result.ok).toBe(true)
+      expect(result.costUsd).toBe(0.6)
+      expect(result.checks.map((check) => check.name)).toEqual([
+        "generation/loop/1/implementation",
+        "generation/loop/1/tests",
+        "generation/loop/1/review",
+        "generation/container/1",
+      ])
+      const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[])
+      const writerIndexes = calls.map((args, index) => args.includes("--writer") ? index : -1).filter((index) => index >= 0)
+      const reviewerIndex = calls.findIndex((args) => args.includes("--reviewer"))
+      expect(writerIndexes).toHaveLength(2)
+      expect(Math.max(...writerIndexes)).toBeLessThan(reviewerIndex)
+    } finally {
+      if (oldLog === undefined) delete process.env.SPEC_DOCKER_LOG
+      else process.env.SPEC_DOCKER_LOG = oldLog
     }
   })
 })

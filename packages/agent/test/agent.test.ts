@@ -245,6 +245,7 @@ describe("GitHub generator DAG execution", () => {
         ],
         conformanceFiles: { "conformance/test_app.py": "def test_app(): pass\n" },
         verification: { setup: [], check: [{ name: "pytest", command: "pytest -q", timeoutMs: 1000 }] },
+        semanticFiles: { "spec.ir.json": "{\"version\":\"test\"}\n" },
       },
       runId: "media-v1",
       repository: "owner/repo",
@@ -259,10 +260,14 @@ describe("GitHub generator DAG execution", () => {
       requiredChecks: ["spec-generation"],
     })
     expect(plan.branchPrefix).toBe("spec/generate")
-    expect(plan.tasks.map((task) => task.id)).toEqual(["app", "conformance", "project", "router-posts"])
+    expect(plan.tasks.map((task) => task.id)).toEqual(["app", "compiler-seed", "conformance", "project", "router-posts"])
     expect(plan.tasks.find((task) => task.id === "router-posts")?.dependsOn).toEqual(["project"])
+    expect(plan.tasks.find((task) => task.id === "project")?.dependsOn).toEqual(["compiler-seed"])
     expect(plan.tasks.find((task) => task.id === "app")?.dependsOn).toEqual(["router-posts"])
     expect(plan.tasks.find((task) => task.id === "conformance")?.dependsOn).toEqual(["app"])
     expect(plan.tasks.find((task) => task.id === "project")?.scope).toEqual(["products/media/backend/pyproject.toml"])
+    expect(plan.tasks.find((task) => task.id === "compiler-seed")?.materializedFiles).toMatchObject({
+      ".spec-input/spec.ir.json": "{\"version\":\"test\"}\n",
+    })
   })
 })

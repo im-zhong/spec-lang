@@ -6,3 +6,10 @@ export type { SpecConfig } from "./config"
 export { stableStringify } from "./stable"
 export { COMPILER_VERSION, SPEC_VERSION } from "./version"
 export type { SpecManifest } from "./pipeline"
+export { planIncrementalGeneration, planInterfaceModuleGeneration, sliceIrForModule } from "./incremental"
+export type {
+  IncrementalGenerationPlan,
+  IncrementalModuleDecision,
+  InterfaceModuleGenerationDag,
+  InterfaceModuleGenerationTask,
+} from "./incremental"

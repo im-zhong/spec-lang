@@ -1,0 +1,223 @@
+{
+  "app": {
+    "name": "InterfaceParallel"
+  },
+  "capabilities": {
+    "provided": [],
+    "required": []
+  },
+  "diagnostics": [],
+  "generation": {
+    "contributions": []
+  },
+  "interfaces": {
+    "bindings": [
+      {
+        "interfaceId": "interface:Media",
+        "moduleId": "module:backend",
+        "operations": [],
+        "role": "provides"
+      },
+      {
+        "interfaceId": "interface:Media",
+        "moduleId": "module:frontend",
+        "operations": [
+          "list"
+        ],
+        "role": "calls"
+      }
+    ],
+    "definitions": [
+      {
+        "hash": "sha256:95f6d4fa8e53ce845e45f9643ca778e43307c0a0aa6b5fa3c42f88a116f3eb79",
+        "id": "interface:Media",
+        "name": "Media",
+        "operations": {
+          "list": {
+            "errors": {
+              "unavailable": 503
+            },
+            "input": {
+              "cursor": "string?"
+            },
+            "output": {
+              "items": [
+                {
+                  "duration": "int",
+                  "id": "uuid",
+                  "title": "string"
+                }
+              ],
+              "next": "string?"
+            },
+            "transport": {
+              "method": "GET",
+              "path": "/media"
+            }
+          }
+        },
+        "protocol": "http-json",
+        "sourceNodeId": "interface:Media",
+        "version": "2"
+      }
+    ],
+    "dependencies": [
+      {
+        "consumerModuleId": "module:frontend",
+        "interfaceHash": "sha256:95f6d4fa8e53ce845e45f9643ca778e43307c0a0aa6b5fa3c42f88a116f3eb79",
+        "interfaceId": "interface:Media",
+        "operations": [
+          "list"
+        ],
+        "providerModuleId": "module:backend"
+      }
+    ]
+  },
+  "metadata": {
+    "compilerVersion": "0.1.0"
+  },
+  "modules": [
+    {
+      "calls": [],
+      "contains": [],
+      "id": "module:backend",
+      "inputHash": "sha256:744c3550efb2c385e7668c498324545f6099048da14e42c8242755ffd8a19eb0",
+      "name": "backend",
+      "provides": [
+        "interface:Media"
+      ],
+      "sourceNodeId": "module:backend",
+      "target": "fastapi"
+    },
+    {
+      "calls": [
+        {
+          "interfaceId": "interface:Media",
+          "operations": [
+            "list"
+          ]
+        }
+      ],
+      "contains": [],
+      "id": "module:frontend",
+      "inputHash": "sha256:32549e3f747d670e2fc95432dd0ca62f707794d84259a2d9cc377bfc47d70de8",
+      "name": "frontend",
+      "provides": [],
+      "sourceNodeId": "module:frontend",
+      "target": "react"
+    }
+  ],
+  "nodes": [
+    {
+      "attributes": {
+        "modules": [
+          "backend",
+          "frontend"
+        ],
+        "name": "InterfaceParallel"
+      },
+      "id": "app:InterfaceParallel",
+      "kind": "app",
+      "name": "InterfaceParallel",
+      "package": "@spec/core",
+      "source": {
+        "column": 16,
+        "file": "tests/fixtures/interface-modules-v2/app.spec.ts",
+        "line": 26
+      }
+    },
+    {
+      "attributes": {
+        "operations": {
+          "list": {
+            "errors": {
+              "unavailable": 503
+            },
+            "input": {
+              "cursor": "string?"
+            },
+            "output": {
+              "items": [
+                {
+                  "duration": "int",
+                  "id": "uuid",
+                  "title": "string"
+                }
+              ],
+              "next": "string?"
+            },
+            "transport": {
+              "method": "GET",
+              "path": "/media"
+            }
+          }
+        },
+        "protocol": "http-json",
+        "version": "2"
+      },
+      "id": "interface:Media",
+      "kind": "interface",
+      "name": "Media",
+      "package": "@spec/core",
+      "source": {
+        "column": 15,
+        "file": "tests/fixtures/interface-modules-v2/app.spec.ts",
+        "line": 3
+      }
+    },
+    {
+      "attributes": {
+        "calls": [],
+        "contains": [],
+        "provides": [
+          {
+            "nodeId": "interface:Media"
+          }
+        ],
+        "target": "fastapi"
+      },
+      "id": "module:backend",
+      "kind": "module",
+      "name": "backend",
+      "package": "@spec/core",
+      "source": {
+        "column": 17,
+        "file": "tests/fixtures/interface-modules-v2/app.spec.ts",
+        "line": 16
+      }
+    },
+    {
+      "attributes": {
+        "calls": [
+          {
+            "interface": {
+              "nodeId": "interface:Media"
+            },
+            "operations": [
+              "list"
+            ]
+          }
+        ],
+        "contains": [],
+        "provides": [],
+        "target": "react"
+      },
+      "id": "module:frontend",
+      "kind": "module",
+      "name": "frontend",
+      "package": "@spec/core",
+      "source": {
+        "column": 18,
+        "file": "tests/fixtures/interface-modules-v2/app.spec.ts",
+        "line": 21
+      }
+    }
+  ],
+  "packages": [
+    {
+      "name": "@spec/core",
+      "version": "0.1.0"
+    }
+  ],
+  "version": "spec-ir/0.3"
+}

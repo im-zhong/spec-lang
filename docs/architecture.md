@@ -196,6 +196,7 @@ the SpecNodes it derives from.
   `@spec/core` — the provenance chain
   `Artifact → AgentTask → SpecNode → SourceLocation` is navigable in
   `agent.result.json`.
-- `spec-ir/0.2+` versioning: the IR carries `version: "spec-ir/0.1"`.
-- Protobuf IR, incremental compilation, remote registry, LSP: the pass
-  pipeline and the `SpecPackage` interface are the seams.
+- `spec-ir/0.3` versioning: first-class interfaces carry canonical hashes and
+  modules carry incremental input hashes.
+- Protobuf IR, remote registry, and LSP: the pass pipeline and the
+  `SpecPackage` interface are the seams.

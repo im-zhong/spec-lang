@@ -1,12 +1,12 @@
 # Spec IR format reference
 
-Current version: **`spec-ir/0.2`**
+Current version: **`spec-ir/0.3`**
 
 ## Top level
 
 ```ts
 interface SpecIR {
-  version: string                  // "spec-ir/0.2"
+  version: string                  // "spec-ir/0.3"
   app: { name: string }
   packages: PackageReference[]     // sorted by name
   nodes: SpecNode[]                // sorted by id
@@ -14,6 +14,12 @@ interface SpecIR {
     required: CapabilityRequirement[]  // sorted by capability
     provided: CapabilityProvider[]     // sorted by capability
   }
+  interfaces: {
+    definitions: SpecInterfaceDefinition[] // canonical contract + SHA-256
+    bindings: SpecInterfaceBinding[]        // module provides/calls
+    dependencies: SpecInterfaceDependency[] // incremental invalidation edges
+  }
+  modules: SpecModuleDefinition[]           // includes inputHash cache keys
   generation: {
     contributions: MaterializedGenerationContribution[]
   }
@@ -25,10 +31,18 @@ interface SpecIR {
 }
 ```
 
-`spec-ir/0.2` adds deterministic generation contributions. Every selected
+`spec-ir/0.3` adds first-class interface/module contracts and incremental
+input hashes. Version 0.2 added deterministic generation contributions. Every selected
 contribution is plain JSON data with `package` and `version` provenance, target,
 activating node kinds, task kinds, instructions, and optional exact runtime/dev
 dependency pins. Contributions are sorted by target, package and id.
+
+An `http-json` interface operation includes a concrete
+`transport: { method, path }` ABI. Link-time validation requires it, and
+composite lowering proves each FastAPI provider blueprint exposes the declared
+route before agent execution. With modules enabled, every concrete top-level
+node must be owned by exactly one module through `contains`; missing or
+overlapping ownership is invalid.
 
 ## SpecNode
 
@@ -77,7 +91,8 @@ of strings under `requires` / `provides`.
 
 | Kind (package)              | Produced by                      | Key attributes                                |
 | --------------------------- | -------------------------------- | --------------------------------------------- |
-| `app` (`@spec/core`)        | `defineApp({...})`               | `name`, `entities`, `services`, `resources`   |
+| `app` (`@spec/core`)        | `defineApp({...})`               | `name`, `entities`, `services`, `resources`, `modules`   |
+| `interface` / `module` (`@spec/core`) | `spec.interface(...)` / `spec.module(...)` | operation contract; target and provide/call bindings |
 | `entity` (`@spec/web`)      | `entity("Name", fields)`         | `fields: { [name]: { type, states?, unique?, target?, ... } }` |
 | `crud` (`@spec/web`)        | `crud(Entity, opts?)`            | `entity: ref`, `path`, `methods?`, `auth`     |
 | `lifecycle` (`@spec/web`)   | `lifecycle(Entity, {...})`       | `entity: ref`, enum `field`, `initial`, transitions with guard/effects |

@@ -1,6 +1,7 @@
 export {
   createAgentExecutionPlan,
   agentExecutionPlanFingerprint,
+  agentExecutionSemanticInputDigest,
   taskBranch,
   taskBaseRef,
   agentExecutionPlanRef,

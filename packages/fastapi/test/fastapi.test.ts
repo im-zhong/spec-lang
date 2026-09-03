@@ -299,6 +299,28 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
     const messaging = plan.dag.tasks.find((task) => task.id === "messaging")!.prompt
     expect(messaging).toContain("client.send_and_wait(queue_name")
     expect(messaging).toContain("client.send_message(QueueUrl=queue_name")
+    const blob = plan.dag.tasks.find((task) => task.id === "blob")!.prompt
+    expect(plan.blueprint.moduleAbis.blob?.selector).toEqual({
+      name: "policy_name",
+      type: "declared-name-string",
+      unknown: "KeyError",
+    })
+    expect(blob).toContain("normalize_blob_key(policy_name, key)")
+    expect(testFile).toContain('CONTRACT["moduleAbis"]["blob"]["selector"]')
+  })
+
+  it("assigns every auth route only to the dedicated auth router", async () => {
+    const plan = planGeneration((await compileExample("media-platform")).ir)
+    const authRoutes = plan.blueprint.routes.filter((route) => ["login", "register", "me"].includes(route.operation))
+    expect(authRoutes).toHaveLength(3)
+    expect(authRoutes.every((route) => route.owner.taskId === "router:auth")).toBe(true)
+    const userTask = plan.dag.tasks.find((task) => task.id === "router:User")!
+    expect(authRoutes.every((route) => !userTask.prompt.includes(`- ${route.id}`))).toBe(true)
+    expect(plan.dag.tasks.find((task) => task.id === "router:auth")?.specNodeIds).toEqual(["auth:MainAuth"])
+    const registry = plan.seedFiles["app/router_registry.py"]
+    expect(registry.match(/from app\.routers\.auth import router/g)).toHaveLength(1)
+    expect(registry).toContain("ROUTERS = (")
+    expect(plan.dag.tasks.find((task) => task.id === "app")?.prompt).toContain("app.router_registry")
   })
 
   it("derives a correct, deterministic generation DAG", async () => {

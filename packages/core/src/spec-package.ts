@@ -10,7 +10,7 @@ import type { SpecPackage } from "./types"
 const corePackage: SpecPackage = {
   name: "@spec/core",
   version: "0.1.0",
-  nodeKinds: [{ kind: "app" }],
+  nodeKinds: [{ kind: "app" }, { kind: "interface" }, { kind: "module" }],
 }
 
 export default corePackage

@@ -106,6 +106,62 @@ export interface CapabilityProvider {
   provider: string
 }
 
+/** A named, language-neutral operation contract shared across generation targets. */
+export interface SpecInterfaceOperation {
+  input?: unknown
+  output: unknown
+  errors?: Record<string, unknown>
+  /** Concrete invocation ABI for the protocol, independent of either implementation. */
+  transport?: {
+    method: string
+    path: string
+  }
+}
+
+/** Canonical interface definition. `hash` covers protocol/version/operations only. */
+export interface SpecInterfaceDefinition {
+  id: string
+  name: string
+  protocol: string
+  version: string
+  operations: Record<string, SpecInterfaceOperation>
+  hash: string
+  sourceNodeId: string
+}
+
+export interface SpecInterfaceBinding {
+  moduleId: string
+  interfaceId: string
+  role: "provides" | "calls"
+  /** Empty means every operation in the interface. */
+  operations: string[]
+}
+
+/**
+ * An interface dependency is an invalidation edge, not a generation-order
+ * edge: provider and consumer can be generated in parallel from the same
+ * frozen definition.
+ */
+export interface SpecInterfaceDependency {
+  providerModuleId: string
+  consumerModuleId: string
+  interfaceId: string
+  interfaceHash: string
+  operations: string[]
+}
+
+export interface SpecModuleDefinition {
+  id: string
+  name: string
+  target: string
+  sourceNodeId: string
+  provides: string[]
+  calls: Array<{ interfaceId: string; operations: string[] }>
+  contains: string[]
+  /** Hash of the module declaration plus every provided/called interface. */
+  inputHash: string
+}
+
 /** Versioned, deterministic, JSON-serializable compilation result. */
 export interface SpecIR {
   version: string
@@ -118,6 +174,12 @@ export interface SpecIR {
     required: CapabilityRequirement[]
     provided: CapabilityProvider[]
   }
+  interfaces: {
+    definitions: SpecInterfaceDefinition[]
+    bindings: SpecInterfaceBinding[]
+    dependencies: SpecInterfaceDependency[]
+  }
+  modules: SpecModuleDefinition[]
   generation: {
     contributions: MaterializedGenerationContribution[]
   }
@@ -132,7 +194,7 @@ export interface SpecIR {
   }
 }
 
-export const SPEC_IR_VERSION = "spec-ir/0.2"
+export const SPEC_IR_VERSION = "spec-ir/0.3"
 
 /* ------------------------------------------------------------------ */
 /* Package model                                                       */
@@ -267,6 +329,29 @@ export interface AgentExecutionAcceptance {
   commands: string[]
 }
 
+export interface AgentExecutionLoopWorker {
+  instruction: string
+  /** Exact subset of the outer task scope owned by this writer. */
+  scope: string[]
+}
+
+/**
+ * Pre-conformance synthesis loop for one DAG node. Implementation and tests
+ * run concurrently from the same frozen task input, then a read-only reviewer
+ * runs the declared tests and either approves or returns feedback for the next
+ * bounded round. This is never a conformance-repair loop.
+ */
+export interface AgentExecutionLoop {
+  schemaVersion: "spec-agent-task-loop/0.1"
+  maxRounds: number
+  implementation: AgentExecutionLoopWorker
+  tests: AgentExecutionLoopWorker
+  reviewer: {
+    instruction: string
+    commands: string[]
+  }
+}
+
 /**
  * Plan-time node. Its integration base does not exist until all dependency
  * head SHAs have been published, so it intentionally contains no baseSha.
@@ -284,6 +369,7 @@ export interface AgentExecutionTask {
   /** Exact repository-relative file paths; glob semantics are not implicit. */
   scope: string[]
   specNodeIds: string[]
+  loop?: AgentExecutionLoop
   acceptance?: AgentExecutionAcceptance
 }
 
@@ -303,6 +389,8 @@ export interface AgentExecutionPlan {
   acceptance: AgentExecutionAcceptance
   mergePolicy: AgentExecutionMergePolicy
   tasks: AgentExecutionTask[]
+  /** Shot-independent hash of frozen prompts, oracle, environment and task semantics. */
+  semanticInputDigest: string
   fingerprint: string
 }
 

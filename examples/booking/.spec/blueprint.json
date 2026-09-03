@@ -17,6 +17,11 @@
         "id": "POST /auth/login",
         "method": "POST",
         "operation": "login",
+        "owner": {
+          "kind": "auth",
+          "sourceNodeId": "auth:MainAuth",
+          "taskId": "router:auth"
+        },
         "path": "/auth/login",
         "request": {
           "shape": {
@@ -35,6 +40,11 @@
         "id": "POST /auth/register",
         "method": "POST",
         "operation": "register",
+        "owner": {
+          "kind": "auth",
+          "sourceNodeId": "auth:MainAuth",
+          "taskId": "router:auth"
+        },
         "path": "/auth/register",
         "request": {
           "shape": {
@@ -55,6 +65,11 @@
         "id": "GET /auth/me",
         "method": "GET",
         "operation": "me",
+        "owner": {
+          "kind": "auth",
+          "sourceNodeId": "auth:MainAuth",
+          "taskId": "router:auth"
+        },
         "path": "/auth/me",
         "response": {
           "entity": "User",
@@ -365,6 +380,7 @@
     }
   ],
   "messages": [],
+  "moduleAbis": {},
   "queues": [],
   "routes": [
     {
@@ -373,6 +389,11 @@
       "id": "GET /bookings",
       "method": "GET",
       "operation": "list",
+      "owner": {
+        "kind": "crud",
+        "sourceNodeId": "crud:Booking",
+        "taskId": "router:Booking"
+      },
       "path": "/bookings",
       "response": {
         "entity": "Booking",
@@ -386,6 +407,11 @@
       "id": "GET /bookings/{id}",
       "method": "GET",
       "operation": "get",
+      "owner": {
+        "kind": "crud",
+        "sourceNodeId": "crud:Booking",
+        "taskId": "router:Booking"
+      },
       "path": "/bookings/{id}",
       "response": {
         "entity": "Booking",
@@ -402,6 +428,11 @@
       ],
       "method": "POST",
       "operation": "create",
+      "owner": {
+        "kind": "crud",
+        "sourceNodeId": "crud:Booking",
+        "taskId": "router:Booking"
+      },
       "path": "/bookings",
       "request": {
         "shape": {
@@ -424,6 +455,11 @@
       "id": "DELETE /bookings/{id}",
       "method": "DELETE",
       "operation": "delete",
+      "owner": {
+        "kind": "crud",
+        "sourceNodeId": "crud:Booking",
+        "taskId": "router:Booking"
+      },
       "path": "/bookings/{id}",
       "response": {
         "kind": "empty"
@@ -436,6 +472,11 @@
       "id": "GET /users",
       "method": "GET",
       "operation": "list",
+      "owner": {
+        "kind": "crud",
+        "sourceNodeId": "crud:User",
+        "taskId": "router:User"
+      },
       "path": "/users",
       "response": {
         "entity": "User",
@@ -449,6 +490,11 @@
       "id": "GET /users/{id}",
       "method": "GET",
       "operation": "get",
+      "owner": {
+        "kind": "crud",
+        "sourceNodeId": "crud:User",
+        "taskId": "router:User"
+      },
       "path": "/users/{id}",
       "response": {
         "entity": "User",
@@ -462,6 +508,11 @@
       "id": "GET /venues",
       "method": "GET",
       "operation": "list",
+      "owner": {
+        "kind": "crud",
+        "sourceNodeId": "crud:Venue",
+        "taskId": "router:Venue"
+      },
       "path": "/venues",
       "response": {
         "entity": "Venue",
@@ -475,6 +526,11 @@
       "id": "GET /venues/{id}",
       "method": "GET",
       "operation": "get",
+      "owner": {
+        "kind": "crud",
+        "sourceNodeId": "crud:Venue",
+        "taskId": "router:Venue"
+      },
       "path": "/venues/{id}",
       "response": {
         "entity": "Venue",
@@ -488,6 +544,11 @@
       "id": "POST /venues",
       "method": "POST",
       "operation": "create",
+      "owner": {
+        "kind": "crud",
+        "sourceNodeId": "crud:Venue",
+        "taskId": "router:Venue"
+      },
       "path": "/venues",
       "request": {
         "shape": {
@@ -510,6 +571,11 @@
       ],
       "method": "PATCH",
       "operation": "update",
+      "owner": {
+        "kind": "crud",
+        "sourceNodeId": "crud:Venue",
+        "taskId": "router:Venue"
+      },
       "path": "/venues/{id}",
       "request": {
         "partial": true,
@@ -530,6 +596,11 @@
       "id": "DELETE /venues/{id}",
       "method": "DELETE",
       "operation": "delete",
+      "owner": {
+        "kind": "crud",
+        "sourceNodeId": "crud:Venue",
+        "taskId": "router:Venue"
+      },
       "path": "/venues/{id}",
       "response": {
         "kind": "empty"
@@ -542,6 +613,11 @@
       "id": "GET /bookings/count",
       "method": "GET",
       "operation": "count",
+      "owner": {
+        "kind": "api",
+        "sourceNodeId": "api:BookingCount",
+        "taskId": "router:Booking"
+      },
       "path": "/bookings/count",
       "response": {
         "kind": "count"
@@ -554,6 +630,11 @@
       "id": "POST /bookings/{id}/confirm",
       "method": "POST",
       "operation": "transition",
+      "owner": {
+        "kind": "lifecycle",
+        "sourceNodeId": "lifecycle:BookingLifecycle",
+        "taskId": "router:Booking"
+      },
       "path": "/bookings/{id}/confirm",
       "response": {
         "entity": "Booking",
@@ -597,6 +678,11 @@
       "id": "POST /bookings/{id}/cancel",
       "method": "POST",
       "operation": "transition",
+      "owner": {
+        "kind": "lifecycle",
+        "sourceNodeId": "lifecycle:BookingLifecycle",
+        "taskId": "router:Booking"
+      },
       "path": "/bookings/{id}/cancel",
       "response": {
         "entity": "Booking",
@@ -628,6 +714,11 @@
       "id": "POST /auth/login",
       "method": "POST",
       "operation": "login",
+      "owner": {
+        "kind": "auth",
+        "sourceNodeId": "auth:MainAuth",
+        "taskId": "router:auth"
+      },
       "path": "/auth/login",
       "request": {
         "shape": {
@@ -646,6 +737,11 @@
       "id": "POST /auth/register",
       "method": "POST",
       "operation": "register",
+      "owner": {
+        "kind": "auth",
+        "sourceNodeId": "auth:MainAuth",
+        "taskId": "router:auth"
+      },
       "path": "/auth/register",
       "request": {
         "shape": {
@@ -666,6 +762,11 @@
       "id": "GET /auth/me",
       "method": "GET",
       "operation": "me",
+      "owner": {
+        "kind": "auth",
+        "sourceNodeId": "auth:MainAuth",
+        "taskId": "router:auth"
+      },
       "path": "/auth/me",
       "response": {
         "entity": "User",

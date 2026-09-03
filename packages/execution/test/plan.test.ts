@@ -29,7 +29,10 @@ describe("agent execution plan", () => {
     const second = plan()
     expect(first).toEqual(second)
     expect(first.fingerprint).toBe(agentExecutionPlanFingerprint(first))
+    expect(first.semanticInputDigest).toMatch(/^sha256:[0-9a-f]{64}$/)
     expect(validateAgentExecutionPlan(first)).toEqual([])
+    const otherShot = { ...second, runId: "run-2", repository: "owner/other", rootBaseSha: "d".repeat(40) }
+    expect(otherShot.semanticInputDigest).toBe(first.semanticInputDigest)
   })
 
   it("rejects unknown dependencies and cycles", () => {
@@ -80,6 +83,35 @@ describe("agent execution plan", () => {
       "AGENT_EXECUTION_TASK_ID_INVALID",
       "AGENT_EXECUTION_DEFAULT_BRANCH_INVALID",
       "AGENT_EXECUTION_BRANCH_PREFIX_INVALID",
+      "AGENT_EXECUTION_FINGERPRINT_MISMATCH",
+    ]))
+  })
+
+  it("fingerprints and validates a bounded parallel code/test/reviewer loop", () => {
+    const value = plan([{
+      id: "api",
+      objective: "API",
+      instruction: "build",
+      dependsOn: [],
+      scope: ["product/src/api.ts", "product/test/api.test.ts"],
+      workingDirectory: "product",
+      specNodeIds: [],
+      loop: {
+        schemaVersion: "spec-agent-task-loop/0.1" as const,
+        maxRounds: 3,
+        implementation: { instruction: "implement from spec", scope: ["product/src/api.ts"] },
+        tests: { instruction: "test from spec", scope: ["product/test/api.test.ts"] },
+        reviewer: { instruction: "review without edits", commands: ["node --test test/api.test.ts"] },
+      },
+    }])
+    expect(validateAgentExecutionPlan(value)).toEqual([])
+    expect(value.tasks[0].loop?.implementation.scope).toEqual(["product/src/api.ts"])
+
+    const invalid = structuredClone(value)
+    invalid.tasks[0].loop!.tests.scope = ["product/src/api.ts"]
+    invalid.tasks[0].loop!.reviewer.commands = ["true"]
+    expect(validateAgentExecutionPlan(invalid).map((item) => item.code)).toEqual(expect.arrayContaining([
+      "AGENT_EXECUTION_LOOP_SCOPE_INVALID",
       "AGENT_EXECUTION_FINGERPRINT_MISMATCH",
     ]))
   })

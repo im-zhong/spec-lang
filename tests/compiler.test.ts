@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile } from "@spec/compiler"
+import { compile, planIncrementalGeneration, planInterfaceModuleGeneration } from "@spec/compiler"
 import * as path from "node:path"
 
 const projectRoot = path.resolve(__dirname, "..")
@@ -22,7 +22,7 @@ describe("compiler pipeline", () => {
   it("IR expresses the full acceptance surface (spec §59)", async () => {
     const result = await fixture("valid-basic-app")
     const ir = result.ir
-    expect(ir.version).toBe("spec-ir/0.2")
+    expect(ir.version).toBe("spec-ir/0.3")
     expect(ir.app.name).toBe("ExampleApp")
     expect(ir.metadata.compilerVersion).toBe("0.1.0")
 
@@ -59,6 +59,54 @@ describe("compiler pipeline", () => {
     expect(ir.capabilities.required).toEqual([
       { capability: "RelationalStore", requester: "auth:MainAuth" },
     ])
+  })
+
+  it("links interface providers and callers without serializing their generation", async () => {
+    const result = await fixture("interface-modules")
+    expect(result.ok).toBe(true)
+    expect(result.ir.interfaces.definitions).toHaveLength(1)
+    expect(result.ir.interfaces.definitions[0]).toMatchObject({
+      id: "interface:Media",
+      protocol: "http-json",
+      hash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    })
+    expect(result.ir.interfaces.dependencies).toEqual([{
+      providerModuleId: "module:backend",
+      consumerModuleId: "module:frontend",
+      interfaceId: "interface:Media",
+      interfaceHash: result.ir.interfaces.definitions[0].hash,
+      operations: ["list"],
+    }])
+
+    const clean = planIncrementalGeneration(result.ir, result.ir)
+    expect(clean.parallel).toEqual([])
+    expect(clean.modules.every((item) => item.action === "reuse")).toBe(true)
+
+    const changed = await fixture("interface-modules-v2")
+    expect(changed.ok).toBe(true)
+    const incremental = planIncrementalGeneration(changed.ir, result.ir)
+    expect(incremental.changedInterfaces).toEqual(["interface:Media"])
+    expect(incremental.parallel).toEqual(["module:backend", "module:frontend"])
+    const dag = planInterfaceModuleGeneration(changed.ir, result.ir)
+    expect(dag.tasks.map((task) => ({ id: task.id, target: task.target, dependsOn: task.dependsOn }))).toEqual([
+      { id: "generate:module:backend", target: "fastapi", dependsOn: [] },
+      { id: "generate:module:frontend", target: "react", dependsOn: [] },
+    ])
+    expect(dag.tasks[0].contract.provides[0].id).toBe("interface:Media")
+    expect(dag.tasks[1].contract.calls[0]).toMatchObject({ operations: ["list"] })
+  })
+
+  it("requires exclusive and complete implementation ownership when modules are present", async () => {
+    const result = await fixture("invalid-module-ownership")
+    expect(result.ok).toBe(false)
+    expect(codes(result.diagnostics)).toContain("MODULE_OWNERSHIP_OVERLAP")
+    expect(codes(result.diagnostics)).toContain("MODULE_NODE_UNOWNED")
+  })
+
+  it("requires an invocation ABI for every HTTP interface operation", async () => {
+    const result = await fixture("invalid-interface-transport")
+    expect(result.ok).toBe(false)
+    expect(codes(result.diagnostics)).toContain("INTERFACE_HTTP_TRANSPORT_REQUIRED")
   })
 
   it("rejects an auth identity that is not in the principal (spec §60)", async () => {

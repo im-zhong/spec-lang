@@ -53,6 +53,33 @@ expose the same interface.
 | 27 | Served caches, queues, messages, and blobs were declared but not bound to HTTP/lifecycle operations; several promised behaviors (retry/dead-letter, real stampede suppression, retention, production provider lifecycle) were not correctness-tested | media-platform `media-platform-golden-20260903-v6` spec/IR/oracle audit | Planned: typed operation bindings plus feature-to-assertion coverage; reject unresolved or untested served behavior at compile time |
 | 28 | Failure evidence kept only a bounded log tail and the remote plan ref kept only `plan.json`; local `.spec` artifacts could also mix IR/manifest from one example with blueprint/DAG from another | media-platform `media-platform-golden-20260903-v6` evidence audit | Planned: atomic run-addressed bundles containing source, manifest, IR, blueprint, DAG, prompts, oracle, toolchain and full hashed logs, plus a failure-evidence ref and cross-shot semantic-input digest |
 
+## Post-v6 design implementation (not a reroll)
+
+The v6 result remains `golden-rule-invalid`; none of its generated code or
+judgments changed. Before any new paid run, the compiler/harness now includes:
+
+- Spec IR 0.3 first-class `spec.interface`, `spec.module`, and `spec.call`
+  contracts with exact provider/caller linking and interface/module hashes;
+- deterministic incremental invalidation in which changed interface providers
+  and callers are regenerated concurrently, while unchanged modules are reused;
+- executable composite FastAPI/React workspace lowering with disjoint module
+  cwd/scopes, a shared frozen interface contract, HTTP provider-route checks,
+  compiler-owned caller clients, and one combined conformance judgment;
+- a fingerprinted, bounded per-node implementation/test/reviewer synthesis loop
+  with isolated writer snapshots and read-only reviewer enforcement;
+- non-vacuous per-node acceptance commands outside that loop, followed later by
+  the unchanged single compiler-owned conformance judgment;
+- explicit unique route ownership, keeping auth operations exclusively in
+  `router:auth`;
+- one machine-readable blob ABI whose `policy_name` string selector is consumed
+  by blueprint, prompt, generated node tests, and conformance;
+- a shot-independent semantic-input digest and an immutable `.spec-input`
+  bundle containing source, manifest, IR, blueprint, DAG/prompts, verification,
+  and oracle bytes.
+
+This is deterministic/unit-tested design evidence only. It does not turn v6
+green and is not a substitute for a fresh isolated golden-rule reroll.
+
 Each fix made the *contract or harness* more precise; generation quality
 improved accordingly (cblog's final run needed zero repairs).
 

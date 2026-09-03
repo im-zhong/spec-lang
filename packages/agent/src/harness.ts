@@ -12,7 +12,7 @@
  *   - there is NO repair here and NO grading here — verification is the
  *     compiler's job (see orchestrate.ts). A failed task fails the shot.
  */
-import type { Artifact } from "@spec/core"
+import type { AgentExecutionLoop, Artifact } from "@spec/core"
 import { scanArtifacts, sha256 } from "./artifacts"
 import { ClaudeCodeAgentRunner, type AgentRunResult } from "./runner"
 
@@ -20,10 +20,16 @@ export interface HarnessTask {
   id: string
   label?: string
   dependsOn: string[]
+  /** Repository-relative cwd for this task; defaults to the shot root. */
+  workingDirectory?: string
   /** Files the task is allowed to create/modify. */
   scope: string[]
   prompt: string
   specNodeIds?: string[]
+  /** Optional pre-conformance code/test/review synthesis loop. */
+  loop?: AgentExecutionLoop
+  /** Compiler-owned gate run once after reviewer approval. */
+  acceptanceCommands?: string[]
 }
 
 export interface HarnessTaskResult {

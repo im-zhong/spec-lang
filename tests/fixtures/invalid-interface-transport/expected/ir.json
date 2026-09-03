@@ -1,0 +1,137 @@
+{
+  "app": {
+    "name": "InvalidInterfaceTransport"
+  },
+  "capabilities": {
+    "provided": [],
+    "required": []
+  },
+  "diagnostics": [
+    {
+      "code": "INTERFACE_HTTP_TRANSPORT_REQUIRED",
+      "details": {
+        "operation": "read"
+      },
+      "level": "error",
+      "message": "HTTP interface operation \"MissingTransport.read\" must declare transport { method, path } with an absolute path.",
+      "nodeId": "interface:MissingTransport"
+    }
+  ],
+  "generation": {
+    "contributions": []
+  },
+  "interfaces": {
+    "bindings": [
+      {
+        "interfaceId": "interface:MissingTransport",
+        "moduleId": "module:backend",
+        "operations": [],
+        "role": "provides"
+      }
+    ],
+    "definitions": [
+      {
+        "hash": "sha256:f4884361de45afe4c93527c0f6547fe1df2472ea542fc318bf733ae041e3f694",
+        "id": "interface:MissingTransport",
+        "name": "MissingTransport",
+        "operations": {
+          "read": {
+            "output": {
+              "ok": "boolean"
+            }
+          }
+        },
+        "protocol": "http-json",
+        "sourceNodeId": "interface:MissingTransport",
+        "version": "1"
+      }
+    ],
+    "dependencies": []
+  },
+  "metadata": {
+    "compilerVersion": "0.1.0"
+  },
+  "modules": [
+    {
+      "calls": [],
+      "contains": [],
+      "id": "module:backend",
+      "inputHash": "sha256:d5755c56891c9f012a72aa6d898330edfbb8c7a217a5240a9514507d21dbf7be",
+      "name": "backend",
+      "provides": [
+        "interface:MissingTransport"
+      ],
+      "sourceNodeId": "module:backend",
+      "target": "fastapi"
+    }
+  ],
+  "nodes": [
+    {
+      "attributes": {
+        "modules": [
+          "backend"
+        ],
+        "name": "InvalidInterfaceTransport"
+      },
+      "id": "app:InvalidInterfaceTransport",
+      "kind": "app",
+      "name": "InvalidInterfaceTransport",
+      "package": "@spec/core",
+      "source": {
+        "column": 16,
+        "file": "tests/fixtures/invalid-interface-transport/app.spec.ts",
+        "line": 15
+      }
+    },
+    {
+      "attributes": {
+        "operations": {
+          "read": {
+            "output": {
+              "ok": "boolean"
+            }
+          }
+        },
+        "protocol": "http-json",
+        "version": "1"
+      },
+      "id": "interface:MissingTransport",
+      "kind": "interface",
+      "name": "MissingTransport",
+      "package": "@spec/core",
+      "source": {
+        "column": 26,
+        "file": "tests/fixtures/invalid-interface-transport/app.spec.ts",
+        "line": 3
+      }
+    },
+    {
+      "attributes": {
+        "calls": [],
+        "contains": [],
+        "provides": [
+          {
+            "nodeId": "interface:MissingTransport"
+          }
+        ],
+        "target": "fastapi"
+      },
+      "id": "module:backend",
+      "kind": "module",
+      "name": "backend",
+      "package": "@spec/core",
+      "source": {
+        "column": 17,
+        "file": "tests/fixtures/invalid-interface-transport/app.spec.ts",
+        "line": 10
+      }
+    }
+  ],
+  "packages": [
+    {
+      "name": "@spec/core",
+      "version": "0.1.0"
+    }
+  ],
+  "version": "spec-ir/0.3"
+}

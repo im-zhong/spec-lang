@@ -20,7 +20,7 @@ describe("infrastructure spec packages", () => {
       "@spec/cache", "@spec/redis", "@spec/messaging", "@spec/rabbitmq",
       "@spec/kafka", "@spec/sqs", "@spec/blob", "@spec/s3",
     ]))
-    expect(result.ir.version).toBe("spec-ir/0.2")
+    expect(result.ir.version).toBe("spec-ir/0.3")
 
     const contributionPackages = result.ir.generation.contributions.map((item) => item.package)
     expect(contributionPackages).toEqual([

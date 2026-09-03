@@ -26,9 +26,15 @@
   "generation": {
     "contributions": []
   },
+  "interfaces": {
+    "bindings": [],
+    "definitions": [],
+    "dependencies": []
+  },
   "metadata": {
     "compilerVersion": "0.1.0"
   },
+  "modules": [],
   "nodes": [
     {
       "attributes": {
@@ -126,5 +132,5 @@
       "version": "0.1.0"
     }
   ],
-  "version": "spec-ir/0.2"
+  "version": "spec-ir/0.3"
 }

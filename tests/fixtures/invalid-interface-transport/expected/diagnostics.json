@@ -1,0 +1,11 @@
+[
+  {
+    "code": "INTERFACE_HTTP_TRANSPORT_REQUIRED",
+    "details": {
+      "operation": "read"
+    },
+    "level": "error",
+    "message": "HTTP interface operation \"MissingTransport.read\" must declare transport { method, path } with an absolute path.",
+    "nodeId": "interface:MissingTransport"
+  }
+]

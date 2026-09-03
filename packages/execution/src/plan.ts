@@ -26,6 +26,24 @@ function canonicalTask(task: AgentExecutionTask): AgentExecutionTask {
     ...(task.workingDirectory ? { workingDirectory: task.workingDirectory } : {}),
     scope: [...task.scope].sort(),
     specNodeIds: [...task.specNodeIds].sort(),
+    ...(task.loop ? {
+      loop: {
+        schemaVersion: task.loop.schemaVersion,
+        maxRounds: task.loop.maxRounds,
+        implementation: {
+          instruction: task.loop.implementation.instruction,
+          scope: [...task.loop.implementation.scope].sort(),
+        },
+        tests: {
+          instruction: task.loop.tests.instruction,
+          scope: [...task.loop.tests.scope].sort(),
+        },
+        reviewer: {
+          instruction: task.loop.reviewer.instruction,
+          commands: [...task.loop.reviewer.commands],
+        },
+      },
+    } : {}),
     ...(task.acceptance ? {
       acceptance: {
         requiredChecks: [...task.acceptance.requiredChecks].sort(),
@@ -36,6 +54,17 @@ function canonicalTask(task: AgentExecutionTask): AgentExecutionTask {
 }
 
 export function createAgentExecutionPlan(input: AgentExecutionPlanInput): AgentExecutionPlan {
+  const tasks = input.tasks.map(canonicalTask).sort((left, right) => left.id.localeCompare(right.id))
+  const semanticDefinition = {
+    environment: input.environment,
+    acceptance: {
+      requiredChecks: [...input.acceptance.requiredChecks].sort(),
+      commands: [...input.acceptance.commands],
+    },
+    mergePolicy: input.mergePolicy ?? "pull-request" as const,
+    tasks,
+  }
+  const semanticInputDigest = `sha256:${createHash("sha256").update(stableStringify(semanticDefinition)).digest("hex")}`
   const definition = {
     schemaVersion: "spec-agent-execution-plan/0.1" as const,
     graphKind: "generation-execution" as const,
@@ -60,7 +89,8 @@ export function createAgentExecutionPlan(input: AgentExecutionPlanInput): AgentE
       commands: [...input.acceptance.commands],
     },
     mergePolicy: input.mergePolicy ?? "pull-request" as const,
-    tasks: input.tasks.map(canonicalTask).sort((left, right) => left.id.localeCompare(right.id)),
+    tasks,
+    semanticInputDigest,
   }
   return {
     ...definition,
@@ -70,6 +100,21 @@ export function createAgentExecutionPlan(input: AgentExecutionPlanInput): AgentE
 
 export function agentExecutionPlanFingerprint(plan: AgentExecutionPlan): string {
   const { fingerprint: _fingerprint, ...definition } = plan
+  return `sha256:${createHash("sha256").update(stableStringify(definition)).digest("hex")}`
+}
+
+export function agentExecutionSemanticInputDigest(
+  plan: Pick<AgentExecutionPlan, "environment" | "acceptance" | "mergePolicy" | "tasks">,
+): string {
+  const definition = {
+    environment: plan.environment,
+    acceptance: {
+      requiredChecks: [...plan.acceptance.requiredChecks].sort(),
+      commands: [...plan.acceptance.commands],
+    },
+    mergePolicy: plan.mergePolicy,
+    tasks: plan.tasks.map(canonicalTask).sort((left, right) => left.id.localeCompare(right.id)),
+  }
   return `sha256:${createHash("sha256").update(stableStringify(definition)).digest("hex")}`
 }
 

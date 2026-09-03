@@ -1,5 +1,5 @@
 import type { AgentExecutionAcceptance, AgentExecutionPlan, Diagnostic } from "@spec/core"
-import { agentExecutionPlanFingerprint } from "./plan"
+import { agentExecutionPlanFingerprint, agentExecutionSemanticInputDigest } from "./plan"
 
 const GIT_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 const OCI_DIGEST = /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/
@@ -58,6 +58,8 @@ export function validateAgentExecutionPlan(plan: AgentExecutionPlan): Diagnostic
     ))
   }
   if (agentExecutionPlanFingerprint(plan) !== plan.fingerprint) diagnostics.push(diagnostic("AGENT_EXECUTION_FINGERPRINT_MISMATCH", "Agent execution plan fingerprint does not match its canonical definition."))
+  if (!CONTENT_HASH.test(plan.semanticInputDigest)) diagnostics.push(diagnostic("AGENT_EXECUTION_SEMANTIC_DIGEST_INVALID", "semanticInputDigest must be a sha256 digest."))
+  else if (agentExecutionSemanticInputDigest(plan) !== plan.semanticInputDigest) diagnostics.push(diagnostic("AGENT_EXECUTION_SEMANTIC_DIGEST_MISMATCH", "semanticInputDigest does not match the frozen task semantics."))
   validateAcceptance(plan.acceptance, "plan", diagnostics)
 
   const byId = new Map<string, AgentExecutionPlan["tasks"][number]>()
@@ -80,7 +82,46 @@ export function validateAgentExecutionPlan(plan: AgentExecutionPlan): Diagnostic
     } else if (task.materializedFiles !== undefined) {
       diagnostics.push(diagnostic("AGENT_EXECUTION_MATERIALIZATION_UNEXPECTED", `Agent task "${task.id}" cannot contain materializedFiles.`, { task: task.id }))
     }
-    if (task.workingDirectory && (task.workingDirectory.startsWith("/") || task.workingDirectory.startsWith("../") || task.workingDirectory.includes("/../") || /[*?{}[\]]/.test(task.workingDirectory))) {
+    if (task.loop) {
+      const loop = task.loop
+      if (task.executor === "materialize") {
+        diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_EXECUTOR_INVALID", `Materialization task "${task.id}" cannot declare an agent loop.`, { task: task.id }))
+      }
+      if (!task.workingDirectory) {
+        diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_WORKDIR_REQUIRED", `Task "${task.id}" loop requires an isolated workingDirectory.`, { task: task.id }))
+      }
+      if (loop.schemaVersion !== "spec-agent-task-loop/0.1" || !Number.isInteger(loop.maxRounds) || loop.maxRounds < 1 || loop.maxRounds > 20) {
+        diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_INVALID", `Task "${task.id}" loop must use the supported schema and 1..20 rounds.`, { task: task.id }))
+      }
+      const implementation = loop.implementation.scope
+      const tests = loop.tests.scope
+      if (!loop.implementation.instruction.trim() || !loop.tests.instruction.trim() || !loop.reviewer.instruction.trim()) {
+        diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_INSTRUCTION_INVALID", `Task "${task.id}" loop roles require non-empty instructions.`, { task: task.id }))
+      }
+      if (implementation.length === 0 || tests.length === 0 || loop.reviewer.commands.length === 0 || loop.reviewer.commands.some((command) => !command.trim() || command.trim() === "true")) {
+        diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_SCOPE_INVALID", `Task "${task.id}" loop requires source scope, test scope, and non-vacuous reviewer commands.`, { task: task.id }))
+      }
+      const overlap = implementation.filter((file) => tests.includes(file))
+      const owned = new Set(task.scope)
+      const outside = [...implementation, ...tests].filter((file) => !owned.has(file))
+      const workdirPrefix = task.workingDirectory ? `${task.workingDirectory.replace(/\/$/, "")}/` : ""
+      const outsideWorkdir = workdirPrefix
+        ? [...implementation, ...tests].filter((file) => !file.startsWith(workdirPrefix))
+        : []
+      if (overlap.length > 0 || outside.length > 0 || outsideWorkdir.length > 0) {
+        diagnostics.push(diagnostic(
+          "AGENT_EXECUTION_LOOP_SCOPE_INVALID",
+          `Task "${task.id}" implementation/test scopes must be disjoint subsets of the task scope.`,
+          {
+            task: task.id,
+            overlap: [...new Set(overlap)].sort(),
+            outside: [...new Set(outside)].sort(),
+            outsideWorkdir: [...new Set(outsideWorkdir)].sort(),
+          },
+        ))
+      }
+    }
+    if (task.workingDirectory && (task.workingDirectory === "." || task.workingDirectory.startsWith("/") || task.workingDirectory.startsWith("../") || task.workingDirectory.includes("/../") || /[*?{}[\]]/.test(task.workingDirectory))) {
       diagnostics.push(diagnostic("AGENT_EXECUTION_WORKDIR_INVALID", `Task "${task.id}" workingDirectory must be repository-relative.`, { task: task.id }))
     }
     if (task.scope.length === 0) diagnostics.push(diagnostic("AGENT_EXECUTION_SCOPE_EMPTY", `Task "${task.id}" must own at least one file.`, { task: task.id }))
@@ -91,6 +132,9 @@ export function validateAgentExecutionPlan(plan: AgentExecutionPlan): Diagnostic
       }
     }
     if (task.acceptance) validateAcceptance(task.acceptance, `task "${task.id}"`, diagnostics)
+    if (task.executor !== "materialize" && (task.acceptance ?? plan.acceptance).commands.some((command) => command.trim() === "true")) {
+      diagnostics.push(diagnostic("AGENT_EXECUTION_ACCEPTANCE_VACUOUS", `Agent task "${task.id}" cannot use literal true as its acceptance judgment.`, { task: task.id }))
+    }
   }
 
   for (const task of plan.tasks) {

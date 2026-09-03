@@ -18,7 +18,7 @@ export interface GitHubGenerateOptions {
   repository?: string
   targetDirectory?: string
   appName: string
-  target: "backend" | "frontend"
+  target: "backend" | "frontend" | "workspace"
   shots: number
   concurrency: number
   requiredCheck: string

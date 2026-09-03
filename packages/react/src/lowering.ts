@@ -27,7 +27,12 @@ export function planFrontendGeneration(ir: SpecIR): FrontendGenerationPlan {
   const agentTasks: AgentTask[] = dag.tasks.map((task) => ({
     id: task.id,
     type: "generate",
-    input: { scope: task.scope, dependsOn: task.dependsOn },
+    input: {
+      scope: task.scope,
+      dependsOn: task.dependsOn,
+      loop: task.loop,
+      acceptanceCommands: task.acceptanceCommands,
+    },
     constraints: [
       { kind: "frontend-blueprint", value: blueprint.version },
       { kind: "runtime", value: blueprint.contract.rendering },
