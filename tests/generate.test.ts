@@ -28,6 +28,36 @@ function runCli(args: string[], cwd: string): { status: number; stdout: string; 
 }
 
 describe("spec generate (dry-run planning)", () => {
+  it("plans a live FastAPI-to-FastAPI interface contract", async () => {
+    const compiled = await compile("examples/interface-fastapi-golden/app.spec.ts", { projectRoot })
+    expect(compiled.ok).toBe(true)
+    expect(compiled.diagnostics.filter((item) => item.code === "DUPLICATE_CAPABILITY_PROVIDER")).toEqual([])
+
+    const composite = planCompositeGeneration(compiled.ir)
+    expect(composite.modules.map((module) => [module.name, module.target])).toEqual([
+      ["catalog", "fastapi"],
+      ["reporting", "fastapi"],
+    ])
+    expect(composite.shot.seedFiles?.["reporting/app/spec_interface_client.py"]).toContain(
+      "def call_spec_interface(",
+    )
+    expect(composite.shot.conformanceFiles[".spec-interfaces/test_contracts.py"]).toContain(
+      "client.call_spec_interface",
+    )
+    const syntaxDir = fs.mkdtempSync(path.join(os.tmpdir(), "spec-interface-python-"))
+    const clientPath = path.join(syntaxDir, "client.py")
+    const oraclePath = path.join(syntaxDir, "oracle.py")
+    fs.writeFileSync(clientPath, composite.shot.seedFiles!["reporting/app/spec_interface_client.py"])
+    fs.writeFileSync(oraclePath, composite.shot.conformanceFiles[".spec-interfaces/test_contracts.py"])
+    execFileSync("python3", ["-m", "py_compile", clientPath, oraclePath])
+    expect(composite.shot.verification.check.at(-1)?.name).toBe("interfaces:live-contracts")
+    expect(composite.shot.evidenceFiles).toContain("conformance-output/interfaces.json")
+    const catalogTasks = composite.shot.tasks.filter((task) => task.id.startsWith("catalog:"))
+    const reportingTasks = composite.shot.tasks.filter((task) => task.id.startsWith("reporting:"))
+    expect(catalogTasks.every((task) => task.dependsOn.every((id) => id.startsWith("catalog:")))).toBe(true)
+    expect(reportingTasks.every((task) => task.dependsOn.every((id) => id.startsWith("reporting:")))).toBe(true)
+  })
+
   it("lowers interface-bound backend and frontend modules as parallel isolated roots", async () => {
     const exampleDir = path.join(projectRoot, "examples", "interface-workspace")
     const result = runCli(["generate", "app.spec.ts", "--dry-run"], exampleDir)

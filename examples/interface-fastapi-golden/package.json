@@ -1,0 +1,11 @@
+{
+  "name": "@spec/example-interface-fastapi-golden",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@spec/core": "workspace:*",
+    "@spec/fastapi": "workspace:*",
+    "@spec/postgres": "workspace:*",
+    "@spec/web": "workspace:*"
+  }
+}

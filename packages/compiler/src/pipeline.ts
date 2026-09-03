@@ -242,14 +242,23 @@ export function linkPass(compilation: Compilation): Compilation {
     }
   }
 
+  linkInterfaces(compilation, all)
+  const moduleByNode = new Map(
+    compilation.modules.flatMap((module) => module.contains.map((nodeId) => [nodeId, module.id] as const)),
+  )
+
   for (const requirement of required) {
-    const providers = provided.filter((p) => p.capability === requirement.capability)
+    const requesterModule = moduleByNode.get(requirement.requester)
+    const providers = provided.filter((provider) =>
+      provider.capability === requirement.capability &&
+      (!requesterModule || moduleByNode.get(provider.provider) === requesterModule),
+    )
     if (providers.length === 0) {
       compilation.diagnostics.push(
         diagnostic(
           "MISSING_CAPABILITY_PROVIDER",
           "error",
-          `"${requirement.requester}" requires capability "${requirement.capability}" but no spec node provides it.`,
+          `"${requirement.requester}" requires capability "${requirement.capability}" but no${requesterModule ? " provider in its module" : " spec node"} provides it.`,
           {
             nodeId: requirement.requester,
             details: { capability: requirement.capability, requester: requirement.requester },
@@ -275,7 +284,6 @@ export function linkPass(compilation: Compilation): Compilation {
     required: required.sort(compareCapabilities),
     provided: provided.sort(compareCapabilities),
   }
-  linkInterfaces(compilation, all)
   return compilation
 }
 
