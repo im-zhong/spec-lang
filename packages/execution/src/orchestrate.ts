@@ -29,6 +29,7 @@ export interface AgentExecutionOptions {
   containers: AgentExecutionContainerPort
   github: AgentExecutionGitHubPort
   concurrency?: number
+  failFast?: boolean
   resume?: boolean
   onTaskStart?: (task: AgentExecutionTask) => void
   onTaskEnd?: (result: AgentExecutionTaskResult) => void
@@ -207,6 +208,7 @@ export async function runAgentExecutionPlan(
     },
     {
       concurrency: options.concurrency,
+      failFast: options.failFast,
       onTaskStart: options.onTaskStart,
       onTaskEnd: options.onTaskEnd,
     },

@@ -28,6 +28,7 @@ function fixturePlan(): AgentExecutionPlan {
       image: `registry.example.com/dev@sha256:${"c".repeat(64)}`,
       devcontainerHash: HASH,
       toolchainLockHash: HASH,
+      agent: { model: "test-model", effort: "high", maxTurns: 20, maxConcurrency: 2 },
     },
     acceptance: { requiredChecks: ["clean-container"], commands: ["test -f output"] },
     tasks: [

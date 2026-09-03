@@ -26,6 +26,7 @@ function task(executor: "agent" | "materialize" = "agent"): ResolvedAgentExecuti
       image: `registry/agent@sha256:${"b".repeat(64)}`,
       devcontainerHash: "c".repeat(64),
       toolchainLockHash: "d".repeat(64),
+      agent: { model: "test-model", effort: "high", maxTurns: 20, maxConcurrency: 1 },
     },
     acceptance: { requiredChecks: ["spec-generation"], commands: ["true"] },
   }

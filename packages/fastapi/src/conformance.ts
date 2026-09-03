@@ -313,6 +313,64 @@ def test_cache_contract():
 
     asyncio.run(probe())
 
+    import app.cache as module
+
+    class FakeRedisClient:
+        def __init__(self, *, fail=False):
+            self.fail = fail
+            self.values = {}
+            self.calls = []
+
+        def _check(self):
+            if self.fail:
+                raise OSError("provider unavailable")
+
+        async def get(self, key):
+            self.calls.append(("get", key))
+            self._check()
+            value = self.values.get(key)
+            return value.encode("utf-8") if value is not None else None
+
+        async def set(self, key, value, *, ex):
+            self.calls.append(("set", key, value, ex))
+            self._check()
+            self.values[key] = value
+            return True
+
+        async def delete(self, key):
+            self.calls.append(("delete", key))
+            self._check()
+            return 1 if self.values.pop(key, None) is not None else 0
+
+    async def probe_redis():
+        for policy in CONTRACT["caches"]:
+            name = policy["name"]
+            full_key = f'{policy["keyPrefix"]}:provider'
+            client = FakeRedisClient()
+            backend = module.RedisCacheBackend(client)
+            value = {"nested": [1, 2]}
+            await backend.set(name, "provider", value)
+            assert client.calls[-1][0:2] == ("set", full_key)
+            assert client.calls[-1][3] == policy["ttlSeconds"]
+            assert json.loads(client.calls[-1][2]) == value
+            assert await backend.get(name, "provider") == value
+            await backend.delete(name, "provider")
+            assert client.calls[-1] == ("delete", full_key)
+
+        bypass = next(item for item in CONTRACT["caches"] if item["failureMode"] == "bypass")
+        bypass_backend = module.RedisCacheBackend(FakeRedisClient(fail=True))
+        assert await bypass_backend.get(bypass["name"], "provider") is None
+        await bypass_backend.set(bypass["name"], "provider", {"ok": True})
+        await bypass_backend.delete(bypass["name"], "provider")
+
+        closed = next(item for item in CONTRACT["caches"] if item["failureMode"] == "fail-closed")
+        closed_backend = module.RedisCacheBackend(FakeRedisClient(fail=True))
+        with pytest.raises(module.CacheUnavailable) as raised:
+            await closed_backend.get(closed["name"], "provider")
+        assert isinstance(raised.value.__cause__, OSError)
+
+    asyncio.run(probe_redis())
+
 
 def test_messaging_contract():
     if not CONTRACT["queues"]:
@@ -355,10 +413,94 @@ def test_messaging_contract():
     asyncio.run(probe())
 
     import app.messaging as module
-    kinds = {item["provider"]["kind"] for item in CONTRACT["queues"]}
-    expected_classes = {"rabbitmq": "RabbitMQBroker", "kafka": "KafkaBroker", "sqs": "SQSBroker"}
-    for kind in kinds:
-        assert hasattr(module, expected_classes[kind])
+
+    class FakeKafkaClient:
+        def __init__(self):
+            self.calls = []
+
+        async def send_and_wait(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    class FakeRabbitClient:
+        def __init__(self):
+            self.calls = []
+
+        async def publish(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    class FakeSQSClient:
+        def __init__(self):
+            self.calls = []
+
+        def send_message(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"MessageId": "provider-message-id"}
+
+    async def probe_providers():
+        clients = {
+            "kafka": FakeKafkaClient(),
+            "rabbitmq": FakeRabbitClient(),
+            "sqs": FakeSQSClient(),
+        }
+        classes = {
+            "kafka": module.KafkaBroker,
+            "rabbitmq": module.RabbitMQBroker,
+            "sqs": module.SQSBroker,
+        }
+        messages = {item["name"]: item for item in CONTRACT["messages"]}
+        for queue in CONTRACT["queues"]:
+            kind = queue["provider"]["kind"]
+            client = clients[kind]
+            broker = classes[kind](client)
+            message = messages[queue["messages"][0]]
+            payload = _sample_payload(message)
+            envelope = module.build_envelope(
+                message["name"], payload,
+                message_id="00000000-0000-4000-8000-000000000020",
+                occurred_at=datetime(2026, 1, 1, 0, 0, 0),
+            )
+            expected_object = {
+                "message": message["name"],
+                "version": 1,
+                "id": "00000000-0000-4000-8000-000000000020",
+                "occurred_at": "2026-01-01T00:00:00",
+                "payload": payload,
+            }
+            expected_text = json.dumps(expected_object, sort_keys=True, separators=(",", ":"))
+            ordering = str(payload[queue["orderingKey"]]) if queue.get("orderingKey") else envelope.id
+            await broker.publish(queue["name"], envelope)
+            if kind == "kafka":
+                args, kwargs = client.calls[-1]
+                assert args == (queue["name"], expected_text.encode("utf-8"))
+                assert kwargs == {"key": ordering.encode("utf-8")}
+            elif kind == "rabbitmq":
+                args, kwargs = client.calls[-1]
+                assert args == (queue["name"], expected_text.encode("utf-8"))
+                assert kwargs == {"message_id": envelope.id}
+            else:
+                assert client.calls[-1] == {
+                    "QueueUrl": queue["name"],
+                    "MessageBody": expected_text,
+                    "MessageDeduplicationId": envelope.id,
+                    "MessageGroupId": ordering,
+                }
+
+            disallowed = next(
+                (item for item in CONTRACT["messages"] if item["name"] not in queue["messages"]),
+                None,
+            )
+            if disallowed is not None:
+                bad = module.build_envelope(
+                    disallowed["name"], _sample_payload(disallowed),
+                    message_id="00000000-0000-4000-8000-000000000021",
+                    occurred_at=datetime(2026, 1, 1, 0, 0, 0),
+                )
+                before = len(client.calls)
+                with pytest.raises(module.MessageValidationError):
+                    await broker.publish(queue["name"], bad)
+                assert len(client.calls) == before
+
+    asyncio.run(probe_providers())
 
 
 def test_blob_contract():
@@ -395,6 +537,64 @@ def test_blob_contract():
     import app.blob as module
     if any(item["provider"]["kind"] == "s3" for item in CONTRACT["blobs"]):
         assert hasattr(module, "S3BlobStore")
+
+        class FakeBody:
+            def __init__(self, value):
+                self.value = value
+
+            def read(self):
+                return self.value
+
+        class FakeS3Client:
+            def __init__(self):
+                self.objects = {}
+                self.calls = []
+
+            def put_object(self, **kwargs):
+                self.calls.append(("put", kwargs))
+                self.objects[(kwargs["Bucket"], kwargs["Key"])] = bytes(kwargs["Body"])
+
+            def get_object(self, **kwargs):
+                self.calls.append(("get", kwargs))
+                return {"Body": FakeBody(self.objects[(kwargs["Bucket"], kwargs["Key"])])}
+
+            def delete_object(self, **kwargs):
+                self.calls.append(("delete", kwargs))
+                self.objects.pop((kwargs["Bucket"], kwargs["Key"]), None)
+
+            def generate_presigned_url(self, operation, **kwargs):
+                self.calls.append(("presign", operation, kwargs))
+                return "https://signed.invalid/object"
+
+        async def probe_s3():
+            policy = CONTRACT["blobs"][0]
+            name = policy["name"]
+            key = "tenant/provider.bin"
+            normalized = f'{policy["keyPrefix"].strip("/")}/{key}'
+            content_type = policy["contentTypes"][0]
+            client = FakeS3Client()
+            store = module.S3BlobStore(client)
+            await store.put(name, key, b"provider-payload", content_type)
+            assert client.calls[-1] == ("put", {
+                "Bucket": policy["bucket"], "Key": normalized,
+                "Body": b"provider-payload", "ContentType": content_type,
+            })
+            assert await store.get(name, key) == b"provider-payload"
+            assert await store.signed_url(name, key) == "https://signed.invalid/object"
+            assert client.calls[-1] == ("presign", "get_object", {
+                "Params": {"Bucket": policy["bucket"], "Key": normalized},
+                "ExpiresIn": policy["signedUrlTtlSeconds"],
+            })
+            await store.delete(name, key)
+            assert client.calls[-1] == ("delete", {
+                "Bucket": policy["bucket"], "Key": normalized,
+            })
+            before = list(client.calls)
+            with pytest.raises(BlobValidationError):
+                await store.put(name, key, b"x", "application/x-not-allowed")
+            assert client.calls == before
+
+        asyncio.run(probe_s3())
 `
 }
 

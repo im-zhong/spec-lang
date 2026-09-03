@@ -48,6 +48,12 @@ export function createAgentExecutionPlan(input: AgentExecutionPlanInput): AgentE
       image: input.environment.image,
       devcontainerHash: input.environment.devcontainerHash,
       toolchainLockHash: input.environment.toolchainLockHash,
+      agent: {
+        model: input.environment.agent.model,
+        effort: input.environment.agent.effort,
+        maxTurns: input.environment.agent.maxTurns,
+        maxConcurrency: input.environment.agent.maxConcurrency,
+      },
     },
     acceptance: {
       requiredChecks: [...input.acceptance.requiredChecks].sort(),

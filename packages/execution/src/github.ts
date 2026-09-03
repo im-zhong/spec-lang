@@ -1,5 +1,5 @@
 import type { AgentExecutionCheckResult } from "@spec/core"
-import { commandFailure, runProcess } from "./process"
+import { commandFailure, runProcess, type ProcessResult } from "./process"
 import type { AgentExecutionGitHubPort, PullRequestRecord } from "./ports"
 
 export interface GitHubCliAdapterOptions {
@@ -19,6 +19,8 @@ interface GhCheck {
 interface GhPullRequestHead {
   headRefOid?: string
 }
+
+const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 
 export class GitHubCliAdapter implements AgentExecutionGitHubPort {
   private readonly options: GitHubCliAdapterOptions
@@ -62,14 +64,29 @@ export class GitHubCliAdapter implements AgentExecutionGitHubPort {
       await this.gh(["pr", "edit", String(existing.number), "--repo", input.repository, "--title", input.title, "--body", input.body])
       return { ...existing, state: "open" }
     }
-    const created = await this.gh([
-      "pr", "create", "--repo", input.repository,
-      "--head", input.head, "--base", input.base,
-      "--title", input.title, "--body", input.body,
-    ])
-    const record = await this.findPullRequest(input.repository, input.head)
-    if (!record) throw new Error(`GitHub CLI created a PR but it could not be resolved: ${created.stdout.trim()}`)
-    return record
+    let lastFailure: ProcessResult | undefined
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const created = await this.gh([
+        "pr", "create", "--repo", input.repository,
+        "--head", input.head, "--base", input.base,
+        "--title", input.title, "--body", input.body,
+      ], true)
+      if (!created.ok) lastFailure = created
+
+      // The GraphQL response can be lost after GitHub has accepted the PR.
+      // Resolve by immutable head branch before considering another create;
+      // GitHub itself then remains the idempotency authority.
+      for (let lookup = 1; lookup <= 3; lookup += 1) {
+        const record = await this.findPullRequest(input.repository, input.head)
+        if (record) return record
+        await sleep(250 * lookup)
+      }
+      if (created.ok) {
+        throw new Error(`GitHub CLI created a PR but it could not be resolved: ${created.stdout.trim()}`)
+      }
+    }
+    if (!lastFailure) throw new Error("GitHub CLI failed to create or resolve the pull request")
+    throw commandFailure(lastFailure)
   }
 
   async waitForChecks(input: {
@@ -92,7 +109,7 @@ export class GitHubCliAdapter implements AgentExecutionGitHubPort {
         head = {}
       }
       if (head.headRefOid !== input.expectedHeadSha) {
-        await new Promise((resolve) => setTimeout(resolve, this.options.pollIntervalMs ?? 5000))
+        await sleep(this.options.pollIntervalMs ?? 5000)
         continue
       }
       const response = await this.gh([
@@ -118,7 +135,7 @@ export class GitHubCliAdapter implements AgentExecutionGitHubPort {
       })
       if (checks.some((check) => check.status === "failure")) return checks
       if (checks.every((check) => check.status === "success")) return checks
-      await new Promise((resolve) => setTimeout(resolve, this.options.pollIntervalMs ?? 5000))
+      await sleep(this.options.pollIntervalMs ?? 5000)
     }
     return input.requiredChecks.map((name) => ({ name, status: "failure" as const }))
   }

@@ -38,6 +38,7 @@ export default defineConfig({
           items: [
             { text: "Source walkthrough: booking, end to end", link: "/deep-dive/source-walkthrough" },
             { text: "Source walkthrough: frontend-golden", link: "/deep-dive/frontend-walkthrough" },
+            { text: "Media-platform v6 design audit", link: "/deep-dive/media-platform-v6-audit" },
           ],
         },
       ],
@@ -94,6 +95,7 @@ export default defineConfig({
             { text: "Spec IR format", link: "/reference/ir" },
             { text: "Blueprint format", link: "/reference/blueprint" },
             { text: "Generation internals", link: "/reference/generation" },
+            { text: "Git & GitHub execution", link: "/reference/github-execution" },
             { text: "Architecture", link: "/reference/architecture" },
           ],
         },

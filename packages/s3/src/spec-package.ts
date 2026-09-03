@@ -25,7 +25,7 @@ export default definePackage({
     instructions: [
       "Create one configured boto3 S3 client during lifespan setup and run blocking calls with asyncio.to_thread.",
       "Use botocore Config for explicit connect/read timeouts, bounded retries, and path-style addressing when declared.",
-      "Use multipart upload for large objects, abort failed multipart uploads, and generate presigned URLs only for normalized keys.",
+      "Use put_object for declared payloads (all declared maxima are below S3's single-object limit) and generate presigned URLs only for normalized keys.",
     ],
   })],
 })

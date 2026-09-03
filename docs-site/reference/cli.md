@@ -1,98 +1,99 @@
 # CLI reference
 
 ```bash
-spec <command> <file.spec.ts> [--debug] [--help]
+spec <command> <file.spec.ts> [options]
 ```
 
 ## Commands
 
 ### `spec check <file>`
 
-Runs the semantic pipeline (parse, resolve, normalize, validate, link,
-lower) and reports diagnostics. Writes no artifacts. `lower` is currently
-a no-op extension point.
-
-| Exit | Meaning           |
-| ---- | ----------------- |
-| 0    | Valid (warnings allowed) |
-| 1    | Invalid (≥1 error diagnostic) |
-| 2    | Compiler/usage error |
+Runs the complete static pipeline and reports diagnostics without writing
+artifacts.
 
 ### `spec build <file>`
 
-Full compile. On success writes to the output directory (default `.spec`,
-see `spec.config.ts`):
+Compiles a valid specification and writes deterministic compiler artifacts to
+the configured output directory (default `.spec/`):
 
-| File               | Content                                    |
-| ------------------ | ------------------------------------------ |
-| `spec.ir.json`     | The Spec IR (deterministic, versioned)     |
-| `diagnostics.json` | All diagnostics, sorted by source location |
-| `manifest.json`    | Spec/compiler/package versions             |
-
-On failure, prints diagnostics and writes nothing.
+| File | Content |
+| --- | --- |
+| `spec.ir.json` | Versioned Spec IR |
+| `diagnostics.json` | Stably sorted diagnostics |
+| `manifest.json` | Spec, compiler, and package versions |
 
 ### `spec inspect <file>`
 
-Prints the human-readable specification tree. Requires a valid
-specification (exit 1 otherwise).
+Prints the human-readable specification tree. The specification must be valid.
 
 ### `spec generate <file>`
 
-Compiles, lowers to a backend blueprint, and generates the application
-with a headless coding agent — N independent shots, each judged by the
-compiler's runtime functional conformance suite and compared for
-normalized OpenAPI equality (see
-[agentic generation](/guide/generate)). Requires `claude` on `PATH`, plus
-`uv` and Python 3.10+ for verification.
+Compiles a backend target, creates one private temporary GitHub repository per
+shot, and executes the compiler-owned generation DAG through isolated
+containers, branches, PRs, and required checks. Every shot receives one
+compiler-owned conformance judgment; multiple shots are compared using declared
+OpenAPI and behavior evidence.
 
-| Exit | Meaning                                            |
-| ---- | -------------------------------------------------- |
-| 0    | All shots conformant and interface-identical       |
-| 1    | Invalid spec, a shot failed, or shots diverged     |
-| 2    | Compiler/usage error                               |
+See [Agentic generation](/guide/generate) and [Git and GitHub
+execution](/reference/github-execution).
 
-Artifacts written to the output dir: `blueprint.json`,
-`agent.tasks.json`, `agent.result.json`; generated apps in `out/`.
+### `spec generate-frontend <file>`
 
-## Options
+Runs the same GitHub-native shot protocol for a React target. The
+compiler-owned Playwright oracle checks layout, behavior, and navigation and
+emits the declared visual/JSON equality evidence.
 
-| Option   | Effect                                        |
-| -------- | --------------------------------------------- |
-| `--debug` | Show internal stack traces on compiler bugs  |
-| `--help`  | Print usage                                   |
+## Generation options
 
-### `generate` options
+| Option | Effect | Default |
+| --- | --- | --- |
+| `--dry-run` | Write blueprint/DAG planning artifacts; create no repositories and run no agent | — |
+| `--shots <n>` | Independent generations, each in a distinct remote repository and local root | `3` |
+| `--run-id <id>` | Stable GitHub run identity | required for execution |
+| `--image <repo@sha256:...>` | Digest-pinned generator image | required for execution |
+| `--model <id>` | Pinned coding-agent model | required for execution |
+| `--effort <level>` | Pinned `low\|medium\|high\|xhigh\|max` effort | required for execution |
+| `--max-turns <n>` | Pinned maximum turns per agent node | required for execution |
+| `--target-dir <dir>` | Repository-relative product directory in every shot | `products/<app>/<target>` |
+| `--repository <owner/base>` | Temporary repository owner/name prefix; run and shot suffixes are automatic | authenticated owner + app/target |
+| `--concurrency <n>` | Total maximum parallel generator nodes across shots | `2` |
+| `--check <name>` | Required GitHub check | `spec-generation` |
+| `--resume` | Reconstruct the same immutable run from GitHub state | — |
+| `--debug` | Show internal stack traces | — |
+| `--help` | Print usage | — |
 
-| Option                 | Effect                                        | Default |
-| ---------------------- | --------------------------------------------- | ------- |
-| `--shots <n>`          | Independent generations per spec              | `3`     |
-| `--dry-run`            | Plan only (blueprint + DAG), no agent         | —       |
-| `--out <dir>`          | Generated-app root                            | `out/`  |
-| `--model <id>`         | Explicit Claude Code model override           | Claude Code default |
-| `--max-turns <n>`      | Explicit turn-budget override per DAG task    | Claude Code default |
+`--run-id`, `--image`, `--model`, `--effort`, and `--max-turns` are mandatory
+for real generation because they are frozen into the immutable execution plan.
+The runtime must match the plan exactly.
 
-There is deliberately no repair option: a shot that fails its first
-verification is a specification defect (pin the contract, regenerate).
+The temporary repository workflow currently exposes the compiler-owned check
+name `spec-generation`; supplying another check name is rejected.
 
-Without explicit model/turn overrides Claude Code selects its normal model and
-budget. The headless runner still supplies `acceptEdits` plus an audited
-generation file/Python allowlist because print mode cannot interactively
-approve writes. The CLI appends model or turn-budget flags only when requested.
-
-## Configuration
-
-`spec.config.ts` in the project root:
-
-```ts
-export default {
-  outputDir: ".spec", // where build artifacts are written
-}
-```
+There is no `--out` generation mode and no repair option. Generated projects
+live in their per-shot GitHub repositories, not under `out/` in the compiler
+repository. Local `.spec/generation/` contains clones, disposable worktrees,
+immutable plan copies, and result reports.
 
 ## Exit codes
 
-| Code | Category              | Typical cause                              |
-| ---- | --------------------- | ------------------------------------------ |
-| 0    | Success              | —                                          |
-| 1    | Specification error  | Diagnostics with level `error`             |
-| 2    | Internal / usage     | Unknown command, missing file, compiler bug |
+| Code | Meaning |
+| --- | --- |
+| `0` | Command succeeded; for multi-shot generation, every shot conformed and declared evidence matched |
+| `1` | Invalid specification, failed shot/check/conformance, or divergent evidence |
+| `2` | Usage or compiler error |
+
+Some infrastructure failures in GitHub-native execution are thrown as command
+errors and therefore surface through the usage/compiler-error path. Inspect the
+per-shot result when present and preserve failed repositories for diagnosis.
+
+## Configuration
+
+`spec.config.ts` controls deterministic compiler artifact output:
+
+```ts
+export default {
+  outputDir: ".spec",
+}
+```
+
+It does not redirect real generated products into the `spec-lang` checkout.

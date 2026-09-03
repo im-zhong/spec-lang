@@ -12,7 +12,12 @@ function plan(tasks = [
     runId: "run-1",
     repository: "owner/repo",
     rootBaseSha: SHA,
-    environment: { image: IMAGE, devcontainerHash: HASH, toolchainLockHash: HASH },
+    environment: {
+      image: IMAGE,
+      devcontainerHash: HASH,
+      toolchainLockHash: HASH,
+      agent: { model: "test-model", effort: "high", maxTurns: 20, maxConcurrency: 2 },
+    },
     acceptance: { requiredChecks: ["test"], commands: ["pnpm test"] },
     tasks,
   })
@@ -35,6 +40,14 @@ describe("agent execution plan", () => {
       { id: "b", objective: "B", instruction: "x", dependsOn: ["a"], scope: ["b"], specNodeIds: [] },
     ])
     expect(validateAgentExecutionPlan(cycle).map((item) => item.code)).toContain("AGENT_EXECUTION_DEPENDENCY_CYCLE")
+  })
+
+  it("requires frozen agent settings in the plan fingerprint", () => {
+    const value = plan()
+    value.environment.agent.maxTurns = 0
+    const codes = validateAgentExecutionPlan(value).map((item) => item.code)
+    expect(codes).toContain("AGENT_EXECUTION_AGENT_ENVIRONMENT_INVALID")
+    expect(codes).toContain("AGENT_EXECUTION_FINGERPRINT_MISMATCH")
   })
 
   it("rejects overlapping independent write scopes", () => {

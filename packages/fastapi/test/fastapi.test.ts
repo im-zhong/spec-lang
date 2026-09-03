@@ -254,7 +254,7 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
 
   it("generated conformance python is syntactically valid", async () => {
     if (!hasPython) return
-    for (const name of ["cblog", "inventory", "booking"]) {
+    for (const name of ["cblog", "inventory", "booking", "media-platform"]) {
       const result = await compileExample(name)
       const plan = planGeneration(result.ir)
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `spec-conf-`))
@@ -277,6 +277,28 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
     expect(a.conformance.files["conformance/test_contract.py"]).toBe(
       b.conformance.files["conformance/test_contract.py"],
     )
+  })
+
+  it("media-platform pins provider adapter calls in compiler-owned conformance", async () => {
+    const result = await compileExample("media-platform")
+    expect(result.ok).toBe(true)
+    const plan = planGeneration(result.ir)
+    const testFile = plan.conformance.files["conformance/test_infrastructure.py"]
+    expect(testFile).toContain("class FakeRedisClient:")
+    expect(testFile).toContain('await backend.get(name, "provider")')
+    expect(testFile).toContain("class FakeKafkaClient:")
+    expect(testFile).toContain('assert kwargs == {"key": ordering.encode("utf-8")}')
+    expect(testFile).toContain('"MessageDeduplicationId": envelope.id')
+
+    const cache = plan.dag.tasks.find((task) => task.id === "cache")!.prompt
+    expect(cache).toContain("policy_name` is always")
+    const database = plan.dag.tasks.find((task) => task.id === "database")!.prompt
+    expect(database).toContain("session_dependency(factory)")
+    expect(database).toContain("Do not add caches, registries, dotenv")
+    expect(database).toContain("Do not invoke `pip`, `venv`")
+    const messaging = plan.dag.tasks.find((task) => task.id === "messaging")!.prompt
+    expect(messaging).toContain("client.send_and_wait(queue_name")
+    expect(messaging).toContain("client.send_message(QueueUrl=queue_name")
   })
 
   it("derives a correct, deterministic generation DAG", async () => {
@@ -322,9 +344,14 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
     expect(pa).toContain("create_app(database_url")
     const models = a.dag.tasks.find((t) => t.id === "models")!.prompt
     expect(models).toContain("password_hash")
+    expect(models).toContain("Put every scratch file, downloaded package")
+    expect(models).toContain("use `/tmp`")
+    expect(models).toContain("Never create `.pkg-tmp`")
     const shared = a.dag.tasks.find((t) => t.id === "router:Post")!.prompt
     expect(shared).toContain('"detail": "Not authenticated"')
     expect(shared).toContain('"detail": "Already exists"')
     expect(shared).toContain("list returns EVERY row")
+    expect(shared).toContain("routers MUST NOT define an ORM base")
+    expect(shared).toContain("`DeclarativeBase` from top-level `sqlalchemy`")
   })
 })

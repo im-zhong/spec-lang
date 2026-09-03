@@ -90,17 +90,19 @@ Actual generation uses GitHub/container execution:
 spec generate examples/media-platform/app.spec.ts \
   --run-id media-platform-v1 \
   --image ghcr.io/OWNER/spec-agent@sha256:DIGEST \
+  --model MODEL_ID --effort high --max-turns 100 \
   --target-dir products/media-platform/backend \
-  --shots 1 \
-  --concurrency 5
+  --shots 2 \
+  --concurrency 2
 
 # same arguments, reconstructed from GitHub durable state
 spec generate examples/media-platform/app.spec.ts \
   --run-id media-platform-v1 \
   --image ghcr.io/OWNER/spec-agent@sha256:DIGEST \
+  --model MODEL_ID --effort high --max-turns 100 \
   --target-dir products/media-platform/backend \
-  --shots 1 \
-  --concurrency 5 \
+  --shots 2 \
+  --concurrency 2 \
   --resume
 ```
 
@@ -110,6 +112,11 @@ the repositories through `gh`; callers may supply an owner/name prefix but do
 not pre-create concrete shot targets. Different directories or branches in one
 remote do not qualify as independent shots. Each repository receives the
 identical compiler-owned DAG, conformance oracle, and pinned environment.
+
+Shot clones and remotes use GitHub's SSH endpoint on port 443. This preserves
+SSH-key write permission for the compiler-owned workflow while avoiding a
+dependency on outbound port 22. Resume validates the existing clone's
+repository identity before normalizing its `origin` to that transport.
 
 ## Reproducible agent environment
 

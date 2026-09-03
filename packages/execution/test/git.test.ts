@@ -31,7 +31,12 @@ describe("Git agent execution repository", () => {
       runId: "git-test",
       repository: "owner/repo",
       rootBaseSha,
-      environment: { image: `registry/dev@sha256:${"c".repeat(64)}`, devcontainerHash: hash, toolchainLockHash: hash },
+      environment: {
+        image: `registry/dev@sha256:${"c".repeat(64)}`,
+        devcontainerHash: hash,
+        toolchainLockHash: hash,
+        agent: { model: "test-model", effort: "high", maxTurns: 20, maxConcurrency: 2 },
+      },
       acceptance: { requiredChecks: ["test"], commands: ["true"] },
       tasks: [
         { id: "left", objective: "left", instruction: "left", dependsOn: [], scope: ["left.txt"], specNodeIds: [] },
@@ -76,6 +81,39 @@ describe("Git agent execution repository", () => {
       result.taskId,
     )))).toEqual([true, true])
     expect(fs.readFileSync(fetchHead, "utf8")).toBe(fetchHeadSentinel)
+
+    const retryFresh = path.join(temporary, "retry-fresh")
+    git(temporary, ["clone", bare, retryFresh])
+    const retryState = path.join(temporary, "fetch-attempts")
+    const flakyGit = path.join(temporary, "flaky-git.sh")
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim()
+    fs.writeFileSync(flakyGit, `#!/bin/sh
+count=0
+if [ -f "${retryState}" ]; then read -r count < "${retryState}"; fi
+if [ "$1" = fetch ]; then
+  count=$((count + 1))
+  printf '%s' "$count" > "${retryState}"
+  if [ "$count" -eq 1 ]; then
+    printf '%s\n' 'transient transport failure' >&2
+    exit 128
+  fi
+fi
+exec "${realGit}" "$@"
+`, "utf8")
+    fs.chmodSync(flakyGit, 0o755)
+    const retryRepository = new GitAgentExecutionRepository({
+      repoRoot: retryFresh,
+      worktreeRoot: path.join(temporary, "retry-worktrees"),
+      gitCli: flakyGit,
+    })
+    expect(await retryRepository.verifyCommitProvenance(
+      results[0].headSha!,
+      results[0].branch!,
+      rootBaseSha,
+      plan,
+      results[0].taskId,
+    )).toBe(true)
+    expect(fs.readFileSync(retryState, "utf8")).toBe("2")
 
     const first = await repository.materializeIntegrationBase(plan, "child", results)
     const second = await repository.materializeIntegrationBase(plan, "child", [...results].reverse())

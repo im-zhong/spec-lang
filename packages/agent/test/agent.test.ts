@@ -13,14 +13,17 @@ import type { AgentRunResult, ClaudeCodeAgentRunner } from "../src/runner"
 describe("parseResultJson", () => {
   it("uses Claude Code defaults unless overrides are explicit", () => {
     const defaults = buildClaudeArgs()
-    expect(defaults.slice(0, 5)).toEqual([
-      "-p", "--output-format", "json", "--permission-mode", "acceptEdits",
+    expect(defaults.slice(0, 7)).toEqual([
+      "-p", "--output-format", "json", "--safe-mode", "--no-session-persistence",
+      "--permission-mode", "acceptEdits",
     ])
     expect(defaults).not.toContain("--model")
     expect(defaults).not.toContain("--max-turns")
     expect(defaults).toContain("--allowedTools")
-    const overridden = buildClaudeArgs({ model: "custom", maxTurns: 12 })
+    const overridden = buildClaudeArgs({ model: "custom", effort: "high", maxTurns: 12 })
     expect(overridden).toContain("custom")
+    expect(overridden).toContain("--effort")
+    expect(overridden).toContain("high")
     expect(overridden).toContain("12")
   })
   it("parses a clean result payload", () => {
@@ -251,6 +254,7 @@ describe("GitHub generator DAG execution", () => {
         image: `ghcr.io/owner/dev@sha256:${"c".repeat(64)}`,
         devcontainerHash: hash,
         toolchainLockHash: hash,
+        agent: { model: "test-model", effort: "high", maxTurns: 20, maxConcurrency: 2 },
       },
       requiredChecks: ["spec-generation"],
     })

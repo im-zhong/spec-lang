@@ -48,6 +48,7 @@ describe("spec generate (dry-run planning)", () => {
         image: `ghcr.io/owner/spec-agent@sha256:${"b".repeat(64)}`,
         devcontainerHash: "c".repeat(64),
         toolchainLockHash: "d".repeat(64),
+        agent: { model: "test-model", effort: "high", maxTurns: 20, maxConcurrency: 2 },
       },
       requiredChecks: ["spec-generation"],
       finalMaterializations: [{
@@ -58,6 +59,12 @@ describe("spec generate (dry-run planning)", () => {
       }],
     })
     expect(plan.graphKind).toBe("generation-execution")
+    expect(plan.environment.agent).toEqual({
+      model: "test-model",
+      effort: "high",
+      maxTurns: 20,
+      maxConcurrency: 2,
+    })
     expect(plan.tasks).toHaveLength(generation.dag.tasks.length + 2)
     expect(plan.tasks.find((task) => task.id === "models")?.scope).toEqual([
       "products/media-platform/backend/app/models.py",
@@ -143,5 +150,16 @@ export default defineApp({ name: "Broken", entities: [] })
     const result = runCli(["generate", "app.spec.ts", "--dry-run"], tmp)
     expect(result.status).toBe(1)
     expect(result.stderr).toContain("Specification invalid")
+  })
+
+  it("refuses an executable run with implicit agent settings", () => {
+    const exampleDir = path.join(projectRoot, "examples", "booking")
+    const result = runCli([
+      "generate", "app.spec.ts",
+      "--run-id", "missing-agent-settings",
+      "--image", `ghcr.io/owner/spec-agent@sha256:${"b".repeat(64)}`,
+    ], exampleDir)
+    expect(result.status).toBe(2)
+    expect(result.stderr).toContain("--model, --effort, and --max-turns")
   })
 })

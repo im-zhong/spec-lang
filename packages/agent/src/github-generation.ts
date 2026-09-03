@@ -51,8 +51,9 @@ export interface GitHubGenerationRunOptions {
   worktreeRoot?: string
   concurrency?: number
   resume?: boolean
-  model?: string
-  maxTurns?: number
+  model: string
+  effort: "low" | "medium" | "high" | "xhigh" | "max"
+  maxTurns: number
   onTaskStart?: (taskId: string) => void
   onTaskEnd?: (taskId: string, ok: boolean, headSha?: string) => void
 }
@@ -204,7 +205,18 @@ export async function runGitHubGeneration(
     "if [ -f /opt/spec-host-claude.json ]; then cp /opt/spec-host-claude.json /home/node/.claude.json; fi",
     'exec claude "$@"',
   ].join("; ")
-  const agentCommand = ["/bin/sh", "-lc", bootstrap, "spec-agent", ...buildClaudeArgs({ model: options.model, maxTurns: options.maxTurns })]
+  if ((options.concurrency ?? 1) !== plan.environment.agent.maxConcurrency) {
+    throw new Error("runtime concurrency does not match the immutable agent environment")
+  }
+  if (options.model !== plan.environment.agent.model ||
+      options.effort !== plan.environment.agent.effort ||
+      options.maxTurns !== plan.environment.agent.maxTurns) {
+    throw new Error("runtime agent settings do not match the immutable agent environment")
+  }
+  const agentCommand = [
+    "/bin/sh", "-lc", bootstrap, "spec-agent",
+    ...buildClaudeArgs({ model: options.model, effort: options.effort, maxTurns: options.maxTurns }),
+  ]
 
   return runAgentExecutionPlan(plan, {
     repository: new GitAgentExecutionRepository({ repoRoot, worktreeRoot }),
@@ -215,6 +227,7 @@ export async function runGitHubGeneration(
     }),
     github: new GitHubCliAdapter({ cwd: repoRoot }),
     concurrency: options.concurrency,
+    failFast: true,
     resume: options.resume,
     onTaskStart: (task) => options.onTaskStart?.(task.id),
     onTaskEnd: (result) => options.onTaskEnd?.(result.taskId, result.status !== "failure", result.headSha),

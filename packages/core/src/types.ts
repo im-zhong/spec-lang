@@ -251,6 +251,14 @@ export interface AgentExecutionEnvironment {
   devcontainerHash: string
   /** Hash covering language and package-manager lockfiles. */
   toolchainLockHash: string
+  /** Frozen coding-agent settings that can affect generated output. */
+  agent: {
+    model: string
+    effort: "low" | "medium" | "high" | "xhigh" | "max"
+    maxTurns: number
+    /** Maximum agent containers scheduled concurrently inside this shot. */
+    maxConcurrency: number
+  }
 }
 
 /** Clean-container acceptance gate re-run against the pushed commit. */

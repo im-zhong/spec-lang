@@ -44,6 +44,26 @@ describe("agent execution scheduler", () => {
     expect(report.skipped).toEqual(["child"])
   })
 
+  it("can stop launching independent work after the first failed result", async () => {
+    const started: string[] = []
+    let siblingFinished = false
+    const report = await runAgentExecutionSchedule(
+      [task("left"), task("right"), task("third")],
+      async (current) => {
+        started.push(current.id)
+        if (current.id === "left") return { taskId: current.id, ok: false }
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        siblingFinished = true
+        return { taskId: current.id, ok: true }
+      },
+      { concurrency: 2, failFast: true },
+    )
+    expect(started.sort()).toEqual(["left", "right"])
+    expect(siblingFinished).toBe(true)
+    expect(report.skipped).toEqual(["third"])
+    expect(report.ok).toBe(false)
+  })
+
   it("records worker rejection and waits for already-running siblings", async () => {
     let siblingFinished = false
     const report = await runAgentExecutionSchedule(

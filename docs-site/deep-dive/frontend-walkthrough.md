@@ -1,10 +1,12 @@
 # Source walkthrough: frontend-golden, end to end
 
-This page traces `examples/frontend-golden/app.spec.ts` through the current
-implementation: TypeScript UI spec → frontend blueprint → compiler-owned
+This page preserves the **legacy local-harness** trace of
+`examples/frontend-golden/app.spec.ts`: TypeScript UI spec → frontend blueprint → compiler-owned
 React runtime → one wiring agent task per shot → a Playwright oracle that
 judges layout, behavior, and navigation. Artifacts are from the 2026-09-02
-two-shot run.
+two-shot run. Current real generation uses independent GitHub repositories,
+durable task PRs/checks, and immutable integration bases; see [Git and GitHub
+execution](/reference/github-execution).
 
 ```bash
 spec check examples/frontend-golden/app.spec.ts

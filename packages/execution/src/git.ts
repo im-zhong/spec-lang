@@ -7,6 +7,11 @@ import { commandFailure, runProcess, type ProcessResult } from "./process"
 import type { CommitResult, AgentExecutionRepositoryPort, IntegrationBase, PublishedAgentExecutionPlan } from "./ports"
 
 const FULL_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
+const REMOTE_READ_ATTEMPTS = 3
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 function canonicalJson(value: unknown): string {
   const normalize = (input: unknown): unknown => {
@@ -23,24 +28,45 @@ export interface GitAgentExecutionRepositoryOptions {
   repoRoot: string
   worktreeRoot: string
   remote?: string
+  /** Test seam; production uses `git`. */
+  gitCli?: string
 }
 
 export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort {
   private readonly repoRoot: string
   private readonly worktreeRoot: string
   private readonly remote: string
+  private readonly gitCli: string
 
   constructor(options: GitAgentExecutionRepositoryOptions) {
     this.repoRoot = path.resolve(options.repoRoot)
     this.worktreeRoot = path.resolve(options.worktreeRoot)
     this.remote = options.remote ?? "origin"
+    this.gitCli = options.gitCli ?? "git"
   }
 
   private async git(args: string[], cwd = this.repoRoot, env?: NodeJS.ProcessEnv): Promise<ProcessResult> {
-    const result = await runProcess("git", args, { cwd, env: { ...process.env, ...env }, timeoutMs: 180_000 })
+    const result = await runProcess(this.gitCli, args, { cwd, env: { ...process.env, ...env }, timeoutMs: 180_000 })
     if (!result.ok) throw commandFailure(result)
     if (result.stdoutTruncated || result.stderrTruncated) throw new Error(`git ${args[0]} output exceeded the bounded execution log`)
     return result
+  }
+
+  /** Retry only remote reads; agent execution and conformance remain single-shot. */
+  private async remoteRead(args: string[]): Promise<ProcessResult> {
+    let last: ProcessResult | undefined
+    for (let attempt = 1; attempt <= REMOTE_READ_ATTEMPTS; attempt++) {
+      const result = await runProcess(this.gitCli, args, { cwd: this.repoRoot, timeoutMs: 180_000 })
+      if (result.ok) {
+        if (result.stdoutTruncated || result.stderrTruncated) {
+          throw new Error(`git ${args[0]} output exceeded the bounded execution log`)
+        }
+        return result
+      }
+      last = result
+      if (attempt < REMOTE_READ_ATTEMPTS) await delay(250 * attempt)
+    }
+    throw commandFailure(last!)
   }
 
   /**
@@ -53,7 +79,7 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
   private async fetchRemoteBranch(branch: string): Promise<string> {
     const key = createHash("sha256").update(`${this.remote}\0${branch}`).digest("hex")
     const fetchedRef = `refs/spec-fetch/${key}`
-    await this.git([
+    await this.remoteRead([
       "fetch",
       "--no-tags",
       "--no-write-fetch-head",
@@ -66,11 +92,7 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
   }
 
   async remoteHead(branch: string): Promise<string | undefined> {
-    const result = await runProcess("git", ["ls-remote", "--heads", this.remote, `refs/heads/${branch}`], {
-      cwd: this.repoRoot,
-      timeoutMs: 120_000,
-    })
-    if (!result.ok) throw commandFailure(result)
+    const result = await this.remoteRead(["ls-remote", "--heads", this.remote, `refs/heads/${branch}`])
     const sha = result.stdout.trim().split(/\s+/)[0]
     return FULL_SHA.test(sha ?? "") ? sha : undefined
   }
@@ -97,7 +119,7 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     }
 
     await this.git(["cat-file", "-e", `${plan.rootBaseSha}^{commit}`])
-    const blob = await runProcess("git", ["hash-object", "-w", "--stdin"], {
+    const blob = await runProcess(this.gitCli, ["hash-object", "-w", "--stdin"], {
       cwd: this.repoRoot,
       input: canonical,
       timeoutMs: 120_000,
@@ -105,7 +127,7 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     if (!blob.ok) throw commandFailure(blob)
     const blobSha = blob.stdout.trim()
     if (!FULL_SHA.test(blobSha)) throw new Error("git hash-object returned an invalid plan blob SHA")
-    const tree = await runProcess("git", ["mktree"], {
+    const tree = await runProcess(this.gitCli, ["mktree"], {
       cwd: this.repoRoot,
       input: `100644 blob ${blobSha}\tplan.json\n`,
       timeoutMs: 120_000,
@@ -148,7 +170,7 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     let current = parents.length === 0 ? plan.rootBaseSha : parents[0].headSha!
     await this.git(["cat-file", "-e", `${current}^{commit}`])
     for (const parent of parents.slice(1)) {
-      const merged = await runProcess("git", ["merge-tree", "--write-tree", current, parent.headSha!], {
+      const merged = await runProcess(this.gitCli, ["merge-tree", "--write-tree", current, parent.headSha!], {
         cwd: this.repoRoot,
         timeoutMs: 120_000,
       })
@@ -187,9 +209,9 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
   ): Promise<boolean> {
     const fetchedHead = await this.fetchRemoteBranch(branch)
     if (fetchedHead !== headSha) return false
-    const ancestor = await runProcess("git", ["merge-base", "--is-ancestor", expectedBaseSha, headSha], { cwd: this.repoRoot })
+    const ancestor = await runProcess(this.gitCli, ["merge-base", "--is-ancestor", expectedBaseSha, headSha], { cwd: this.repoRoot })
     if (!ancestor.ok) return false
-    const result = await runProcess("git", ["show", "-s", "--format=%B", headSha], { cwd: this.repoRoot })
+    const result = await runProcess(this.gitCli, ["show", "-s", "--format=%B", headSha], { cwd: this.repoRoot })
     if (!result.ok) return false
     const trailers = new Set(result.stdout.split(/\r?\n/).map((line) => line.trim()))
     if (!trailers.has(`Spec-Run: ${plan.runId}`) ||
@@ -197,7 +219,7 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
         !trailers.has(`Spec-Fingerprint: ${plan.fingerprint}`)) return false
     const task = plan.tasks.find((candidate) => candidate.id === taskId)
     if (!task) return false
-    const changed = await runProcess("git", ["diff", "--name-only", "-z", expectedBaseSha, headSha], { cwd: this.repoRoot })
+    const changed = await runProcess(this.gitCli, ["diff", "--name-only", "-z", expectedBaseSha, headSha], { cwd: this.repoRoot })
     if (!changed.ok || changed.stdoutTruncated) return false
     return changed.stdout.split("\0").filter(Boolean).every((file) => task.scope.includes(file))
   }
@@ -231,9 +253,16 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     const changedPaths = await this.changedPaths(workspace)
     if (changedPaths.length === 0 && !options.allowEmpty) throw new Error(`task "${task.id}" produced no repository changes`)
     const violations = changedPaths.filter((file) => !task.scope.includes(file))
-    if (violations.length > 0) throw new Error(`task "${task.id}" modified files outside its exact scope: ${violations.join(", ")}`)
+    if (violations.length > 0) {
+      const shown = violations.slice(0, 20)
+      const remainder = violations.length - shown.length
+      throw new Error(
+        `task "${task.id}" modified ${violations.length} file(s) outside its exact scope: ${shown.join(", ")}` +
+        (remainder > 0 ? `, … and ${remainder} more` : ""),
+      )
+    }
     if (task.scope.length > 0) await this.git(["add", "--all", "--", ...task.scope], workspace)
-    const whitespace = await runProcess("git", ["diff", "--cached", "--check"], { cwd: workspace, timeoutMs: 120_000 })
+    const whitespace = await runProcess(this.gitCli, ["diff", "--cached", "--check"], { cwd: workspace, timeoutMs: 120_000 })
     if (!whitespace.ok) throw commandFailure(whitespace)
     const dependencyTrailers = Object.entries(task.dependencyHeadShas)
       .sort(([left], [right]) => left.localeCompare(right))
@@ -258,7 +287,7 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     const headSha = (await this.git(["rev-parse", "HEAD"], workspace)).stdout.trim()
     const remote = await this.remoteHead(task.branch)
     if (remote && remote !== headSha) {
-      const ancestor = await runProcess("git", ["merge-base", "--is-ancestor", remote, headSha], { cwd: workspace })
+      const ancestor = await runProcess(this.gitCli, ["merge-base", "--is-ancestor", remote, headSha], { cwd: workspace })
       if (!ancestor.ok) throw new Error(`remote task branch "${task.branch}" diverged at ${remote}; refusing to overwrite it`)
     }
     if (remote !== headSha) await this.git(["push", this.remote, `HEAD:refs/heads/${task.branch}`], workspace)
@@ -270,7 +299,7 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     const root = this.worktreeRoot.endsWith(path.sep) ? this.worktreeRoot : `${this.worktreeRoot}${path.sep}`
     if (!target.startsWith(root)) throw new Error(`refusing to remove worktree outside ${this.worktreeRoot}: ${target}`)
     if (!fs.existsSync(target)) return
-    const result = await runProcess("git", ["worktree", "remove", "--force", target], {
+    const result = await runProcess(this.gitCli, ["worktree", "remove", "--force", target], {
       cwd: this.repoRoot,
       timeoutMs: 120_000,
     })

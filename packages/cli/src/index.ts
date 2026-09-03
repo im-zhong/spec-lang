@@ -36,6 +36,7 @@ interface CliArgs {
   dryRun: boolean
   shots: number
   model: string | undefined
+  effort: "low" | "medium" | "high" | "xhigh" | "max" | undefined
   maxTurns: number | undefined
   runId: string | undefined
   image: string | undefined
@@ -64,7 +65,8 @@ function parseArgs(argv: string[]): CliArgs {
     image: undefined,
     repository: undefined,
     targetDir: undefined,
-    concurrency: 4,
+    concurrency: 2,
+    effort: undefined,
     requiredCheck: "spec-generation",
     resume: false,
   }
@@ -75,6 +77,7 @@ function parseArgs(argv: string[]): CliArgs {
     else if (arg === "--help" || arg === "-h") args.help = true
     else if (arg === "--dry-run") args.dryRun = true
     else if (arg === "--model") args.model = argv[++i]
+    else if (arg === "--effort") args.effort = argv[++i] as CliArgs["effort"]
     else if (arg === "--shots") args.shots = Number(argv[++i])
     else if (arg === "--max-turns") args.maxTurns = Number(argv[++i])
     else if (arg === "--run-id") args.runId = argv[++i]
@@ -109,13 +112,14 @@ Usage:
 Options:
   --dry-run                 Plan only: write blueprint + DAG, no agent
   --shots <n>               Independent generations per spec (default 3)
-  --model <id>              Override Claude Code's configured/default model
-  --max-turns <n>           Override Claude Code's configured/default turn budget
+  --model <id>              Pinned coding-agent model (required to execute)
+  --effort <level>          Pinned low|medium|high|xhigh|max (required to execute)
+  --max-turns <n>           Pinned agent turn budget (required to execute)
   --run-id <id>             Stable GitHub generation run id (required to execute)
   --image <repo@sha256:...> Digest-pinned generator container (required to execute)
   --target-dir <dir>        Repository-relative generated product directory
   --repository <owner/base> Temporary per-shot repository name prefix
-  --concurrency <n>         Maximum parallel generator nodes (default 4)
+  --concurrency <n>         Maximum parallel generator nodes (default 2)
   --check <name>            Required GitHub check (default spec-generation)
   --resume                  Resume the same immutable run from GitHub refs
   --debug                   Show internal stack traces
@@ -125,8 +129,9 @@ There is deliberately no repair option: a nonconformant shot is a
 specification defect. Pin the behavior in the spec/blueprint, then
 regenerate all shots.
 
-Headless sessions authorize only the audited generation file/Python tools;
-model selection and turn budget remain Claude Code defaults unless overridden.
+Headless sessions run in safe mode, authorize only the audited generation
+file/Python tools, and require model, effort, and turn budget to be frozen in
+the immutable plan.
 `
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -147,9 +152,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const projectRoot = process.cwd()
   try {
     if ((args.command === "generate" || args.command === "generate-frontend") && !args.dryRun) {
-      if (!args.runId || !args.image) {
-        throw new Error("GitHub generation requires --run-id and a digest-pinned --image; use --dry-run to plan without executing")
+      if (!args.runId || !args.image || !args.model || !args.effort || args.maxTurns === undefined) {
+        throw new Error("GitHub generation requires --run-id, --image, --model, --effort, and --max-turns; use --dry-run to plan without executing")
       }
+      if (!["low", "medium", "high", "xhigh", "max"].includes(args.effort)) throw new Error("--effort must be low, medium, high, xhigh, or max")
+      if (!Number.isInteger(args.maxTurns) || args.maxTurns < 1) throw new Error("--max-turns must be a positive integer")
       if (!Number.isInteger(args.shots) || args.shots < 1) throw new Error("--shots must be a positive integer")
       if (!Number.isInteger(args.concurrency) || args.concurrency < 1) throw new Error("--concurrency must be a positive integer")
       if (!args.requiredCheck.trim()) throw new Error("--check must be non-empty")
@@ -253,7 +260,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         repoRoot: projectRoot, runId: args.runId!, image: args.image!, repository: args.repository,
         targetDirectory: args.targetDir, appName: plan.blueprint.app.name, target: "frontend",
         shots: args.shots, concurrency: args.concurrency, requiredCheck: args.requiredCheck,
-        resume: args.resume, model: args.model, maxTurns: args.maxTurns, shotSpec, ir: result.ir,
+        resume: args.resume, model: args.model!, effort: args.effort!, maxTurns: args.maxTurns!, shotSpec, ir: result.ir,
       })
       return ok ? 0 : 1
     }
@@ -324,7 +331,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       repoRoot: projectRoot, runId: args.runId!, image: args.image!, repository: args.repository,
       targetDirectory: args.targetDir, appName: plan.blueprint.app.name, target: "backend",
       shots: args.shots, concurrency: args.concurrency, requiredCheck: args.requiredCheck,
-      resume: args.resume, model: args.model, maxTurns: args.maxTurns, shotSpec, ir: result.ir,
+      resume: args.resume, model: args.model!, effort: args.effort!, maxTurns: args.maxTurns!, shotSpec, ir: result.ir,
     })
     return ok ? 0 : 1
   } catch (err) {

@@ -47,6 +47,16 @@ export function validateAgentExecutionPlan(plan: AgentExecutionPlan): Diagnostic
   if (!CONTENT_HASH.test(plan.environment.devcontainerHash) || !CONTENT_HASH.test(plan.environment.toolchainLockHash)) {
     diagnostics.push(diagnostic("AGENT_EXECUTION_ENVIRONMENT_HASH_INVALID", "Environment definition and toolchain lock hashes must be sha256 digests."))
   }
+  const agent = plan.environment.agent
+  if (!agent || typeof agent.model !== "string" || agent.model.trim().length === 0 ||
+      !["low", "medium", "high", "xhigh", "max"].includes(agent.effort) ||
+      !Number.isInteger(agent.maxTurns) || agent.maxTurns < 1 ||
+      !Number.isInteger(agent.maxConcurrency) || agent.maxConcurrency < 1) {
+    diagnostics.push(diagnostic(
+      "AGENT_EXECUTION_AGENT_ENVIRONMENT_INVALID",
+      "Agent model, effort, maxTurns, and maxConcurrency must be explicitly pinned.",
+    ))
+  }
   if (agentExecutionPlanFingerprint(plan) !== plan.fingerprint) diagnostics.push(diagnostic("AGENT_EXECUTION_FINGERPRINT_MISMATCH", "Agent execution plan fingerprint does not match its canonical definition."))
   validateAcceptance(plan.acceptance, "plan", diagnostics)
 

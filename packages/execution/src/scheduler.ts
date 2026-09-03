@@ -22,6 +22,8 @@ export interface AgentExecutionScheduleFailure {
 
 export interface AgentExecutionScheduleOptions<Result extends ScheduledTaskResult> {
   concurrency?: number
+  /** Stop launching new work after the first unsuccessful task result. */
+  failFast?: boolean
   onTaskStart?: (task: AgentExecutionTask) => void
   onTaskEnd?: (result: Result) => void
 }
@@ -140,6 +142,7 @@ export async function runAgentExecutionSchedule<Result extends ScheduledTaskResu
       failures.push(failure(completed.id, "onTaskEnd", error))
       stopScheduling()
     }
+    if (options.failFast && !completed.result.ok) stopScheduling()
   }
 
   const orderedResults = tasks

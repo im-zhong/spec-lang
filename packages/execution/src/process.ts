@@ -97,7 +97,11 @@ export function runProcess(
 }
 
 export function commandFailure(result: ProcessResult): Error {
+  const details = [
+    result.stderr ? `stderr:\n${result.stderr}` : "",
+    result.stdout ? `stdout:\n${result.stdout}` : "",
+  ].filter(Boolean).join("\n")
   return new Error(
-    `${result.command} ${result.args.join(" ")} failed (${String(result.exitCode)}): ${(result.stderr || result.stdout).slice(-4000)}`,
+    `${result.command} ${result.args.join(" ")} failed (${String(result.exitCode)}): ${details.slice(-4000)}`,
   )
 }

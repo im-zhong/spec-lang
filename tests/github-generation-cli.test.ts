@@ -4,6 +4,7 @@ import {
   TEMPORARY_REPOSITORY_WORKFLOW,
   temporaryShotLocalRoot,
   temporaryShotRepositoryName,
+  temporaryShotRepositorySshUrl,
 } from "../packages/cli/src/generate-github"
 
 describe("GitHub generator per-shot repository topology", () => {
@@ -18,6 +19,13 @@ describe("GitHub generator per-shot repository topology", () => {
     expect(firstRemote).not.toBe(secondRemote)
     expect(firstLocal).not.toBe(secondLocal)
     expect(path.dirname(firstLocal)).toBe(path.dirname(secondLocal))
+  })
+
+  it("uses GitHub SSH-over-443 for every shot remote", () => {
+    expect(temporaryShotRepositorySshUrl("owner/media-golden-run-7-shot-1"))
+      .toBe("ssh://git@ssh.github.com:443/owner/media-golden-run-7-shot-1.git")
+    expect(() => temporaryShotRepositorySshUrl("https://github.com/owner/repo"))
+      .toThrow("GitHub-safe owner/name")
   })
 
   it("bootstraps a required check from the immutable plan and pinned image", () => {

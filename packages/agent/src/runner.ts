@@ -16,6 +16,7 @@ export interface AgentRunnerOptions {
   /** Claude CLI binary; default "claude". */
   cli?: string
   model?: string
+  effort?: "low" | "medium" | "high" | "xhigh" | "max"
   maxTurns?: number
   permissionMode?: string
   /** Tool allowlist for headless runs. */
@@ -71,10 +72,13 @@ export function buildClaudeArgs(options: AgentRunnerOptions = {}): string[] {
     "-p",
     "--output-format",
     "json",
+    "--safe-mode",
+    "--no-session-persistence",
     "--permission-mode",
     permissionMode,
   ]
   if (options.model) args.push("--model", options.model)
+  if (options.effort) args.push("--effort", options.effort)
   if (options.maxTurns !== undefined) args.push("--max-turns", String(options.maxTurns))
   if (allowedTools.length > 0) args.push("--allowedTools", ...allowedTools)
   return args

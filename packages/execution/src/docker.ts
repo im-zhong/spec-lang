@@ -19,7 +19,8 @@ export interface DockerAgentExecutorOptions {
 }
 
 const DEFAULT_AGENT_COMMAND = [
-  "claude", "-p", "--output-format", "json", "--permission-mode", "acceptEdits",
+  "claude", "-p", "--output-format", "json", "--safe-mode", "--no-session-persistence",
+  "--permission-mode", "acceptEdits",
   "--allowedTools",
   "Read", "Glob", "Grep", "LS", "Edit", "Write",
   "Bash(uv:*)", "Bash(python:*)", "Bash(python3:*)", "Bash(.venv/bin/python:*)",

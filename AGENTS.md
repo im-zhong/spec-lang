@@ -60,6 +60,40 @@ no reuse). Record the gap in `docs/golden-rule-results.md`.
    checkouts on unique ports and compare rendered layout, behavior, and
    navigation by eye + DOM.
 
+### Checkpoint recovery is not a golden-rule reroll
+
+Classify failures before deciding whether to abandon a run:
+
+- Git/GitHub transport errors, timeouts, lost CLI responses, unavailable
+  checks, crashed containers, and missing disposable worktrees are
+  **control-plane interruptions**, not conformance judgments and not evidence
+  that the generated application is wrong.
+- A control-plane interruption MUST keep the same run id and immutable plan.
+  Fix the generic infrastructure defect when necessary, then repeat the exact
+  command with `--resume`. Resume reuses every remote task head whose plan
+  fingerprint, dependency ancestry, exact scope, PR head SHA, and required
+  checks validate; it restarts only the first missing/incomplete checkpoint and
+  its descendants.
+- Do not create fresh shot repositories or rerun already-checked nodes merely
+  because local execution stopped. GitHub checkpoints exist specifically to
+  prevent that loss of work.
+- Do not cancel a healthy sibling shot merely because another shot encounters
+  a recoverable control-plane interruption. Let independently valid work reach
+  durable checkpoints unless continuing would threaten evidence integrity or
+  exhaust a declared safety limit.
+- Resume may never change the frozen Spec IR, plan semantics, prompts, oracle,
+  image digest, model, effort, turn budget, or concurrency. It may never patch
+  generated code in response to conformance.
+- Only an actual first conformance failure, a completed cross-shot evidence
+  divergence, or a proven contract/correctness defect triggers the golden-rule
+  response: fix the contract and regenerate **all** shots in fresh repositories
+  under a new run id.
+
+Reports and operator updates must say explicitly whether a run is
+`checkpoint-resumable` or `golden-rule-invalid`; the word “failed” alone is
+insufficient because it conflates infrastructure availability with software
+correctness.
+
 ## Isolation discipline
 
 Shot workspaces are independent target repositories and local checkout roots;

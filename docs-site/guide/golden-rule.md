@@ -16,13 +16,14 @@ agent "decides" is a behavior the specification failed to pin.
    per-task prompts and the conformance suite are pure functions of the
    Spec IR. Same spec in, byte-identical plan out (verified by tests).
 2. **A compiler-owned runtime conformance suite** — a pytest suite derived
-   from the blueprint is dropped into every generated workspace. It starts
+   from the blueprint is materialized in every shot repository. It starts
    the generated FastAPI application with `TestClient` and a fresh SQLite
    database, sends real HTTP requests, and asserts exact route sets, status
    codes, response bodies, auth, CRUD state changes, list ordering, defaults,
    references, lifecycle transitions, guards, effects and invariants.
 3. **N independent shots, first-attempt conformance** — each generation
-   is a fresh workspace executing the full generation DAG. Every shot
+   has a distinct private GitHub repository and local root executing the full
+   generation DAG. Every shot
    must pass the *same* suite **on its first and only verification
    attempt**.
 4. **Interface equality** — every shot's normalized OpenAPI document
@@ -30,6 +31,10 @@ agent "decides" is a behavior the specification failed to pin.
 5. **Behavior snapshot equality** — every shot executes the same
    compiler-owned cache, messaging and blob probe and must emit identical
    canonical JSON.
+
+Task commits, PRs, and checks are durable GitHub evidence; intermediate task
+PRs do not need to merge into `main`. See [Git and GitHub
+execution](/reference/github-execution) for the full protocol.
 
 ## What “behaviorally identical” means today
 

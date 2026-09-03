@@ -4,12 +4,14 @@ import TaskPrompts from "../.vitepress/theme/components/TaskPrompts.vue"
 
 # Source-code walkthrough: Booking, end to end
 
-This page traces `examples/booking/app.spec.ts` through the current
-implementation, from TypeScript source to two independently generated and
-verified FastAPI applications. It follows the actual call graph and uses
-artifacts captured from the 2026-09-01 repeatability run.
+This page preserves a trace of `examples/booking/app.spec.ts` through the
+**legacy local repeatability harness** used for the 2026-09-01 measured run.
+It is historical evidence, not the current execution workflow. Current real
+generation uses one temporary GitHub repository per shot, durable task
+branches/PRs/checks, and immutable integration bases; see [Git and GitHub
+execution](/reference/github-execution).
 
-The reference run used Claude Code with `deepseek-v4-flash[1m]` selected by
+The historical reference run used Claude Code with `deepseek-v4-flash[1m]` selected by
 Claude Code's own configuration. Two Booking shots ran in parallel. Each shot
 executed ten sequential DAG tasks and received one final conformance attempt,
 with no repair.
@@ -17,6 +19,7 @@ with no repair.
 ```bash
 pnpm spec check examples/booking/app.spec.ts
 pnpm spec generate examples/booking/app.spec.ts --dry-run
+# Historical command; current execution also requires run/image/agent pins.
 pnpm spec generate examples/booking/app.spec.ts --shots 2
 ```
 

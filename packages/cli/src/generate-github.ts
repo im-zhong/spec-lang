@@ -23,8 +23,9 @@ export interface GitHubGenerateOptions {
   concurrency: number
   requiredCheck: string
   resume: boolean
-  model?: string
-  maxTurns?: number
+  model: string
+  effort: "low" | "medium" | "high" | "xhigh" | "max"
+  maxTurns: number
   shotSpec: ShotSpec
   ir: SpecIR
 }
@@ -60,13 +61,34 @@ function gitFileHash(root: string, sha: string, file: string): string {
 
 function repositoryFromOrigin(root: string): string {
   const remote = git(root, ["config", "--get", "remote.origin.url"])
-  const match = remote.replace(/\/+$/, "").match(/github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?$/i)
+  const normalized = remote.replace(/\/+$/, "")
+  const match = normalized.match(/^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/i)
+    ?? normalized.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/i)
+    ?? normalized.match(/^ssh:\/\/git@ssh\.github\.com:443\/([^/]+\/[^/]+?)(?:\.git)?$/i)
   if (!match?.[1]) throw new Error(`cannot infer GitHub owner/name from origin: ${remote}`)
   return match[1]
 }
 
 function normalizedRepository(value: string): string {
   return value.trim().replace(/\.git$/i, "").replace(/^\/+|\/+$/g, "").toLowerCase()
+}
+
+/**
+ * Use GitHub's SSH endpoint on port 443 so execution keeps SSH-key write
+ * permissions (including workflow publication) without depending on port 22.
+ */
+export function temporaryShotRepositorySshUrl(repository: string): string {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("temporary repository must use a GitHub-safe owner/name")
+  }
+  return `ssh://git@ssh.github.com:443/${repository}.git`
+}
+
+const GITHUB_SSH_COMMAND = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+
+function configureGitHubSshRemote(localRoot: string, repository: string): void {
+  git(localRoot, ["remote", "set-url", "origin", temporaryShotRepositorySshUrl(repository)])
+  git(localRoot, ["config", "--local", "core.sshCommand", GITHUB_SSH_COMMAND])
 }
 
 function repositoryExists(root: string, repository: string): boolean {
@@ -219,9 +241,14 @@ export function prepareTemporaryShotRepository(input: {
       throw new Error(`temporary checkout path is non-empty and not a Git repository: ${localRoot}`)
     }
     fs.mkdirSync(path.dirname(localRoot), { recursive: true })
-    gh(sourceRoot, ["repo", "clone", repository, localRoot])
+    execFileSync("git", ["clone", "--origin", "origin", temporaryShotRepositorySshUrl(repository), localRoot], {
+      cwd: sourceRoot,
+      env: { ...process.env, GIT_SSH_COMMAND: GITHUB_SSH_COMMAND },
+      stdio: ["ignore", "pipe", "pipe"],
+    })
   }
   assertLocalRepository(localRoot, repository)
+  configureGitHubSshRemote(localRoot, repository)
 
   const defaultBranch = gh(sourceRoot, ["repo", "view", repository, "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"])
   if (!defaultBranch) throw new Error(`temporary repository ${repository} has no default branch`)
@@ -261,7 +288,11 @@ function hashFiles(root: string, files: string[]): string {
   return hash.digest("hex")
 }
 
-function environment(root: string, image: string): AgentExecutionEnvironment {
+function environment(
+  root: string,
+  image: string,
+  agent: AgentExecutionEnvironment["agent"],
+): AgentExecutionEnvironment {
   return {
     image,
     devcontainerHash: hashFiles(root, [
@@ -271,6 +302,7 @@ function environment(root: string, image: string): AgentExecutionEnvironment {
       ".devcontainer/package-lock.json",
     ]),
     toolchainLockHash: hashFiles(root, ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]),
+    agent,
   }
 }
 
@@ -344,7 +376,12 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
       rootBaseSha: repository.headSha,
       defaultBranch: repository.defaultBranch,
       targetDirectory: target,
-      environment: environment(options.repoRoot, options.image),
+      environment: environment(options.repoRoot, options.image, {
+        model: options.model,
+        effort: options.effort,
+        maxTurns: options.maxTurns,
+        maxConcurrency: perShotConcurrency,
+      }),
       requiredChecks: [options.requiredCheck],
       finalMaterializations,
     })
@@ -359,6 +396,7 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
       concurrency: perShotConcurrency,
       resume: options.resume,
       model: options.model,
+      effort: options.effort,
       maxTurns: options.maxTurns,
       onTaskStart: (taskId) => process.stdout.write(`  ⟳ ${shot}/${taskId}\n`),
       onTaskEnd: (taskId, ok, sha) => process.stdout.write(`  ${ok ? "✓" : "✗"} ${shot}/${taskId}${sha ? ` ${sha.slice(0, 12)}` : ""}\n`),
