@@ -92,11 +92,27 @@ function configureGitHubSshRemote(localRoot: string, repository: string): void {
 }
 
 function repositoryExists(root: string, repository: string): boolean {
-  try {
-    gh(root, ["repo", "view", repository, "--json", "nameWithOwner"], "ignore")
-    return true
-  } catch {
-    return false
+  // A failed `gh repo view` is ambiguous: only GitHub's not-found response
+  // may be read as absence. Transport failures are retried with backoff and
+  // then thrown, so a flaky connection can never misclassify an existing
+  // temporary repository as missing.
+  for (let attempt = 1; ; attempt++) {
+    let stderr = ""
+    try {
+      execFileSync("gh", ["repo", "view", repository, "--json", "nameWithOwner"], {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "ignore", "pipe"],
+      })
+      return true
+    } catch (error) {
+      stderr = String((error as { stderr?: string }).stderr ?? (error instanceof Error ? error.message : error))
+      if (/HTTP 404|Could not resolve to a Repository|does not exist/i.test(stderr)) return false
+      if (attempt >= 3) {
+        throw new Error(`cannot verify repository ${repository}: ${stderr.trim()}`)
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000 * attempt)
+    }
   }
 }
 
