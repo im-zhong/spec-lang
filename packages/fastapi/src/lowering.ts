@@ -48,7 +48,7 @@ export function planGeneration(ir: SpecIR): FastApiGenerationPlan {
     const alias = `router_${suffix.replace(/[^a-z0-9_]/g, "_")}`
     return { line: `from app.routers.${suffix} import router as ${alias}`, alias }
   })
-  const seedFiles = {
+  const seedFiles: Record<string, string> = {
     "app/router_registry.py": [
       '"""Compiler-owned router registry — DO NOT EDIT."""',
       "",
@@ -57,6 +57,22 @@ export function planGeneration(ir: SpecIR): FastApiGenerationPlan {
       `ROUTERS = (${imports.map((item) => item.alias).join(", ")}${imports.length === 1 ? "," : ""})`,
       "",
     ].join("\n"),
+  }
+  // Every loop's tests role owns exactly one file. Materializing the scaffold
+  // at that exact path mechanically pins the location: the agent edits the
+  // seeded file in place instead of inventing a path, and an empty scaffold
+  // collects no tests, so acceptance stays failing until real tests exist.
+  for (const task of dag.tasks) {
+    const testFile = task.loop?.tests?.scope[0]
+    if (!testFile) continue
+    seedFiles[testFile] = [
+      '"""Compiler-owned test scaffold for this generation node.',
+      "",
+      "Replace this body with real executable tests. An empty scaffold collects",
+      "no tests, so the node's acceptance command keeps failing until real tests",
+      'exist. Do not rename or move this file."""',
+      "",
+    ].join("\n")
   }
 
   const constraints: Constraint[] = [

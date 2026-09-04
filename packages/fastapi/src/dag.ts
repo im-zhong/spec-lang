@@ -259,6 +259,8 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
         instruction: `You are the unit-test author for generation node ${JSON.stringify(task.id)}.
 You and the implementation agent receive the same frozen specification progress. Read the dependency files and the complete node contract below, then create focused executable pytest tests in ${testFile}. Test declared behavior, exact public ABI, forbidden extras, and relevant failure cases. Do not weaken, delete, or rewrite tests to accommodate an implementation. Do not edit source files.
 
+Your working directory already mirrors the node's task workspace. A compiler-owned scaffold for your file already exists at exactly ${testFile} relative to your current directory — edit that file in place and never create tests anywhere else; that exact path is your only owned file. The "Your scope" list inside the contract below belongs to the implementation agent and is NOT your scope.
+
 Frozen implementation contract:
 ${task.prompt}`,
       },

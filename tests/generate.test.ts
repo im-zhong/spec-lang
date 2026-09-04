@@ -58,6 +58,42 @@ describe("spec generate (dry-run planning)", () => {
     expect(reportingTasks.every((task) => task.dependsOn.every((id) => id.startsWith("reporting:")))).toBe(true)
   })
 
+  it("seeds interface create setups with declared enum states", async () => {
+    const compiled = await compile("examples/store-platform/app.spec.ts", { projectRoot })
+    expect(compiled.ok).toBe(true)
+
+    const composite = planCompositeGeneration(compiled.ir)
+    const oracle = composite.shot.conformanceFiles[".spec-interfaces/test_contracts.py"]
+    // A create setup must satisfy the provider's own validation, so an enum
+    // field is seeded with one of its declared states, never a placeholder.
+    const literal = oracle.match(/^CASES = json\.loads\((".*")\)$/m)?.[1]
+    expect(literal).toBeDefined()
+    const cases = JSON.parse(JSON.parse(literal!)) as Array<{
+      consumer: string
+      provider: string
+      operation: string
+      setup?: { body: Record<string, unknown> }
+    }>
+    expect(cases.map((item) => [item.consumer, item.provider, item.operation])).toEqual([
+      ["reporting", "orders", "listOrders"],
+      ["orders", "warehouse", "listItems"],
+      ["reporting", "warehouse", "listItems"],
+    ])
+    const orderSeed = cases[0].setup?.body
+    expect(orderSeed).toMatchObject({ quantity: 7, reference: "interface-reference", status: "placed" })
+    expect(orderSeed?.status).not.toMatch(/^interface-/)
+    // Every loop's tests role owns one exact path; the compiler materializes
+    // its scaffold there so agents can never invent a different location.
+    const scaffolds = Object.keys(composite.shot.seedFiles ?? {}).filter((file) => file.includes("spec_tasks"))
+    expect(scaffolds).toHaveLength(18)
+    expect(scaffolds.filter((file) => file.endsWith("/test_project.py")).sort()).toEqual([
+      "orders/tests/spec_tasks/test_project.py",
+      "reporting/tests/spec_tasks/test_project.py",
+      "warehouse/tests/spec_tasks/test_project.py",
+    ])
+    expect(composite.shot.seedFiles?.["orders/tests/spec_tasks/test_project.py"]).toContain("Compiler-owned test scaffold")
+  })
+
   it("lowers interface-bound backend and frontend modules as parallel isolated roots", async () => {
     const exampleDir = path.join(projectRoot, "examples", "interface-workspace")
     const result = runCli(["generate", "app.spec.ts", "--dry-run"], exampleDir)

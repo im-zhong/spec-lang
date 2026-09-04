@@ -84,7 +84,7 @@ Do not reinterpret the blueprint. Do not add CSS, components, content, state, ro
         },
         tests: {
           scope: ["tests/frontend.contract.test.mjs"],
-          instruction: `You are the unit-test author for the frozen React integration-shell contract below. Create tests/frontend.contract.test.mjs using only node:test and node:assert. Inspect the generated files as text/JSON and verify every declared import, mount, package pin, and forbidden extra. Do not edit implementation or compiler-owned files.\n\n${prompt}`,
+          instruction: `You are the unit-test author for the frozen React integration-shell contract below. Create tests/frontend.contract.test.mjs relative to your current directory, creating any missing parent directories; that exact path is your only owned file, and the "scope" list inside the contract belongs to the implementation agent, not to you. Use only node:test and node:assert. Inspect the generated files as text/JSON and verify every declared import, mount, package pin, and forbidden extra. Do not edit implementation or compiler-owned files.\n\n${prompt}`,
         },
         reviewer: {
           instruction: "Review the React shell and its tests against the frozen blueprint. Run the declared test command, inspect for missing constraints or implementation-shaped tests, and return actionable feedback without editing files.",

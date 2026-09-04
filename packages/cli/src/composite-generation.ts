@@ -251,13 +251,36 @@ function pythonInterfaceClient(
   ].join("\n")
 }
 
-function sampleForType(type: string, field: string): unknown {
+interface EntityFieldSample {
+  default?: unknown
+  states?: string[]
+}
+
+function sampleForType(type: string, field: string, declared?: EntityFieldSample): unknown {
   if (type === "int") return 7
   if (type === "boolean") return true
   if (type === "uuid" || type === "ref") return "00000000-0000-4000-8000-000000000001"
   if (type === "email") return "interface@example.com"
   if (type === "datetime") return "2026-01-01T12:00:00"
+  if (type === "enum") {
+    // The seeded create must satisfy the provider's own validation, so an
+    // enum field needs one of its declared states — never a placeholder.
+    if (declared?.default !== undefined) return declared.default
+    if (declared?.states?.length) return declared.states[0]
+    throw new Error(`cannot seed interface setup: enum field "${field}" declares no states`)
+  }
   return `interface-${field}`
+}
+
+function entityFieldSamples(ir: SpecIR): Map<string, Record<string, EntityFieldSample>> {
+  return new Map(
+    ir.nodes
+      .filter((node) => node.kind === "entity")
+      .map((node) => {
+        const fields = (node.attributes.fields ?? {}) as Record<string, EntityFieldSample>
+        return [String(node.name), fields]
+      }),
+  )
 }
 
 interface CrossInterfaceCase {
@@ -277,6 +300,7 @@ function crossInterfaceCases(
 ): CrossInterfaceCase[] {
   const definitions = new Map(ir.interfaces.definitions.map((item) => [item.id, item]))
   const modules = new Map(ir.modules.map((item) => [item.id, item]))
+  const entities = entityFieldSamples(ir)
   const cases: CrossInterfaceCase[] = []
   for (const dependency of ir.interfaces.dependencies) {
     const provider = modules.get(dependency.providerModuleId)
@@ -297,10 +321,13 @@ function crossInterfaceCases(
       if (route?.response.kind === "entityArray" && route.entity) {
         const create = blueprint.routes.find((item) => item.operation === "create" && item.entity === route.entity)
         if (create?.request) {
+          const entityFields = entities.get(String(route.entity)) ?? {}
           setup = {
             method: create.method,
             path: create.path,
-            body: Object.fromEntries(Object.entries(create.request.shape).map(([field, type]) => [field, sampleForType(type, field)])),
+            body: Object.fromEntries(
+              Object.entries(create.request.shape).map(([field, type]) => [field, sampleForType(type, field, entityFields[field])]),
+            ),
           }
         }
       }
