@@ -222,12 +222,16 @@ export async function runGitHubGeneration(
   if (fs.existsSync(claudeConfig)) mounts.push({ source: claudeConfig, target: "/opt/spec-host-claude.json", readOnly: true })
   const environmentVariables = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
     .filter((name) => process.env[name] !== undefined)
+  // The copy must be re-runnable: a retried or repeated exec merges into an
+  // already-populated tree, where `cp -R src/. dst/` fails on existing
+  // read-only or conflicting entries. A tar extraction is idempotent, and
+  // excluding plugin caches and session transcripts keeps the per-container
+  // boot copy at a few megabytes instead of hundreds.
   const bootstrap = [
     "set -eu",
     "mkdir -p /home/node/.claude",
-    "if [ -d /opt/spec-host-claude ]; then cp -R /opt/spec-host-claude/. /home/node/.claude/; fi",
+    "if [ -d /opt/spec-host-claude ]; then tar -C /opt/spec-host-claude -cf - --exclude=./plugins --exclude=./projects . | tar -C /home/node/.claude -xpf - --skip-old-files; fi",
     "if [ -f /opt/spec-host-claude.json ]; then cp /opt/spec-host-claude.json /home/node/.claude.json; fi",
-    'exec claude "$@"',
   ].join("; ")
   if ((options.concurrency ?? 1) !== plan.environment.agent.maxConcurrency) {
     throw new Error("runtime concurrency does not match the immutable agent environment")
@@ -238,11 +242,11 @@ export async function runGitHubGeneration(
     throw new Error("runtime agent settings do not match the immutable agent environment")
   }
   const agentCommand = [
-    "/bin/sh", "-lc", bootstrap, "spec-agent",
+    "claude",
     ...buildClaudeArgs({ model: options.model, effort: options.effort, maxTurns: options.maxTurns }),
   ]
   const reviewerCommand = [
-    "/bin/sh", "-lc", bootstrap, "spec-reviewer",
+    "claude",
     ...buildClaudeArgs({
       model: options.model,
       effort: options.effort,
@@ -261,6 +265,8 @@ export async function runGitHubGeneration(
     containers: new DockerAgentExecutor({
       mounts,
       environmentVariables,
+      literalEnvironment: { PYTHONDONTWRITEBYTECODE: "1" },
+      initializationCommand: ["/bin/sh", "-lc", bootstrap],
       agentCommand,
       reviewerAgentCommand: reviewerCommand,
     }),

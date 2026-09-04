@@ -88,6 +88,72 @@ describe("Docker agent executor", () => {
     }
   })
 
+  it("merges loop writes, ignores interpreter artifacts, and forwards literal environment", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "spec-docker-scope-"))
+    const cli = path.join(root, "docker-fake.mjs")
+    const log = path.join(root, "docker.log")
+    fs.writeFileSync(cli, `#!/usr/bin/env node
+import fs from "node:fs"
+import path from "node:path"
+const args = process.argv.slice(2)
+fs.appendFileSync(process.env.SPEC_DOCKER_LOG, JSON.stringify(args) + "\\n")
+if (args[0] === "inspect") process.exit(1)
+if (args[0] === "exec" && args.includes("--reviewer")) process.stdout.write('{"total_cost_usd":0.1,"approved":true,"feedback":""}\\n')
+else if (args[0] === "exec" && args.includes("claude")) {
+  const index = args.indexOf("-w")
+  const workdir = index >= 0 ? args[index + 1] : ""
+  if (workdir.includes(".spec-loop") && process.env.SPEC_FAKE_WS) {
+    const local = workdir.replace(/^\\/workspace/, process.env.SPEC_FAKE_WS)
+    fs.mkdirSync(path.join(local, "product/__pycache__"), { recursive: true })
+    if (local.endsWith("/implementation")) {
+      fs.writeFileSync(path.join(local, "product/app.ts"), "code\\n")
+      fs.writeFileSync(path.join(local, "product/__pycache__/app.cpython-313.pyc"), "bytecode\\n")
+    } else if (local.endsWith("/tests")) {
+      fs.writeFileSync(path.join(local, "product/app.test.ts"), "tests\\n")
+    }
+  }
+  process.stdout.write('{"total_cost_usd":0.25}\\n')
+}
+`, "utf8")
+    fs.chmodSync(cli, 0o755)
+    const previous = process.env.SPEC_DOCKER_LOG
+    const previousWorkspace = process.env.SPEC_FAKE_WS
+    process.env.SPEC_DOCKER_LOG = log
+    try {
+      const workspace = path.join(root, "workspace")
+      fs.mkdirSync(workspace)
+      process.env.SPEC_FAKE_WS = workspace
+      const loopTask = task()
+      loopTask.workingDirectory = "orders"
+      loopTask.scope = ["orders/product/app.ts", "orders/product/app.test.ts"]
+      loopTask.loop = {
+        schemaVersion: "spec-agent-task-loop/0.1",
+        maxRounds: 2,
+        implementation: { instruction: "write code", scope: ["orders/product/app.ts"] },
+        tests: { instruction: "write tests", scope: ["orders/product/app.test.ts"] },
+        reviewer: { instruction: "review", commands: ["node --test app.test.ts"] },
+      }
+      const result = await new DockerAgentExecutor({
+        dockerCli: cli,
+        agentCommand: ["claude", "--writer"],
+        reviewerAgentCommand: ["claude", "--reviewer"],
+        literalEnvironment: { PYTHONDONTWRITEBYTECODE: "1" },
+      }).execute(loopTask, workspace)
+      expect(result.ok).toBe(true)
+      expect(fs.readFileSync(path.join(workspace, "orders/product/app.ts"), "utf8")).toBe("code\n")
+      expect(fs.readFileSync(path.join(workspace, "orders/product/app.test.ts"), "utf8")).toBe("tests\n")
+      expect(fs.existsSync(path.join(workspace, "orders/product/__pycache__"))).toBe(false)
+      const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[])
+      const create = calls.find((args) => args[0] === "create")!
+      expect(create).toContain("PYTHONDONTWRITEBYTECODE=1")
+    } finally {
+      if (previous === undefined) delete process.env.SPEC_DOCKER_LOG
+      else process.env.SPEC_DOCKER_LOG = previous
+      if (previousWorkspace === undefined) delete process.env.SPEC_FAKE_WS
+      else process.env.SPEC_FAKE_WS = previousWorkspace
+    }
+  })
+
   it("removes a created container when start fails", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "spec-docker-start-"))
     const { cli, log } = fakeDocker(root)
@@ -107,6 +173,50 @@ describe("Docker agent executor", () => {
       else process.env.SPEC_DOCKER_LOG = oldLog
       if (oldFail === undefined) delete process.env.SPEC_FAIL_START
       else process.env.SPEC_FAIL_START = oldFail
+    }
+  })
+
+  it("extracts reviewer verdicts fenced or wrapped in prose inside the result", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "spec-docker-verdict-"))
+    const { cli, log } = fakeDocker(root)
+    // Wrap the reviewer's verdict the way weak models do: prose plus a
+    // markdown fence inside the agent envelope's result string.
+    fs.rmSync(cli)
+    fs.writeFileSync(cli, `#!/usr/bin/env node
+import fs from "node:fs"
+const args = process.argv.slice(2)
+fs.appendFileSync(process.env.SPEC_DOCKER_LOG, JSON.stringify(args) + "\\n")
+if (args[0] === "inspect") process.exit(1)
+if (args[0] === "exec" && args.includes("--reviewer")) {
+  const verdict = { approved: true, feedback: "conforms" }
+  const envelope = { total_cost_usd: 0.1, result: "Final review:\\n\\\`\\\`\\\`json\\n" + JSON.stringify(verdict) + "\\n\\\`\\\`\\\`" }
+  process.stdout.write(JSON.stringify(envelope) + "\\n")
+} else if (args[0] === "exec" && args.includes("claude")) process.stdout.write('{"total_cost_usd":0.25}\\n')
+`, "utf8")
+    fs.chmodSync(cli, 0o755)
+    const previous = process.env.SPEC_DOCKER_LOG
+    process.env.SPEC_DOCKER_LOG = log
+    try {
+      const workspace = path.join(root, "workspace")
+      fs.mkdirSync(workspace)
+      const loopTask = task()
+      loopTask.workingDirectory = "orders"
+      loopTask.loop = {
+        schemaVersion: "spec-agent-task-loop/0.1",
+        maxRounds: 2,
+        implementation: { instruction: "write code", scope: ["orders/product/app.ts"] },
+        tests: { instruction: "write tests", scope: ["orders/product/app.test.ts"] },
+        reviewer: { instruction: "review", commands: ["true"] },
+      }
+      const result = await new DockerAgentExecutor({
+        dockerCli: cli,
+        agentCommand: ["claude", "--writer"],
+        reviewerAgentCommand: ["claude", "--reviewer"],
+      }).execute(loopTask, workspace)
+      expect(result.ok).toBe(true)
+    } finally {
+      if (previous === undefined) delete process.env.SPEC_DOCKER_LOG
+      else process.env.SPEC_DOCKER_LOG = previous
     }
   })
 
@@ -130,12 +240,14 @@ describe("Docker agent executor", () => {
       }
       const result = await new DockerAgentExecutor({
         dockerCli: cli,
+        initializationCommand: ["initialize-credentials"],
         agentCommand: ["claude", "--writer"],
         reviewerAgentCommand: ["claude", "--reviewer"],
       }).execute(loopTask, workspace)
       expect(result.ok).toBe(true)
       expect(result.costUsd).toBe(0.6)
       expect(result.checks.map((check) => check.name)).toEqual([
+        "generation/initialize",
         "generation/loop/1/implementation",
         "generation/loop/1/tests",
         "generation/loop/1/review",
@@ -144,6 +256,7 @@ describe("Docker agent executor", () => {
       const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[])
       const writerIndexes = calls.map((args, index) => args.includes("--writer") ? index : -1).filter((index) => index >= 0)
       const reviewerIndex = calls.findIndex((args) => args.includes("--reviewer"))
+      expect(calls.filter((args) => args.includes("initialize-credentials"))).toHaveLength(1)
       expect(writerIndexes).toHaveLength(2)
       expect(Math.max(...writerIndexes)).toBeLessThan(reviewerIndex)
     } finally {

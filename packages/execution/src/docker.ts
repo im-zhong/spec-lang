@@ -13,10 +13,17 @@ export interface DockerMount {
 
 export interface DockerAgentExecutorOptions {
   dockerCli?: string
+  /** Run once after container start, before any parallel agent processes. */
+  initializationCommand?: string[]
+  /** Wall-clock budget for the initialization exec (default 5 minutes). */
+  initializationTimeoutMs?: number
   agentCommand?: string[]
   /** Read-only Claude command used for the reviewer role. */
   reviewerAgentCommand?: string[]
+  /** Environment variable names forwarded from the invoking process. */
   environmentVariables?: string[]
+  /** Literal environment variables set verbatim in every agent container. */
+  literalEnvironment?: Record<string, string>
   mounts?: DockerMount[]
   timeoutMs?: number
 }
@@ -59,12 +66,59 @@ function agentCost(stdout: string): number {
   return typeof payload?.total_cost_usd === "number" ? payload.total_cost_usd : 0
 }
 
+/**
+ * The verdict is a judge interface, so parsing must be mechanical and
+ * tolerant of model formatting: the JSON object may be wrapped in markdown
+ * fences or surrounded by prose inside the agent's result string.
+ */
+function extractVerdictObject(text: string): Record<string, unknown> | undefined {
+  const candidates: string[] = []
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/g)
+  for (const block of fenced ?? []) candidates.push(block.replace(/```(?:json)?\s*|\s*```/g, ""))
+  candidates.push(text)
+  let start = text.indexOf("{")
+  while (start >= 0) {
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let index = start; index < text.length; index++) {
+      const character = text[index]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (character === "\\") escaped = true
+        else if (character === '"') inString = false
+        continue
+      }
+      if (character === '"') inString = true
+      else if (character === "{") depth++
+      else if (character === "}") {
+        depth--
+        if (depth === 0) {
+          candidates.push(text.slice(start, index + 1))
+          break
+        }
+      }
+    }
+    start = text.indexOf("{", start + 1)
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as Record<string, unknown>
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed
+    } catch {
+      // Try the next candidate form.
+    }
+  }
+  return undefined
+}
+
 function reviewerVerdict(stdout: string): { approved: boolean; feedback: string } | undefined {
   try {
     const envelope = parseAgentEnvelope(stdout)
     if (!envelope) return undefined
-    const candidate = typeof envelope.result === "string" ? JSON.parse(envelope.result) as Record<string, unknown> : envelope
-    if (typeof candidate.approved !== "boolean") return undefined
+    const raw = typeof envelope.result === "string" ? envelope.result : JSON.stringify(envelope)
+    const candidate = extractVerdictObject(raw)
+    if (!candidate || typeof candidate.approved !== "boolean") return undefined
     return {
       approved: candidate.approved,
       feedback: typeof candidate.feedback === "string" ? candidate.feedback : "",
@@ -102,6 +156,15 @@ function changedPaths(before: Map<string, string>, after: Map<string, string>): 
     .sort()
 }
 
+/**
+ * Interpreter and test-runner byproducts (Python bytecode, pytest cache) are
+ * created automatically when probes execute, so they are never evidence of an
+ * agent writing outside its scope. Everything else stays a violation.
+ */
+function isToolArtifact(file: string): boolean {
+  return file.includes("__pycache__/") || file.endsWith(".pyc") || file.includes(".pytest_cache/")
+}
+
 function roleScope(task: ResolvedAgentExecutionTask, files: string[]): string[] {
   const prefix = task.workingDirectory ? `${task.workingDirectory.replace(/\/$/, "")}/` : ""
   return files.map((file) => {
@@ -118,7 +181,7 @@ function mergeRoleChanges(
   role: string,
 ): string | undefined {
   const after = snapshot(roleDirectory)
-  const changes = changedPaths(before, after)
+  const changes = changedPaths(before, after).filter((file) => !isToolArtifact(file))
   const allowed = new Set(allowedFiles)
   const violations = changes.filter((file) => !allowed.has(file))
   if (violations.length > 0) return `${role} agent wrote outside its declared scope: ${violations.join(", ")}`
@@ -160,6 +223,9 @@ export class DockerAgentExecutor implements AgentExecutionContainerPort {
       mountArgs.push("--mount", `type=bind,source=${path.resolve(mount.source)},target=${mount.target}${mount.readOnly ? ",readonly" : ""}`)
     }
     const environmentArgs = (isAgentTask ? this.options.environmentVariables ?? [] : []).flatMap((name) => ["--env", name])
+    const literalEnvironmentArgs = (isAgentTask
+      ? Object.entries(this.options.literalEnvironment ?? {})
+      : []).flatMap(([name, value]) => ["--env", `${name}=${value}`])
 
     const inspect = await runProcess(docker, ["inspect", name], { timeoutMs: 30_000 })
     if (inspect.ok) {
@@ -180,6 +246,7 @@ export class DockerAgentExecutor implements AgentExecutionContainerPort {
       "--workdir", containerWorkdir,
       ...mountArgs,
       ...environmentArgs,
+      ...literalEnvironmentArgs,
       task.environment.image,
       "tail", "-f", "/dev/null",
     ], { timeoutMs: 10 * 60_000 })
@@ -196,7 +263,20 @@ export class DockerAgentExecutor implements AgentExecutionContainerPort {
     let error: string | undefined
     let cleanupError: string | undefined
     try {
-      if (task.executor === "materialize") {
+      if (isAgentTask && this.options.initializationCommand) {
+        // Concurrent task boots each copy the host credential tree, so this
+        // exec competes for I/O with every sibling container: allow minutes.
+        const initialized = await runProcess(
+          docker,
+          ["exec", name, ...this.options.initializationCommand],
+          { timeoutMs: this.options.initializationTimeoutMs ?? 300_000 },
+        )
+        checks.push({ name: "generation/initialize", status: initialized.ok ? "success" : "failure" })
+        if (!initialized.ok) error = commandFailure(initialized).message
+      }
+      if (error) {
+        // Initialization is infrastructure, so no writer or reviewer starts.
+      } else if (task.executor === "materialize") {
         for (const [relative, content] of Object.entries(task.materializedFiles ?? {})) {
           const destination = path.resolve(taskDirectory, relative)
           const directoryPrefix = taskDirectory.endsWith(path.sep) ? taskDirectory : `${taskDirectory}${path.sep}`
@@ -274,7 +354,7 @@ export class DockerAgentExecutor implements AgentExecutionContainerPort {
             const reviewPrompt = `${task.loop.reviewer.instruction}${shared}
 Review the implementation and generated tests against the frozen task/spec. The test evidence is:
 ${testEvidence.join("\n\n")}
-Do not edit any file. Return only JSON in your result: {"approved":boolean,"feedback":"specific changes for both code and tests"}. Approve only when code, tests, and constraints all conform.`
+Do not edit any file. Your result must be exactly one JSON object and nothing else — no markdown fences, no prose before or after: {"approved":boolean,"feedback":"specific changes for both code and tests"}. Approve only when code, tests, and constraints all conform.`
             const beforeReviewer = snapshot(taskDirectory)
             const review = await runProcess(
               docker,
@@ -294,7 +374,10 @@ Do not edit any file. Return only JSON in your result: {"approved":boolean,"feed
             }
             const verdict = reviewerVerdict(review.stdout)
             if (!verdict) {
-              error = `reviewer for ${task.id} round ${round} returned no structured verdict`
+              // Keep bounded reviewer output: an unparseable verdict is a
+              // judge failure whose evidence must not be discarded.
+              const tail = review.stdout.length > 2_000 ? `…${review.stdout.slice(-2_000)}` : review.stdout
+              error = `reviewer for ${task.id} round ${round} returned no structured verdict; reviewer output: ${tail}`
               break
             }
             if (verdict.approved) {
