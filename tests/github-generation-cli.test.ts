@@ -5,6 +5,7 @@ import * as path from "node:path"
 import { describe, expect, it } from "vitest"
 import {
   TEMPORARY_REPOSITORY_WORKFLOW,
+  localShotLocalRoot,
   localShotRepositoryName,
   prepareLocalShotRepository,
   temporaryShotLocalRoot,
@@ -48,6 +49,17 @@ describe("GitHub generator per-shot repository topology", () => {
 })
 
 describe("Local execution topology", () => {
+  it("keeps local shot checkouts outside the source repository", () => {
+    const source = path.join("/work", "spec-lang")
+    const first = localShotLocalRoot(source, "run-7", "shot-1")
+    const second = localShotLocalRoot(source, "run-7", "shot-2")
+    // Beside the checkout, never inside it: an inner directory without its
+    // own .git makes git status report the outer repository.
+    expect(path.dirname(path.dirname(first))).toBe("/work/.spec-local/spec-lang")
+    expect(first.startsWith(path.resolve(source))).toBe(false)
+    expect(path.dirname(first)).toBe(path.dirname(second))
+  })
+
   it("derives a distinct local repository identity for every shot", () => {
     const first = localShotRepositoryName("tiny-fastapi", "backend", "run-7", "shot-1")
     const second = localShotRepositoryName("tiny-fastapi", "backend", "run-7", "shot-2")

@@ -1394,6 +1394,9 @@ function pythonInterfaceLiteral(
     const params = `[${val.pathParams.map((p) => `"${p}"`).join(", ")}]`
     return `    ${JSON.stringify(key)}: {"statuses": ${statuses}, "pathParams": ${params}}`
   })
+  // A route-less contract still has to compile: an empty dict literal is
+  // "{}", never a dangling comma.
+  if (entries.length === 0) return "{}"
   return "{\n" + entries.join(",\n") + ",\n}"
 }
 

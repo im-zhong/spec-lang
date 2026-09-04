@@ -134,15 +134,15 @@ spec generate examples/media-platform/app.spec.ts \
   --resume
 ```
 
-Fast iteration can skip both GitHub and Docker. `--execution local` gives each
-shot a bare Git remote plus clone under `.spec/generation/`, and
-`--runtime host` runs the agent and acceptance commands directly in the
-per-task worktrees:
+Fast iteration can skip both GitHub and Docker — no `gh`, no container
+engine, and no `--image`. `--execution local` gives each shot a bare Git
+remote plus clone under `<repo-parent>/.spec-local/<repo>/<run-id>/`
+(outside this checkout), and `--runtime host` runs the agent and acceptance
+commands directly in the per-task worktrees:
 
 ```bash
 spec generate examples/media-platform/app.spec.ts \
   --run-id media-fast-1 \
-  --image ghcr.io/OWNER/spec-agent@sha256:DIGEST \
   --effort low --max-turns 40 --shots 1 \
   --execution local --runtime host
 ```

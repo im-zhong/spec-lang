@@ -109,7 +109,9 @@ interface AgentExecutionPlan {
   rootBaseSha: string
   branchPrefix: "spec/generate"
   environment: {
-    image: string
+    image?: string
+    runtime?: "docker" | "host"
+    controlPlane?: "github" | "local"
     devcontainerHash: string
     toolchainLockHash: string
     agent: {

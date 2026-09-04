@@ -50,7 +50,7 @@ emits the declared visual/JSON equality evidence.
 | `--dry-run` | Write blueprint/DAG planning artifacts; create no repositories and run no agent | — |
 | `--shots <n>` | Independent generations, each in a distinct remote repository and local root | `3` |
 | `--run-id <id>` | Stable GitHub run identity | required for execution |
-| `--image <repo@sha256:...>` | Digest-pinned generator image | required for execution |
+| `--image <repo@sha256:...>` | Digest-pinned generator image | required unless `--execution local --runtime host` |
 | `--model <id>` | Optional coding-agent model override | Claude CLI selection |
 | `--effort <level>` | Pinned `low\|medium\|high\|xhigh\|max` effort | required for execution |
 | `--max-turns <n>` | Pinned maximum turns per agent node | required for execution |
@@ -65,9 +65,10 @@ emits the declared visual/JSON equality evidence.
 | `--debug` | Show internal stack traces | — |
 | `--help` | Print usage | — |
 
-`--run-id`, `--image`, `--model`, `--effort`, and `--max-turns` are mandatory
-for real generation because they are frozen into the immutable execution plan.
-The runtime must match the plan exactly.
+`--run-id`, `--effort`, and `--max-turns` are mandatory for real generation
+because they are frozen into the immutable execution plan, as is `--image`
+unless the run is `--execution local --runtime host` (which never touches a
+container). The runtime must match the plan exactly.
 
 The temporary repository workflow currently exposes the compiler-owned check
 name `spec-generation`; supplying another check name is rejected.
@@ -77,13 +78,15 @@ name `spec-generation`; supplying another check name is rejected.
 The two environment axes are independent, so the fastest iteration loop is:
 
 ```sh
-spec generate app.spec.ts --run-id fast-1 --image <digest> \
+spec generate app.spec.ts --run-id fast-1 \
   --effort low --max-turns 40 --shots 1 \
-  --execution local --runtime host --merge-policy merge-to-main
+  --execution local --runtime host
 ```
 
 Each shot gets a bare Git remote plus clone under
-`.spec/generation/<run-id>/repositories/`, agent and acceptance commands run
+`<repo-parent>/.spec-local/<repo>/<run-id>/` — deliberately outside the
+source checkout, so walking into a shot never makes `git status` report the
+outer repository. Agent and acceptance commands run
 directly on the host in per-task worktrees, and each feature-node branch is
 verified against its pushed head in a fresh detached worktree (the local
 equivalent of the GitHub check) before deterministic code merges it into

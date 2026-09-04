@@ -254,7 +254,7 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
 
   it("generated conformance python is syntactically valid", async () => {
     if (!hasPython) return
-    for (const name of ["cblog", "inventory", "booking", "media-platform"]) {
+    for (const name of ["cblog", "inventory", "booking", "media-platform", "tiny-fastapi"]) {
       const result = await compileExample(name)
       const plan = planGeneration(result.ir)
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `spec-conf-`))

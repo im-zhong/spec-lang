@@ -46,7 +46,22 @@ export function validateAgentExecutionPlan(plan: AgentExecutionPlan): Diagnostic
   }
   if (!safeRef(plan.branchPrefix)) diagnostics.push(diagnostic("AGENT_EXECUTION_BRANCH_PREFIX_INVALID", "branchPrefix must be a safe Git branch prefix."))
   if (!GIT_SHA.test(plan.rootBaseSha)) diagnostics.push(diagnostic("AGENT_EXECUTION_BASE_SHA_INVALID", "rootBaseSha must be a full 40- or 64-character lowercase Git SHA."))
-  if (!OCI_DIGEST.test(plan.environment.image)) diagnostics.push(diagnostic("AGENT_EXECUTION_IMAGE_NOT_IMMUTABLE", "Agent environment image must be pinned by sha256 digest."))
+  if (plan.environment.runtime !== undefined && !["docker", "host"].includes(plan.environment.runtime)) {
+    diagnostics.push(diagnostic("AGENT_EXECUTION_ENVIRONMENT_RUNTIME_INVALID", "environment.runtime must be docker or host."))
+  }
+  if (plan.environment.controlPlane !== undefined && !["github", "local"].includes(plan.environment.controlPlane)) {
+    diagnostics.push(diagnostic("AGENT_EXECUTION_ENVIRONMENT_CONTROL_PLANE_INVALID", "environment.controlPlane must be github or local."))
+  }
+  const runtime = plan.environment.runtime ?? "docker"
+  const controlPlane = plan.environment.controlPlane ?? "github"
+  // Docker agents run inside the image and GitHub Actions pulls it for every
+  // check, so only a pure host+local run may omit it.
+  const imageRequired = runtime === "docker" || controlPlane === "github"
+  if (plan.environment.image !== undefined) {
+    if (!OCI_DIGEST.test(plan.environment.image)) diagnostics.push(diagnostic("AGENT_EXECUTION_IMAGE_NOT_IMMUTABLE", "Agent environment image must be pinned by sha256 digest."))
+  } else if (imageRequired) {
+    diagnostics.push(diagnostic("AGENT_EXECUTION_IMAGE_REQUIRED", "A digest-pinned image is required for docker runtime and for GitHub checks; only --execution local --runtime host may omit it."))
+  }
   if (!CONTENT_HASH.test(plan.environment.devcontainerHash) || !CONTENT_HASH.test(plan.environment.toolchainLockHash)) {
     diagnostics.push(diagnostic("AGENT_EXECUTION_ENVIRONMENT_HASH_INVALID", "Environment definition and toolchain lock hashes must be sha256 digests."))
   }

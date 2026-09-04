@@ -219,7 +219,8 @@ spec generate <file>  compile → blueprint → agent shots → conformance + re
 --effort <level>    pinned low|medium|high|xhigh|max (required to execute)
 --max-turns <n>     pinned turn budget (required to execute)
 --run-id <id>       stable GitHub run id (required unless --dry-run)
---image <ref>       digest-pinned agent image (required unless --dry-run)
+--image <ref>       digest-pinned agent image (required unless --dry-run;
+                    may be omitted for --execution local --runtime host)
 --target-dir <dir>  repository-relative generated product directory
 --repository <owner/base>
                      optional temporary repository prefix; the generator

@@ -14,7 +14,8 @@ import {
 export interface GitHubGenerateOptions {
   repoRoot: string
   runId: string
-  image: string
+  /** Digest-pinned image; may be omitted only for --execution local --runtime host. */
+  image?: string
   repository?: string
   targetDirectory?: string
   appName: string
@@ -149,6 +150,21 @@ export function temporaryShotLocalRoot(sourceRoot: string, runId: string, shot: 
   const safeShot = slug(shot)
   if (!safeRun || !safeShot) throw new Error("run id and shot name must form safe local paths")
   return path.join(sourceRoot, ".spec", "generation", safeRun, "repositories", safeShot)
+}
+
+/**
+ * Local-execution shot root, deliberately OUTSIDE the source repository:
+ * a directory inside another Git checkout makes `git status` report the
+ * outer repository, which is exactly the confusion fast iteration must not
+ * cause. Shots live beside the checkout, like the default `.spec-worktrees`
+ * worktree root.
+ */
+export function localShotLocalRoot(sourceRoot: string, runId: string, shot: string): string {
+  const safeRun = slug(runId)
+  const safeShot = slug(shot)
+  if (!safeRun || !safeShot) throw new Error("run id and shot name must form safe local paths")
+  const root = path.resolve(sourceRoot)
+  return path.join(path.dirname(root), ".spec-local", path.basename(root), safeRun, safeShot)
 }
 
 function repositoryPrefix(root: string, requested: string | undefined, appName: string, target: string): { owner: string; base: string } {
@@ -372,11 +388,15 @@ function hashFiles(root: string, files: string[]): string {
 
 function environment(
   root: string,
-  image: string,
+  image: string | undefined,
+  runtime: "docker" | "host",
+  controlPlane: "github" | "local",
   agent: AgentExecutionEnvironment["agent"],
 ): AgentExecutionEnvironment {
   return {
-    image,
+    ...(image ? { image } : {}),
+    ...(runtime !== "docker" ? { runtime } : {}),
+    ...(controlPlane !== "github" ? { controlPlane } : {}),
     devcontainerHash: hashFiles(root, [
       ".devcontainer/devcontainer.json",
       ".devcontainer/Dockerfile",
@@ -433,7 +453,9 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
   const repositories = Array.from({ length: options.shots }, (_, index) => {
     const shot = `shot-${index + 1}`
     const runId = options.shots === 1 ? options.runId : `${options.runId}-${shot}`
-    const localRoot = temporaryShotLocalRoot(options.repoRoot, options.runId, shot)
+    const localRoot = options.execution === "local"
+      ? localShotLocalRoot(options.repoRoot, options.runId, shot)
+      : temporaryShotLocalRoot(options.repoRoot, options.runId, shot)
     if (options.execution === "local") {
       return prepareLocalShotRepository({
         sourceRoot: options.repoRoot,
@@ -473,7 +495,7 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
       rootBaseSha: repository.headSha,
       defaultBranch: repository.defaultBranch,
       targetDirectory: target,
-      environment: environment(options.repoRoot, options.image, {
+      environment: environment(options.repoRoot, options.image, options.runtime, options.execution, {
         model: options.model,
         effort: options.effort,
         maxTurns: options.maxTurns,
@@ -490,7 +512,9 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
     process.stdout.write(`  ${plan.tasks.length} generator nodes → branches/containers/PRs\n`)
     const report = await runGitHubGeneration(plan, {
       repoRoot: repository.localRoot,
-      worktreeRoot: path.join(options.repoRoot, ".spec", "generation", options.runId, "worktrees", shot),
+      worktreeRoot: options.execution === "local"
+        ? path.join(path.dirname(localShotLocalRoot(options.repoRoot, options.runId, shot)), "worktrees", shot)
+        : path.join(options.repoRoot, ".spec", "generation", options.runId, "worktrees", shot),
       concurrency: perShotConcurrency,
       resume: options.resume,
       model: options.model,
@@ -508,6 +532,17 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
       targetDirectory: target,
       report,
     }) + "\n", "utf8")
+    // The checkout is a control-plane cockpit, never a workspace: commits
+    // happen in detached worktrees and land on the remote. Fast-forward its
+    // working tree to the final main so the generated product is browsable
+    // exactly where a person looks for it. Failure here is a convenience
+    // loss, never a run verdict.
+    try {
+      git(repository.localRoot, ["fetch", "origin", repository.defaultBranch])
+      git(repository.localRoot, ["checkout", "-q", "-B", repository.defaultBranch, `origin/${repository.defaultBranch}`])
+    } catch (error) {
+      process.stderr.write(`  ⚠ ${shot}: could not point ${repository.localRoot} at final main: ${error instanceof Error ? error.message : String(error)}\n`)
+    }
     process.stdout.write(`${report.ok ? "✓" : "✗"} ${shot}: plan ${report.planRef} @ ${report.planCommitSha.slice(0, 12)}\n`)
     const sink = plan.tasks.find((candidate) => !plan.tasks.some((task) => task.dependsOn.includes(candidate.id)))
     const sinkSha = report.tasks.find((task) => task.taskId === sink?.id)?.headSha

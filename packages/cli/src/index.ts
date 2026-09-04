@@ -161,7 +161,9 @@ Options:
   --effort <level>          Pinned low|medium|high|xhigh|max (required to execute)
   --max-turns <n>           Pinned agent turn budget (required to execute)
   --run-id <id>             Stable GitHub generation run id (required to execute)
-  --image <repo@sha256:...> Digest-pinned generator container (required to execute)
+  --image <repo@sha256:...> Digest-pinned generator container (required to
+                            execute, except for --execution local --runtime
+                            host, which never touches a container)
   --target-dir <dir>        Repository-relative generated product directory
   --repository <owner/base> Temporary per-shot repository name prefix
   --concurrency <n>         Maximum parallel generator nodes (default 2)
@@ -208,8 +210,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const projectRoot = process.cwd()
   try {
     if ((args.command === "generate" || args.command === "generate-frontend") && !args.dryRun) {
-      if (!args.runId || !args.image || !args.effort || args.maxTurns === undefined) {
-        throw new Error("GitHub generation requires --run-id, --image, --effort, and --max-turns; use --dry-run to plan without executing")
+      // Only a pure local+host run never touches a container: GitHub checks
+      // pull the image even when the agent itself runs on the host.
+      const imageless = args.execution === "local" && args.runtime === "host"
+      if (!args.runId || (!imageless && !args.image) || !args.effort || args.maxTurns === undefined) {
+        throw new Error(`generation requires --run-id, --effort, and --max-turns${imageless ? "" : ", and --image"}; use --dry-run to plan without executing (--image may be omitted only for --execution local --runtime host)`)
       }
       if (!["low", "medium", "high", "xhigh", "max"].includes(args.effort)) throw new Error("--effort must be low, medium, high, xhigh, or max")
       if (!Number.isInteger(args.maxTurns) || args.maxTurns < 1) throw new Error("--max-turns must be a positive integer")

@@ -40,6 +40,9 @@ export class DockerAgentExecutor implements AgentExecutionContainerPort {
   }
 
   async execute(task: ResolvedAgentExecutionTask, workspace: string): Promise<ContainerExecutionResult> {
+    if (!task.environment.image) {
+      return { ok: false, checks: [], error: `docker runtime requires a digest-pinned image; task ${task.id} has none (use --runtime host or pin --image)` }
+    }
     const docker = this.options.dockerCli ?? "docker"
     const name = safeName(`spec-dev-${task.runId}-${task.id}`)
     const timeoutMs = this.options.timeoutMs ?? 45 * 60_000

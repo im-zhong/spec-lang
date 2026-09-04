@@ -55,7 +55,7 @@ function prBody(plan: AgentExecutionPlan, task: ResolvedAgentExecutionTask, chan
 - Task: \`${task.id}\`
 - Plan: \`${plan.fingerprint}\`
 - Integration base: \`${task.baseSha}\`
-- Environment: \`${task.environment.image}\`
+- Environment: ${task.environment.image ? `\`${task.environment.image}\`` : `\`${task.environment.runtime ?? "docker"}/${task.environment.controlPlane ?? "github"}\` (host execution, no image)`}
 
 Dependency commits:
 ${dependencies}

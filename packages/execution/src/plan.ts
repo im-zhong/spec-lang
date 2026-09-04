@@ -72,7 +72,9 @@ export function createAgentExecutionPlan(input: AgentExecutionPlanInput): AgentE
     rootBaseSha: input.rootBaseSha,
     branchPrefix: (input.branchPrefix ?? "spec/generate").replace(/\/$/, ""),
     environment: {
-      image: input.environment.image,
+      ...(input.environment.image ? { image: input.environment.image } : {}),
+      ...(input.environment.runtime ? { runtime: input.environment.runtime } : {}),
+      ...(input.environment.controlPlane ? { controlPlane: input.environment.controlPlane } : {}),
       devcontainerHash: input.environment.devcontainerHash,
       toolchainLockHash: input.environment.toolchainLockHash,
       agent: {

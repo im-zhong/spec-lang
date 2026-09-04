@@ -343,8 +343,23 @@ export interface AgentResult {
 
 /** Reproducible executor contract shared by every task in one run. */
 export interface AgentExecutionEnvironment {
-  /** Immutable OCI image reference (`repository@sha256:...`). */
-  image: string
+  /**
+   * Immutable OCI image reference (`repository@sha256:...`). Required
+   * whenever the agent runs in Docker or checks run on GitHub Actions
+   * (both pull it); a pure `--execution local --runtime host` run never
+   * touches a container, so it may omit the image entirely.
+   */
+  image?: string
+  /**
+   * Where the agent and acceptance commands execute. Omitted means
+   * "docker" (the original execution model), which keeps older plans valid.
+   */
+  runtime?: "docker" | "host"
+  /**
+   * Which durable-branch control plane verifies and lands task heads.
+   * Omitted means "github", preserving older plans.
+   */
+  controlPlane?: "github" | "local"
   /** Hash of the repository-owned devcontainer/environment definition. */
   devcontainerHash: string
   /** Hash covering language and package-manager lockfiles. */

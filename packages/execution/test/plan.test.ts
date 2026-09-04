@@ -66,6 +66,27 @@ describe("agent execution plan", () => {
     expect(validateAgentExecutionPlan(value)).toEqual([])
   })
 
+  it("allows an imageless environment only for host runtime with a local control plane", () => {
+    const planWith = (environment: Record<string, unknown>) => createAgentExecutionPlan({
+      runId: "run-1",
+      repository: "owner/repo",
+      rootBaseSha: SHA,
+      environment: {
+        devcontainerHash: HASH,
+        toolchainLockHash: HASH,
+        agent: { model: "test-model", effort: "high", maxTurns: 20, maxConcurrency: 2 },
+        ...environment,
+      } as never,
+      acceptance: { requiredChecks: ["test"], commands: ["pnpm test"] },
+      tasks: [{ id: "api", objective: "API", instruction: "Build API", dependsOn: [], scope: ["src/api.ts"], specNodeIds: [] }],
+    })
+    expect(validateAgentExecutionPlan(planWith({ runtime: "host", controlPlane: "local" }))).toEqual([])
+    expect(validateAgentExecutionPlan(planWith({ runtime: "host" })).map((item) => item.code)).toContain("AGENT_EXECUTION_IMAGE_REQUIRED")
+    expect(validateAgentExecutionPlan(planWith({ controlPlane: "local" })).map((item) => item.code)).toContain("AGENT_EXECUTION_IMAGE_REQUIRED")
+    expect(validateAgentExecutionPlan(planWith({ runtime: "host", controlPlane: "local", image: "registry/dev@latest" })).map((item) => item.code)).toContain("AGENT_EXECUTION_IMAGE_NOT_IMMUTABLE")
+    expect(validateAgentExecutionPlan(planWith({ runtime: "vm" })).map((item) => item.code)).toContain("AGENT_EXECUTION_ENVIRONMENT_RUNTIME_INVALID")
+  })
+
   it("rejects overlapping independent write scopes", () => {
     const value = plan([
       { id: "a", objective: "A", instruction: "x", dependsOn: [], scope: ["same.ts"], specNodeIds: [] },
