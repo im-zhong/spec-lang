@@ -1,0 +1,9 @@
+{
+  "name": "@spec/example-tiny-fastapi",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@spec/core": "workspace:*",
+    "@spec/fastapi": "workspace:*"
+  }
+}

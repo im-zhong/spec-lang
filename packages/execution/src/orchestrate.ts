@@ -8,7 +8,12 @@ import { runAgentExecutionSchedule } from "./scheduler"
 import type { AgentExecutionScheduleFailure } from "./scheduler"
 import { taskBranch } from "./plan"
 import { validateAgentExecutionPlan } from "./validate"
-import type { AgentExecutionContainerPort, AgentExecutionGitHubPort, AgentExecutionRepositoryPort } from "./ports"
+import type {
+  AgentExecutionContainerPort,
+  AgentExecutionControlPlanePort,
+  AgentExecutionRepositoryPort,
+  MergeResult,
+} from "./ports"
 
 interface RuntimeResult extends AgentExecutionTaskResult {
   ok: boolean
@@ -27,7 +32,7 @@ export interface AgentExecutionReport {
 export interface AgentExecutionOptions {
   repository: AgentExecutionRepositoryPort
   containers: AgentExecutionContainerPort
-  github: AgentExecutionGitHubPort
+  controlPlane: AgentExecutionControlPlanePort
   concurrency?: number
   failFast?: boolean
   resume?: boolean
@@ -74,6 +79,17 @@ export async function runAgentExecutionPlan(
     throw new Error(`invalid agent execution plan: ${diagnostics.map((item) => `${item.code}: ${item.message}`).join("; ")}`)
   }
   const publishedPlan = await options.repository.publishPlan(plan)
+
+  // Sibling tasks finish concurrently, but the default branch accepts exactly
+  // one linear history: merge-to-main integrations are serialized through one
+  // promise chain so every push is a fast-forward of the previous merge.
+  let mergeTail: Promise<unknown> = Promise.resolve()
+  const mergeIntoDefaultBranch = (taskId: string, headSha: string): Promise<MergeResult> => {
+    const run = mergeTail.then(() => options.repository.mergeIntoDefaultBranch(plan, taskId, headSha))
+    mergeTail = run.catch(() => undefined)
+    return run
+  }
+
   const schedule = await runAgentExecutionSchedule<RuntimeResult>(
     plan.tasks,
     async (template, dependencyResults) => {
@@ -94,31 +110,45 @@ export async function runAgentExecutionPlan(
           environment: plan.environment,
           acceptance: template.acceptance ?? plan.acceptance,
         }
+        const acceptance = {
+          commands: resolved.acceptance.commands,
+          ...(resolved.workingDirectory ? { workingDirectory: resolved.workingDirectory } : {}),
+        }
+        const pullRequestFor = (changedPaths: string[]) => options.controlPlane.upsertPullRequest({
+          repository: plan.repository,
+          head: branch,
+          base: isSink(plan, template.id) ? plan.defaultBranch : base.ref,
+          title: isSink(plan, template.id)
+            ? `spec agent execution run ${plan.runId}`
+            : `spec(${template.id}): ${template.objective}`,
+          body: prBody(plan, resolved, changedPaths),
+        })
+        const checksFor = (pullRequestNumber: number, expectedHeadSha: string) => options.controlPlane.waitForChecks({
+          repository: plan.repository,
+          pullRequest: pullRequestNumber,
+          requiredChecks: resolved.acceptance.requiredChecks,
+          expectedHeadSha,
+          acceptance,
+        })
+        const landedOnDefaultBranch = async (headSha: string) => {
+          if (plan.mergePolicy !== "merge-to-main") return { status: "review" as const, mergedSha: undefined }
+          const merged = await mergeIntoDefaultBranch(template.id, headSha)
+          return { status: "merged" as const, mergedSha: merged.sha }
+        }
 
         const remoteHead = await options.repository.remoteHead(branch)
         if (remoteHead) {
           const provenance = await options.repository.verifyCommitProvenance(remoteHead, branch, base.sha, plan, template.id)
           if (!provenance) throw new Error(`remote branch ${branch} exists without matching run/task/fingerprint provenance`)
-          const existingPr = await options.github.upsertPullRequest({
-            repository: plan.repository,
-            head: branch,
-            base: isSink(plan, template.id) ? plan.defaultBranch : base.ref,
-            title: isSink(plan, template.id)
-              ? `spec agent execution run ${plan.runId}`
-              : `spec(${template.id}): ${template.objective}`,
-            body: prBody(plan, resolved, template.scope),
-          })
-          const checks = await options.github.waitForChecks({
-            repository: plan.repository,
-            pullRequest: existingPr.number,
-            requiredChecks: resolved.acceptance.requiredChecks,
-            expectedHeadSha: remoteHead,
-          })
+          const existingPr = await pullRequestFor(template.scope)
+          const checks = await checksFor(existingPr.number, remoteHead)
           if (checks.every((check) => check.status === "success")) {
+            const landed = await landedOnDefaultBranch(remoteHead)
             return {
               taskId: template.id,
               ok: true,
-              status: "review",
+              status: landed.status,
+              ...(landed.mergedSha ? { mergedSha: landed.mergedSha } : {}),
               branch,
               integrationBaseSha: base.sha,
               headSha: remoteHead,
@@ -147,29 +177,24 @@ export async function runAgentExecutionPlan(
           plan.fingerprint,
           { allowEmpty: resumeHeadSha !== undefined },
         )
-        const pullRequest = await options.github.upsertPullRequest({
-          repository: plan.repository,
-          head: branch,
-          base: isSink(plan, template.id) ? plan.defaultBranch : base.ref,
-          title: isSink(plan, template.id)
-            ? `spec agent execution run ${plan.runId}`
-            : `spec(${template.id}): ${template.objective}`,
-          body: prBody(plan, resolved, committed.changedPaths),
-        })
-        const githubChecks = await options.github.waitForChecks({
-          repository: plan.repository,
-          pullRequest: pullRequest.number,
-          requiredChecks: resolved.acceptance.requiredChecks,
-          expectedHeadSha: committed.headSha,
-        })
+        const pullRequest = await pullRequestFor(committed.changedPaths)
+        const githubChecks = await checksFor(pullRequest.number, committed.headSha)
         const ok = githubChecks.every((check) => check.status === "success")
-        if (ok && isSink(plan, template.id) && plan.mergePolicy === "merge-queue") {
-          await options.github.enqueuePullRequest(plan.repository, pullRequest.number)
+        let status: RuntimeResult["status"] = ok ? "review" : "failure"
+        let mergedSha: string | undefined
+        if (ok) {
+          const landed = await landedOnDefaultBranch(committed.headSha)
+          status = landed.status
+          if (landed.mergedSha) mergedSha = landed.mergedSha
+        }
+        if (ok && plan.mergePolicy === "merge-queue" && isSink(plan, template.id)) {
+          await options.controlPlane.enqueuePullRequest(plan.repository, pullRequest.number)
         }
         return {
           taskId: template.id,
           ok,
-          status: ok ? "review" : "failure",
+          status,
+          ...(mergedSha ? { mergedSha } : {}),
           branch,
           integrationBaseSha: base.sha,
           headSha: committed.headSha,

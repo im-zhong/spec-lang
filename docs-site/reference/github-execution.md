@@ -73,14 +73,13 @@ pnpm spec check examples/media-platform/app.spec.ts
 pnpm spec generate examples/media-platform/app.spec.ts --dry-run
 ```
 
-A real backend run requires an explicit run id, digest-pinned image, model,
-effort, and turn budget:
+A real backend run requires an explicit run id, digest-pinned image, effort,
+and turn budget. Omit `--model` to use Claude CLI's default selection:
 
 ```bash
 pnpm spec generate examples/media-platform/app.spec.ts \
   --run-id media-platform-v1 \
   --image ghcr.io/OWNER/spec-agent@sha256:DIGEST \
-  --model MODEL_ID \
   --effort medium \
   --max-turns 100 \
   --target-dir products/media-platform/backend \
@@ -95,7 +94,7 @@ The immutable plan records:
 - required GitHub check names;
 - digest-pinned execution image;
 - devcontainer and toolchain-lock hashes;
-- model, effort, maximum turns, and per-shot concurrency;
+- the presence or absence of a model override, effort, maximum turns, and per-shot concurrency;
 - merge policy and compiler-owned materializations.
 
 Runtime settings must equal the values in the plan. A resume cannot silently
@@ -232,14 +231,42 @@ consumption. A missing dependency edge is therefore a compiler/DAG defect: the
 child sees exactly its declared dependency closure, not every task that
 happened to run earlier.
 
+Under the `merge-to-main` policy (the CLI default) the model is the team
+model instead: `main` is the single integration line. A task's integration
+base is **the main commit at which its dependency closure completed** — the
+landing commit of the last of its declared dependencies — never simply the
+main head at start time. Every sibling of a dependency therefore branches
+from the exact same commit regardless of when the scheduler releases it, and
+a sibling's code can never leak into another branch through scheduling. The
+DAG therefore literally becomes the branch history:
+
+```text
+main: base ── merge A ── merge B ── merge C ── merge D
+                └─ A ─┘   └─ B ─┘    └─ C ─┘     └─ D ─┘
+                          (B and C both branched from the merge-A commit)
+```
+
+Landing commits are mechanically locatable — each checked head lands through
+exactly one two-parent integration commit whose second parent is that task
+head — so the repository walks `main`'s first-parent chain, finds each
+dependency's landing, bases the task on the newest one, and proves every
+dependency head is an ancestor of that base before the task starts. If
+sibling landings swap order between two runs (scheduling), a child's base
+commit SHA differs but its tree content is identical, because scopes are
+disjoint; the scheduler releases a child only after all of its dependencies
+returned, and each dependency returns only after its own deterministic merge
+landed on `main`.
+
 ## How parallel results are joined
 
 Independent tasks have separate branches, containers, worktrees, and exact
 file scopes. Two unordered tasks are rejected before execution if their scopes
 contain the same path (`AGENT_EXECUTION_SCOPE_OVERLAP_UNORDERED`). If both must
-edit a file, the plan must add an ordering edge or split ownership.
+edit a file, the plan must add an ordering edge or split ownership. The same
+scope partition is what guarantees conflict-free `merge-to-main` integrations.
 
-When a child has several parents, the generator:
+Under the `pull-request` and `merge-queue` policies, when a child has several
+parents, the generator:
 
 1. sorts parents by task id;
 2. starts from the first checked head;
@@ -275,8 +302,34 @@ their commits are consumed through immutable SHAs, not by merging them into
 
 The default merge policy is `pull-request`, so even the successful final PR is
 left for review. The execution layer also supports `merge-queue`; with that
-policy, only a successful sink PR is submitted with GitHub auto-merge. The
-current generator CLI uses the default `pull-request` policy.
+policy, only a successful sink PR is submitted with GitHub auto-merge.
+
+The third policy, `merge-to-main`, is the CLI default and works like a
+development team: every feature-node branch runs its own acceptance (in the
+executor, then again on the pushed head), and once every required check is
+green, deterministic code — not a human — merges the head into the default
+branch with a two-parent `merge-tree`/`commit-tree` commit whose trailers
+record run, task, and plan fingerprint. Merges are serialized per process, so
+`main` receives one linear integration history in dependency order. The
+compiler's scope partition is the guarantee that these merges never conflict;
+a `merge-tree` conflict fails loud as a contract defect. Re-merging an already
+landed head is idempotent (ancestor check), which is what makes resume safe.
+
+## Execution environments
+
+The two environment axes are chosen independently; the interfaces
+(`AgentExecutionContainerPort`, `AgentExecutionControlPlanePort`,
+`AgentExecutionRepositoryPort`) accept any combination:
+
+| Axis | Choices | Meaning |
+| --- | --- | --- |
+| Runtime | `docker` (default), `host` | Where the agent, loop oracle commands, and acceptance commands execute. `docker` uses the digest-pinned image; `host` runs them directly in the task worktree and assumes the host provides the toolchain. |
+| Control plane | `github` (default), `local` | How durable branches are verified and landed. `github` uses real PRs and the `spec-generation` Actions check; `local` uses a per-shot bare Git remote, synthetic PR records, and replays each task's frozen acceptance in a fresh detached worktree of the pushed head. |
+
+`--execution local` implies `--merge-policy merge-to-main` (without pull
+requests, merged `main` is the only durable landing evidence) and skips all
+`gh` interaction. Local runs are for fast iteration; golden-rule judgment
+still requires GitHub repository isolation per shot.
 
 There is currently no automatic post-success operation that closes all
 intermediate PRs or deletes temporary repositories. Failed repositories must
@@ -338,7 +391,7 @@ Resume the same immutable run with exactly the same arguments plus `--resume`:
 pnpm spec generate examples/media-platform/app.spec.ts \
   --run-id media-platform-v1 \
   --image ghcr.io/OWNER/spec-agent@sha256:DIGEST \
-  --model MODEL_ID --effort medium --max-turns 100 \
+  --effort medium --max-turns 100 \
   --target-dir products/media-platform/backend \
   --shots 2 --concurrency 2 \
   --resume

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { createAgentExecutionPlan, agentExecutionPlanFingerprint, validateAgentExecutionPlan } from "../src"
+import {
+  agentExecutionPlanFingerprint,
+  agentExecutionSemanticInputDigest,
+  createAgentExecutionPlan,
+  validateAgentExecutionPlan,
+} from "../src"
 
 const SHA = "a".repeat(40)
 const HASH = "b".repeat(64)
@@ -51,6 +56,14 @@ describe("agent execution plan", () => {
     const codes = validateAgentExecutionPlan(value).map((item) => item.code)
     expect(codes).toContain("AGENT_EXECUTION_AGENT_ENVIRONMENT_INVALID")
     expect(codes).toContain("AGENT_EXECUTION_FINGERPRINT_MISMATCH")
+  })
+
+  it("treats an omitted model override as a valid frozen CLI-default invocation", () => {
+    const value = plan()
+    delete value.environment.agent.model
+    value.semanticInputDigest = agentExecutionSemanticInputDigest(value)
+    value.fingerprint = agentExecutionPlanFingerprint(value)
+    expect(validateAgentExecutionPlan(value)).toEqual([])
   })
 
   it("rejects overlapping independent write scopes", () => {

@@ -10,8 +10,9 @@ import {
   type CommitResult,
   type ContainerExecutionResult,
   type AgentExecutionContainerPort,
-  type AgentExecutionGitHubPort,
+  type AgentExecutionControlPlanePort,
   type AgentExecutionRepositoryPort,
+  type MergeResult,
   type IntegrationBase,
   type PullRequestRecord,
 } from "../src"
@@ -19,9 +20,10 @@ import {
 const SHA = "a".repeat(40)
 const HASH = "b".repeat(64)
 
-function fixturePlan(): AgentExecutionPlan {
+function fixturePlan(mergePolicy: AgentExecutionPlan["mergePolicy"] = "pull-request"): AgentExecutionPlan {
   return createAgentExecutionPlan({
     runId: "dogfood",
+    mergePolicy,
     repository: "owner/repo",
     rootBaseSha: SHA,
     environment: {
@@ -65,6 +67,21 @@ class FakeRepository implements AgentExecutionRepositoryPort {
     this.provenance.set(headSha, { run: task.runId, task: task.id, fingerprint })
     return { headSha, changedPaths: [...task.scope] }
   }
+  readonly merges: Array<{ taskId: string; headSha: string }> = []
+  mergeLock = Promise.resolve()
+
+  async mergeIntoDefaultBranch(plan: AgentExecutionPlan, taskId: string, headSha: string): Promise<MergeResult> {
+    // Mirror the orchestrator's serialization: at most one merge in flight.
+    const record = { taskId, headSha }
+    const run = this.mergeLock.then(async () => {
+      this.merges.push(record)
+      const sha = `m${(this.merges.length).toString(16).padStart(39, "0")}`
+      return { sha, alreadyMerged: false }
+    })
+    this.mergeLock = run.then(() => undefined, () => undefined)
+    return run
+  }
+
   async removeWorkspace() {}
 }
 
@@ -82,7 +99,7 @@ class FakeContainers implements AgentExecutionContainerPort {
   }
 }
 
-class FakeGitHub implements AgentExecutionGitHubPort {
+class FakeControlPlane implements AgentExecutionControlPlanePort {
   readonly pullRequests = new Map<string, PullRequestRecord & { base: string }>()
   failFirstHead = false
   private failedHead?: string
@@ -92,7 +109,10 @@ class FakeGitHub implements AgentExecutionGitHubPort {
     this.pullRequests.set(input.head, record)
     return record
   }
-  async waitForChecks(input: { repository: string; pullRequest: number; requiredChecks: string[]; expectedHeadSha: string }) {
+  readonly checkedAcceptance: Array<{ headSha: string; commands: string[]; workingDirectory?: string }> = []
+
+  async waitForChecks(input: { repository: string; pullRequest: number; requiredChecks: string[]; expectedHeadSha: string; acceptance: { commands: string[]; workingDirectory?: string } }) {
+    this.checkedAcceptance.push({ headSha: input.expectedHeadSha, commands: input.acceptance.commands, ...(input.acceptance.workingDirectory ? { workingDirectory: input.acceptance.workingDirectory } : {}) })
     if (this.failFirstHead && (!this.failedHead || this.failedHead === input.expectedHeadSha)) {
       this.failedHead = input.expectedHeadSha
       return input.requiredChecks.map((name) => ({ name, status: "failure" as const }))
@@ -106,9 +126,9 @@ describe("agent DAG execution orchestration", () => {
   it("publishes parallel task branches/PRs, gates the child, and resumes from durable state", async () => {
     const repository = new FakeRepository()
     const containers = new FakeContainers()
-    const github = new FakeGitHub()
+    const github = new FakeControlPlane()
     const plan = fixturePlan()
-    const first = await runAgentExecutionPlan(plan, { repository, containers, github, concurrency: 2 })
+    const first = await runAgentExecutionPlan(plan, { repository, containers, controlPlane: github, concurrency: 2 })
     expect(first.ok).toBe(true)
     expect(containers.observedParallel).toBe(true)
     expect(containers.calls).toBe(3)
@@ -117,7 +137,7 @@ describe("agent DAG execution orchestration", () => {
     expect(github.pullRequests.get("spec/generate/dogfood/left")?.base).toBe("spec/generate/dogfood/bases/left")
 
     github.pullRequests.delete("spec/generate/dogfood/left")
-    const resumed = await runAgentExecutionPlan(plan, { repository, containers, github, concurrency: 2, resume: true })
+    const resumed = await runAgentExecutionPlan(plan, { repository, containers, controlPlane: github, concurrency: 2, resume: true })
     expect(resumed.ok).toBe(true)
     expect(containers.calls).toBe(3)
     expect(resumed.tasks.map((task) => task.headSha)).toEqual(first.tasks.map((task) => task.headSha))
@@ -126,7 +146,7 @@ describe("agent DAG execution orchestration", () => {
   it("resume appends a retry checkpoint after a durable head fails CI", async () => {
     const repository = new FakeRepository()
     const containers = new FakeContainers()
-    const github = new FakeGitHub()
+    const github = new FakeControlPlane()
     github.failFirstHead = true
     const full = fixturePlan()
     const plan = createAgentExecutionPlan({
@@ -137,14 +157,85 @@ describe("agent DAG execution orchestration", () => {
       acceptance: full.acceptance,
       tasks: [{ id: "only", objective: "only", instruction: "only", dependsOn: [], scope: ["only"], specNodeIds: [] }],
     })
-    const failed = await runAgentExecutionPlan(plan, { repository, containers, github })
+    const failed = await runAgentExecutionPlan(plan, { repository, containers, controlPlane: github })
     expect(failed.ok).toBe(false)
     const failedHead = failed.tasks[0].headSha
     expect(failedHead).toBeTruthy()
 
-    const resumed = await runAgentExecutionPlan(plan, { repository, containers, github, resume: true })
+    const resumed = await runAgentExecutionPlan(plan, { repository, containers, controlPlane: github, resume: true })
     expect(resumed.ok).toBe(true)
     expect(resumed.tasks[0].headSha).not.toBe(failedHead)
     expect(containers.calls).toBe(2)
+  })
+
+  it("merge-to-main lands every internally checked node on the default branch by code", async () => {
+    const repository = new FakeRepository()
+    const containers = new FakeContainers()
+    const github = new FakeControlPlane()
+    const plan = fixturePlan("merge-to-main")
+    const report = await runAgentExecutionPlan(plan, { repository, containers, controlPlane: github, concurrency: 2 })
+    expect(report.ok).toBe(true)
+    expect(report.tasks.every((task) => task.status === "merged")).toBe(true)
+    expect(report.tasks.every((task) => task.mergedSha)).toBe(true)
+    // Dependencies merge before their dependents: the child lands last.
+    const order = repository.merges.map((merge) => merge.taskId)
+    expect(order.indexOf("child")).toBeGreaterThan(order.indexOf("left"))
+    expect(order.indexOf("child")).toBeGreaterThan(order.indexOf("right"))
+    // Every merge reuses the same durable head the checks verified.
+    for (const merge of repository.merges) {
+      expect(report.tasks.find((task) => task.taskId === merge.taskId)?.headSha).toBe(merge.headSha)
+    }
+  })
+
+  it("merge-to-main skips the merge and fails loud when a node's own checks fail", async () => {
+    const repository = new FakeRepository()
+    const containers = new FakeContainers()
+    const github = new FakeControlPlane()
+    github.failFirstHead = true
+    const plan = createAgentExecutionPlan({
+      runId: "failing",
+      mergePolicy: "merge-to-main",
+      repository: "owner/repo",
+      rootBaseSha: SHA,
+      environment: {
+        image: `registry.example.com/dev@sha256:${"c".repeat(64)}`,
+        devcontainerHash: HASH,
+        toolchainLockHash: HASH,
+        agent: { model: "test-model", effort: "high", maxTurns: 20, maxConcurrency: 2 },
+      },
+      acceptance: { requiredChecks: ["clean-container"], commands: ["test -f output"] },
+      tasks: [{ id: "only", objective: "only", instruction: "only", dependsOn: [], scope: ["only"], specNodeIds: [] }],
+    })
+    const report = await runAgentExecutionPlan(plan, { repository, containers, controlPlane: github })
+    expect(report.ok).toBe(false)
+    expect(repository.merges).toHaveLength(0)
+    expect(report.tasks[0].status).toBe("failure")
+  })
+
+  it("merge-to-main resume re-derives durable state idempotently for already-checked heads", async () => {
+    const repository = new FakeRepository()
+    const containers = new FakeContainers()
+    const github = new FakeControlPlane()
+    const plan = fixturePlan("merge-to-main")
+    const first = await runAgentExecutionPlan(plan, { repository, containers, controlPlane: github, concurrency: 2 })
+    expect(first.ok).toBe(true)
+
+    // Simulate a checkpoint resume: durable heads survive, no new work.
+    const mergesBefore = repository.merges.length
+    const resumed = await runAgentExecutionPlan(plan, { repository, containers, controlPlane: github, concurrency: 2, resume: false })
+    expect(resumed.ok).toBe(true)
+    expect(containers.calls).toBe(3)
+    expect(repository.merges.length).toBe(mergesBefore * 2)
+  })
+
+  it("forwards each task's frozen acceptance to the control plane for branch verification", async () => {
+    const repository = new FakeRepository()
+    const containers = new FakeContainers()
+    const github = new FakeControlPlane()
+    const plan = fixturePlan()
+    const report = await runAgentExecutionPlan(plan, { repository, containers, controlPlane: github, concurrency: 2 })
+    expect(report.ok).toBe(true)
+    expect(github.checkedAcceptance.length).toBeGreaterThan(0)
+    expect(github.checkedAcceptance.every((item) => item.commands)).toBe(true)
   })
 })

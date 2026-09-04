@@ -1,6 +1,6 @@
 import type { AgentExecutionCheckResult } from "@spec/core"
 import { commandFailure, runProcess, type ProcessResult } from "./process"
-import type { AgentExecutionGitHubPort, PullRequestRecord } from "./ports"
+import type { AgentExecutionControlPlanePort, PullRequestRecord, UpsertPullRequestInput, WaitForChecksInput } from "./ports"
 
 export interface GitHubCliAdapterOptions {
   cli?: string
@@ -22,7 +22,7 @@ interface GhPullRequestHead {
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 
-export class GitHubCliAdapter implements AgentExecutionGitHubPort {
+export class GitHubCliAdapter implements AgentExecutionControlPlanePort {
   private readonly options: GitHubCliAdapterOptions
 
   constructor(options: GitHubCliAdapterOptions = {}) {
@@ -45,13 +45,10 @@ export class GitHubCliAdapter implements AgentExecutionGitHubPort {
     return { number: parsed.number, url: parsed.url, state: parsed.state.toLowerCase() as PullRequestRecord["state"] }
   }
 
-  async upsertPullRequest(input: {
-    repository: string
-    head: string
-    base: string
-    title: string
-    body: string
-  }): Promise<PullRequestRecord> {
+  // Acceptance is ignored here: the repository's spec-generation workflow
+  // resolves each task's frozen commands from the immutable plan ref, so the
+  // GitHub check is already a replay of the same contract.
+  async upsertPullRequest(input: UpsertPullRequestInput): Promise<PullRequestRecord> {
     const existing = await this.findPullRequest(input.repository, input.head)
     if (existing) {
       // A merged PR is already a durable successful publication of this
@@ -89,12 +86,7 @@ export class GitHubCliAdapter implements AgentExecutionGitHubPort {
     throw commandFailure(lastFailure)
   }
 
-  async waitForChecks(input: {
-    repository: string
-    pullRequest: number
-    requiredChecks: string[]
-    expectedHeadSha: string
-  }): Promise<AgentExecutionCheckResult[]> {
+  async waitForChecks(input: WaitForChecksInput): Promise<AgentExecutionCheckResult[]> {
     if (input.requiredChecks.length === 0) return []
     const deadline = Date.now() + (this.options.checkTimeoutMs ?? 30 * 60_000)
     while (Date.now() < deadline) {

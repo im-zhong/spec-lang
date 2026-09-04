@@ -351,7 +351,8 @@ export interface AgentExecutionEnvironment {
   toolchainLockHash: string
   /** Frozen coding-agent settings that can affect generated output. */
   agent: {
-    model: string
+    /** Explicit Claude model override; omitted means use the CLI's default model. */
+    model?: string
     effort: "low" | "medium" | "high" | "xhigh" | "max"
     maxTurns: number
     /** Maximum agent containers scheduled concurrently inside this shot. */
@@ -416,7 +417,18 @@ export interface AgentExecutionTask {
   acceptance?: AgentExecutionAcceptance
 }
 
-export type AgentExecutionMergePolicy = "pull-request" | "merge-queue"
+/**
+ * How a fully checked task head lands on the default branch.
+ *
+ * - "pull-request": task branches stay PRs; a human merges the sink PR.
+ * - "merge-queue": the sink PR enters GitHub's merge queue.
+ * - "merge-to-main": the team model — every feature-node branch runs its own
+ *   internal acceptance, then deterministic code (merge-tree + commit-tree)
+ *   merges it into the default branch. The compiler's scope partition is the
+ *   guarantee that those merges never conflict; a conflict is a contract
+ *   defect and fails loud.
+ */
+export type AgentExecutionMergePolicy = "pull-request" | "merge-queue" | "merge-to-main"
 
 /** Byte-stable execution envelope for one compiler-owned agent DAG. */
 export interface AgentExecutionPlan {
@@ -471,6 +483,8 @@ export interface AgentExecutionTaskResult {
   branch?: string
   integrationBaseSha?: string
   headSha?: string
+  /** Default-branch head produced by the deterministic merge-to-main integration. */
+  mergedSha?: string
   pullRequest?: { number: number; url: string }
   checks: AgentExecutionCheckResult[]
   startedAt?: string

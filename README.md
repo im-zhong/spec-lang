@@ -186,7 +186,7 @@ Execute the generator DAG through GitHub:
 spec generate examples/media-platform/app.spec.ts \
   --run-id media-platform-v1 \
   --image ghcr.io/OWNER/spec-agent@sha256:DIGEST \
-  --model MODEL_ID --effort high --max-turns 100 \
+  --effort high --max-turns 100 \
   --target-dir products/media-platform/backend \
   --shots 2 --concurrency 2
 ```
@@ -215,7 +215,7 @@ spec generate <file>  compile → blueprint → agent shots → conformance + re
 --shots <n>         independent generations (default 3) — all must conform
                     on the FIRST attempt and expose an identical interface
 --dry-run           plan only (blueprint + DAG), no agent
---model <id>        pinned coding-agent model (required to execute)
+--model <id>        optional model override (default: Claude CLI selection)
 --effort <level>    pinned low|medium|high|xhigh|max (required to execute)
 --max-turns <n>     pinned turn budget (required to execute)
 --run-id <id>       stable GitHub run id (required unless --dry-run)
@@ -225,6 +225,13 @@ spec generate <file>  compile → blueprint → agent shots → conformance + re
                      optional temporary repository prefix; the generator
                      creates a distinct private repository for every shot
 --concurrency <n>   parallel ready generator nodes (default 2)
+--execution <mode>  github (default) or local — per-shot bare Git remotes on
+                    this machine; fast iteration only, not golden-rule evidence
+--runtime <mode>    docker (default, pinned image) or host (agent runs directly
+                    in the shot worktree; host provides the toolchain)
+--merge-policy <p>  merge-to-main (default; deterministic code merge per
+                    feature node after its own tests pass), pull-request,
+                    or merge-queue
 --resume            continue the same run from GitHub branches/checks
 ```
 

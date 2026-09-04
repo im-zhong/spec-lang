@@ -302,7 +302,7 @@ export default defineApp({ name: "Broken", entities: [] })
     expect(result.stderr).toContain("Specification invalid")
   })
 
-  it("refuses an executable run with implicit agent settings", () => {
+  it("allows the Claude CLI default model but still requires bounded agent settings", () => {
     const exampleDir = path.join(projectRoot, "examples", "booking")
     const result = runCli([
       "generate", "app.spec.ts",
@@ -310,6 +310,7 @@ export default defineApp({ name: "Broken", entities: [] })
       "--image", `ghcr.io/owner/spec-agent@sha256:${"b".repeat(64)}`,
     ], exampleDir)
     expect(result.status).toBe(2)
-    expect(result.stderr).toContain("--model, --effort, and --max-turns")
+    expect(result.stderr).toContain("--effort, and --max-turns")
+    expect(result.stderr).not.toContain("--model")
   })
 })

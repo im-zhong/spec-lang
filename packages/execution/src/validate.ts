@@ -41,6 +41,9 @@ export function validateAgentExecutionPlan(plan: AgentExecutionPlan): Diagnostic
   if (!safeRef(plan.runId, true)) diagnostics.push(diagnostic("AGENT_EXECUTION_RUN_ID_INVALID", "runId must be one safe Git ref segment."))
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(plan.repository)) diagnostics.push(diagnostic("AGENT_EXECUTION_REPOSITORY_INVALID", "repository must use owner/name form."))
   if (!safeRef(plan.defaultBranch)) diagnostics.push(diagnostic("AGENT_EXECUTION_DEFAULT_BRANCH_INVALID", "defaultBranch must be a safe Git branch name."))
+  if (!["pull-request", "merge-queue", "merge-to-main"].includes(plan.mergePolicy)) {
+    diagnostics.push(diagnostic("AGENT_EXECUTION_MERGE_POLICY_INVALID", "mergePolicy must be pull-request, merge-queue, or merge-to-main."))
+  }
   if (!safeRef(plan.branchPrefix)) diagnostics.push(diagnostic("AGENT_EXECUTION_BRANCH_PREFIX_INVALID", "branchPrefix must be a safe Git branch prefix."))
   if (!GIT_SHA.test(plan.rootBaseSha)) diagnostics.push(diagnostic("AGENT_EXECUTION_BASE_SHA_INVALID", "rootBaseSha must be a full 40- or 64-character lowercase Git SHA."))
   if (!OCI_DIGEST.test(plan.environment.image)) diagnostics.push(diagnostic("AGENT_EXECUTION_IMAGE_NOT_IMMUTABLE", "Agent environment image must be pinned by sha256 digest."))
@@ -48,13 +51,13 @@ export function validateAgentExecutionPlan(plan: AgentExecutionPlan): Diagnostic
     diagnostics.push(diagnostic("AGENT_EXECUTION_ENVIRONMENT_HASH_INVALID", "Environment definition and toolchain lock hashes must be sha256 digests."))
   }
   const agent = plan.environment.agent
-  if (!agent || typeof agent.model !== "string" || agent.model.trim().length === 0 ||
+  if (!agent || (agent.model !== undefined && (typeof agent.model !== "string" || agent.model.trim().length === 0)) ||
       !["low", "medium", "high", "xhigh", "max"].includes(agent.effort) ||
       !Number.isInteger(agent.maxTurns) || agent.maxTurns < 1 ||
       !Number.isInteger(agent.maxConcurrency) || agent.maxConcurrency < 1) {
     diagnostics.push(diagnostic(
       "AGENT_EXECUTION_AGENT_ENVIRONMENT_INVALID",
-      "Agent model, effort, maxTurns, and maxConcurrency must be explicitly pinned.",
+      "Agent model override (when present), effort, maxTurns, and maxConcurrency must be valid.",
     ))
   }
   if (agentExecutionPlanFingerprint(plan) !== plan.fingerprint) diagnostics.push(diagnostic("AGENT_EXECUTION_FINGERPRINT_MISMATCH", "Agent execution plan fingerprint does not match its canonical definition."))

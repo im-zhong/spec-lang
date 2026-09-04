@@ -4,7 +4,7 @@ import * as path from "node:path"
 import type { AgentExecutionPlan, AgentExecutionTaskResult, ResolvedAgentExecutionTask } from "@spec/core"
 import { agentExecutionPlanRef, taskBaseRef } from "./plan"
 import { commandFailure, runProcess, type ProcessResult } from "./process"
-import type { CommitResult, AgentExecutionRepositoryPort, IntegrationBase, PublishedAgentExecutionPlan } from "./ports"
+import type { CommitResult, AgentExecutionRepositoryPort, IntegrationBase, MergeResult, PublishedAgentExecutionPlan } from "./ports"
 
 const FULL_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 const REMOTE_READ_ATTEMPTS = 3
@@ -158,6 +158,55 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     taskId: string,
     dependencyResults: AgentExecutionTaskResult[],
   ): Promise<IntegrationBase> {
+    if (plan.mergePolicy === "merge-to-main") {
+      // The team model, made deterministic: main is the single integration
+      // line, and a node's integration base is the main commit at which its
+      // dependency closure completed — NOT the main head at start time. All
+      // siblings of a dependency therefore branch from the exact same commit
+      // no matter when the scheduler releases them, so workspace content is
+      // independent of scheduling. Every checked head lands through exactly
+      // one two-parent integration commit whose second parent is that task
+      // head, so the landing commit is mechanically locatable on main's
+      // first-parent chain.
+      const mainSha = await this.fetchRemoteBranch(plan.defaultBranch)
+      if (dependencyResults.length === 0) {
+        const rooted = await runProcess(this.gitCli, ["merge-base", "--is-ancestor", plan.rootBaseSha, mainSha], { cwd: this.repoRoot })
+        if (!rooted.ok) throw new Error(`default branch ${plan.defaultBranch} (${mainSha}) does not contain the run's root base ${plan.rootBaseSha}`)
+        return { sha: plan.rootBaseSha, ref: plan.defaultBranch }
+      }
+      const chain = await this.git(["log", "--first-parent", "--format=%H %P", mainSha])
+      const lines = chain.stdout.trim() ? chain.stdout.trim().split("\n") : []
+      // lines[0] is the newest integration; index grows toward the root.
+      const landingIndex = new Map<string, number>()
+      for (let index = 0; index < lines.length; index++) {
+        const [commit, ...parents] = lines[index]!.split(/\s+/)
+        for (const dependency of dependencyResults) {
+          if (dependency.headSha && parents.includes(dependency.headSha)) landingIndex.set(dependency.taskId, index)
+        }
+      }
+      let newest: number | undefined
+      for (const dependency of dependencyResults) {
+        if (!dependency.headSha) throw new Error(`dependency "${dependency.taskId}" has no published head SHA`)
+        const index = landingIndex.get(dependency.taskId)
+        if (index === undefined) {
+          throw new Error(
+            `dependency "${dependency.taskId}" head ${dependency.headSha} has not landed on ${plan.defaultBranch} (${mainSha}); ` +
+            `task "${taskId}" may only start from a main that contains all of its dependencies`,
+          )
+        }
+        // lines[0] is the newest commit, so the last dependency to land has
+        // the smallest index; that commit's ancestry contains the whole closure.
+        newest = newest === undefined ? index : Math.min(newest, index)
+      }
+      const base = lines[newest!]!.split(/\s+/)[0]!
+      if (!FULL_SHA.test(base)) throw new Error(`could not resolve a landed integration base for task "${taskId}"`)
+      for (const dependency of dependencyResults) {
+        const contained = await runProcess(this.gitCli, ["merge-base", "--is-ancestor", dependency.headSha!, base], { cwd: this.repoRoot })
+        if (!contained.ok) throw new Error(`integration base ${base} for task "${taskId}" does not contain dependency "${dependency.taskId}"`)
+      }
+      return { sha: base, ref: plan.defaultBranch }
+    }
+
     const parents = [...dependencyResults].sort((left, right) => left.taskId.localeCompare(right.taskId))
     for (const parent of parents) {
       if (!parent.headSha || !parent.branch) throw new Error(`dependency "${parent.taskId}" has no published branch/head SHA`)
@@ -198,6 +247,60 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     const ref = taskBaseRef(plan, taskId)
     await this.publishImmutableRef(ref, current)
     return { sha: current, ref }
+  }
+
+  /**
+   * The team-model integration step, executed by code: merge one fully
+   * checked feature-node head into the default branch with a deterministic
+   * two-parent commit, then publish it. Callers serialize per process; the
+   * bounded retry covers a remote default branch that moved concurrently
+   * (an interleaved resume or a push from outside this process).
+   */
+  async mergeIntoDefaultBranch(plan: AgentExecutionPlan, taskId: string, headSha: string): Promise<MergeResult> {
+    if (!FULL_SHA.test(headSha)) throw new Error(`merge-to-main received an invalid commit SHA for task "${taskId}": ${headSha}`)
+    await this.git(["cat-file", "-e", `${headSha}^{commit}`])
+    for (let attempt = 1; ; attempt++) {
+      const mainSha = await this.fetchRemoteBranch(plan.defaultBranch)
+      const alreadyMerged = await runProcess(this.gitCli, ["merge-base", "--is-ancestor", headSha, mainSha], { cwd: this.repoRoot })
+      if (alreadyMerged.ok) return { sha: mainSha, alreadyMerged: true }
+      const merged = await runProcess(this.gitCli, ["merge-tree", "--write-tree", mainSha, headSha], {
+        cwd: this.repoRoot,
+        timeoutMs: 120_000,
+      })
+      if (!merged.ok) {
+        throw new Error(
+          `merge-to-main conflict for task "${taskId}" merging ${headSha} into ${plan.defaultBranch}@${mainSha}: ` +
+          `the compiler scope partition should make this impossible — fix the contract, do not resolve by hand. ` +
+          `${(merged.stdout + merged.stderr).slice(-4000)}`,
+        )
+      }
+      const tree = merged.stdout.trim().split(/\s+/)[0]
+      if (!FULL_SHA.test(tree ?? "")) throw new Error(`git merge-tree returned no tree for task "${taskId}"`)
+      const message = `spec integrate: ${plan.runId}/${taskId}\n\n` +
+        `Spec-Run: ${plan.runId}\nSpec-Task: ${taskId}\nSpec-Fingerprint: ${plan.fingerprint}\n` +
+        `Merged-Into: ${plan.defaultBranch}\n`
+      const commit = await this.git(
+        ["commit-tree", tree, "-p", mainSha, "-p", headSha, "-m", message],
+        this.repoRoot,
+        {
+          GIT_AUTHOR_NAME: "spec agent execution",
+          GIT_AUTHOR_EMAIL: "spec-agent-execution@invalid.local",
+          GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
+          GIT_COMMITTER_NAME: "spec agent execution",
+          GIT_COMMITTER_EMAIL: "spec-agent-execution@invalid.local",
+          GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
+        },
+      )
+      const integration = commit.stdout.trim()
+      if (!FULL_SHA.test(integration)) throw new Error(`git commit-tree returned an invalid integration SHA for task "${taskId}"`)
+      const pushed = await runProcess(this.gitCli, ["push", this.remote, `${integration}:refs/heads/${plan.defaultBranch}`], {
+        cwd: this.repoRoot,
+        timeoutMs: 180_000,
+      })
+      if (pushed.ok) return { sha: integration, alreadyMerged: false }
+      if (attempt >= 3) throw commandFailure(pushed)
+      // The remote default branch moved under us; re-derive from a fresh fetch.
+    }
   }
 
   async verifyCommitProvenance(
@@ -262,8 +365,14 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
       )
     }
     if (task.scope.length > 0) await this.git(["add", "--all", "--", ...task.scope], workspace)
-    const whitespace = await runProcess(this.gitCli, ["diff", "--cached", "--check"], { cwd: workspace, timeoutMs: 120_000 })
-    if (!whitespace.ok) throw commandFailure(whitespace)
+    // Materialization nodes commit compiler-owned bytes exactly. Those bytes
+    // may intentionally preserve source/oracle trailing blank lines, so the
+    // agent-facing whitespace policy must not reinterpret them. Agent output
+    // remains subject to Git's whitespace-error check.
+    if (task.executor !== "materialize") {
+      const whitespace = await runProcess(this.gitCli, ["diff", "--cached", "--check"], { cwd: workspace, timeoutMs: 120_000 })
+      if (!whitespace.ok) throw commandFailure(whitespace)
+    }
     const dependencyTrailers = Object.entries(task.dependencyHeadShas)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, sha]) => `Depends-On-Sha: ${id}=${sha}`)

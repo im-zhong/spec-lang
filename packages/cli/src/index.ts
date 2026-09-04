@@ -81,6 +81,9 @@ interface CliArgs {
   concurrency: number
   requiredCheck: string
   resume: boolean
+  execution: "github" | "local"
+  runtime: "docker" | "host"
+  mergePolicy: "pull-request" | "merge-queue" | "merge-to-main"
 }
 
 function shellQuote(value: string): string {
@@ -105,6 +108,9 @@ function parseArgs(argv: string[]): CliArgs {
     effort: undefined,
     requiredCheck: "spec-generation",
     resume: false,
+    execution: "github",
+    runtime: "docker",
+    mergePolicy: "merge-to-main",
   }
   const positional: string[] = []
   for (let i = 0; i < argv.length; i++) {
@@ -123,6 +129,9 @@ function parseArgs(argv: string[]): CliArgs {
     else if (arg === "--concurrency") args.concurrency = Number(argv[++i])
     else if (arg === "--check") args.requiredCheck = argv[++i]
     else if (arg === "--resume") args.resume = true
+    else if (arg === "--execution") args.execution = argv[++i] as CliArgs["execution"]
+    else if (arg === "--runtime") args.runtime = argv[++i] as CliArgs["runtime"]
+    else if (arg === "--merge-policy") args.mergePolicy = argv[++i] as CliArgs["mergePolicy"]
     else positional.push(arg)
   }
   args.command = positional[0]
@@ -148,7 +157,7 @@ Usage:
 Options:
   --dry-run                 Plan only: write blueprint + DAG, no agent
   --shots <n>               Independent generations per spec (default 3)
-  --model <id>              Pinned coding-agent model (required to execute)
+  --model <id>              Optional coding-agent model override (default: Claude CLI selection)
   --effort <level>          Pinned low|medium|high|xhigh|max (required to execute)
   --max-turns <n>           Pinned agent turn budget (required to execute)
   --run-id <id>             Stable GitHub generation run id (required to execute)
@@ -157,6 +166,17 @@ Options:
   --repository <owner/base> Temporary per-shot repository name prefix
   --concurrency <n>         Maximum parallel generator nodes (default 2)
   --check <name>            Required GitHub check (default spec-generation)
+  --execution <mode>        Durable-branch control plane: github (default) or
+                            local — a per-shot bare Git remote on this machine,
+                            no GitHub round trips (fast iteration only; the
+                            golden rule still requires github)
+  --runtime <mode>          Where the agent and acceptance commands execute:
+                            docker (default, pinned image) or host (directly in
+                            the shot worktree; the host must provide the
+                            toolchain)
+  --merge-policy <policy>   How checked task heads land: merge-to-main (default,
+                            deterministic code merge after each node's own
+                            tests pass), pull-request, or merge-queue
   --resume                  Resume the same immutable run from GitHub refs
   --debug                   Show internal stack traces
   --help                    Show this help
@@ -165,9 +185,9 @@ There is deliberately no repair option: a nonconformant shot is a
 specification defect. Pin the behavior in the spec/blueprint, then
 regenerate all shots.
 
-Headless sessions run in safe mode, authorize only the audited generation
-file/Python tools, and require model, effort, and turn budget to be frozen in
-the immutable plan.
+Headless sessions run in safe mode and authorize only the audited generation
+file/Python tools. The immutable plan freezes whether a model override is
+present, plus effort and turn budget.
 `
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -188,14 +208,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const projectRoot = process.cwd()
   try {
     if ((args.command === "generate" || args.command === "generate-frontend") && !args.dryRun) {
-      if (!args.runId || !args.image || !args.model || !args.effort || args.maxTurns === undefined) {
-        throw new Error("GitHub generation requires --run-id, --image, --model, --effort, and --max-turns; use --dry-run to plan without executing")
+      if (!args.runId || !args.image || !args.effort || args.maxTurns === undefined) {
+        throw new Error("GitHub generation requires --run-id, --image, --effort, and --max-turns; use --dry-run to plan without executing")
       }
       if (!["low", "medium", "high", "xhigh", "max"].includes(args.effort)) throw new Error("--effort must be low, medium, high, xhigh, or max")
       if (!Number.isInteger(args.maxTurns) || args.maxTurns < 1) throw new Error("--max-turns must be a positive integer")
       if (!Number.isInteger(args.shots) || args.shots < 1) throw new Error("--shots must be a positive integer")
       if (!Number.isInteger(args.concurrency) || args.concurrency < 1) throw new Error("--concurrency must be a positive integer")
       if (!args.requiredCheck.trim()) throw new Error("--check must be non-empty")
+      if (!["github", "local"].includes(args.execution)) throw new Error("--execution must be github or local")
+      if (!["docker", "host"].includes(args.runtime)) throw new Error("--runtime must be docker or host")
+      if (!["pull-request", "merge-queue", "merge-to-main"].includes(args.mergePolicy)) throw new Error("--merge-policy must be pull-request, merge-queue, or merge-to-main")
+      if (args.execution === "local" && args.mergePolicy !== "merge-to-main") throw new Error("--execution local requires --merge-policy merge-to-main (merged main is the durable landing evidence)")
     }
     const result = await compile(args.file, {
       projectRoot,
@@ -307,7 +331,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         repoRoot: projectRoot, runId: args.runId!, image: args.image!, repository: args.repository,
         targetDirectory: args.targetDir, appName: result.ir.app.name, target: "workspace",
         shots: args.shots, concurrency: args.concurrency, requiredCheck: args.requiredCheck,
-        resume: args.resume, model: args.model!, effort: args.effort!, maxTurns: args.maxTurns!, shotSpec, ir: result.ir,
+        resume: args.resume, model: args.model, effort: args.effort!, maxTurns: args.maxTurns!,
+        execution: args.execution, runtime: args.runtime, mergePolicy: args.mergePolicy, shotSpec, ir: result.ir,
       })
       return ok ? 0 : 1
     }
@@ -369,7 +394,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         repoRoot: projectRoot, runId: args.runId!, image: args.image!, repository: args.repository,
         targetDirectory: args.targetDir, appName: plan.blueprint.app.name, target: "frontend",
         shots: args.shots, concurrency: args.concurrency, requiredCheck: args.requiredCheck,
-        resume: args.resume, model: args.model!, effort: args.effort!, maxTurns: args.maxTurns!, shotSpec, ir: result.ir,
+        resume: args.resume, model: args.model, effort: args.effort!, maxTurns: args.maxTurns!,
+        execution: args.execution, runtime: args.runtime, mergePolicy: args.mergePolicy, shotSpec, ir: result.ir,
       })
       return ok ? 0 : 1
     }
@@ -447,7 +473,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       repoRoot: projectRoot, runId: args.runId!, image: args.image!, repository: args.repository,
       targetDirectory: args.targetDir, appName: plan.blueprint.app.name, target: "backend",
       shots: args.shots, concurrency: args.concurrency, requiredCheck: args.requiredCheck,
-      resume: args.resume, model: args.model!, effort: args.effort!, maxTurns: args.maxTurns!, shotSpec, ir: result.ir,
+      resume: args.resume, model: args.model, effort: args.effort!, maxTurns: args.maxTurns!,
+        execution: args.execution, runtime: args.runtime, mergePolicy: args.mergePolicy, shotSpec, ir: result.ir,
     })
     return ok ? 0 : 1
   } catch (err) {

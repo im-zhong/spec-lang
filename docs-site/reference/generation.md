@@ -113,14 +113,14 @@ interface AgentExecutionPlan {
     devcontainerHash: string
     toolchainLockHash: string
     agent: {
-      model: string
+      model?: string
       effort: "low" | "medium" | "high" | "xhigh" | "max"
       maxTurns: number
       maxConcurrency: number
     }
   }
   acceptance: AgentExecutionAcceptance
-  mergePolicy: "pull-request" | "merge-queue"
+  mergePolicy: "pull-request" | "merge-queue" | "merge-to-main"
   tasks: AgentExecutionTask[]
   fingerprint: string
 }

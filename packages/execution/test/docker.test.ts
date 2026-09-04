@@ -78,10 +78,14 @@ describe("Docker agent executor", () => {
       const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[])
       const creates = calls.filter((args) => args[0] === "create")
       expect(creates[0].join(" ")).toContain("target=/opt/secret,readonly")
+      expect(creates[0]).toContain("type=volume,destination=/home/node")
+      expect(creates[0].join(" ")).not.toContain("/home/node:rw,nosuid,size=2g")
       expect(creates[0]).toContain("ANTHROPIC_API_KEY")
       expect(creates[1].join(" ")).not.toContain("/opt/secret")
       expect(creates[1]).not.toContain("ANTHROPIC_API_KEY")
-      expect(calls.filter((args) => args[0] === "rm")).toHaveLength(2)
+      const removals = calls.filter((args) => args[0] === "rm")
+      expect(removals).toHaveLength(2)
+      expect(removals.every((args) => args.includes("-v"))).toBe(true)
     } finally {
       if (previous === undefined) delete process.env.SPEC_DOCKER_LOG
       else process.env.SPEC_DOCKER_LOG = previous
@@ -166,7 +170,7 @@ if (args[0] === "exec" && args.includes("--reviewer")) {
       expect(result.checks.map((check) => check.name)).toEqual([
         "generation/loop/1/implementation",
         "generation/loop/1/review",
-        "generation/container/1",
+        "generation/acceptance/1",
       ])
       const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[])
       expect(calls.filter((args) => args.includes("--writer"))).toHaveLength(1)

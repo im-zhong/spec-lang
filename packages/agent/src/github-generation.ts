@@ -19,6 +19,8 @@ import {
   DockerAgentExecutor,
   GitAgentExecutionRepository,
   GitHubCliAdapter,
+  HostAgentExecutor,
+  LocalGitControlPlane,
   runAgentExecutionPlan,
   type AgentExecutionReport,
 } from "@spec/execution"
@@ -51,9 +53,13 @@ export interface GitHubGenerationRunOptions {
   worktreeRoot?: string
   concurrency?: number
   resume?: boolean
-  model: string
+  model?: string
   effort: "low" | "medium" | "high" | "xhigh" | "max"
   maxTurns: number
+  /** Where the agent and acceptance commands execute: a pinned container (default) or directly on this host. */
+  runtime?: "docker" | "host"
+  /** Durable-branch control plane: real GitHub PRs/checks (default) or a plain local Git remote. */
+  execution?: "github" | "local"
   onTaskStart?: (taskId: string) => void
   onTaskEnd?: (taskId: string, ok: boolean, headSha?: string) => void
 }
@@ -262,17 +268,30 @@ export async function runGitHubGeneration(
     }),
   ]
 
+  // The two environment axes are assembled independently: the runtime picks
+  // where the agent and acceptance commands execute, the control plane picks
+  // which durable-branch implementation verifies and lands task heads.
+  const containers = options.runtime === "host"
+    ? new HostAgentExecutor({ agentCommand, reviewerAgentCommand: reviewerCommand })
+    : new DockerAgentExecutor({
+        mounts,
+        environmentVariables,
+        literalEnvironment: { PYTHONDONTWRITEBYTECODE: "1" },
+        initializationCommand: ["/bin/sh", "-lc", bootstrap],
+        agentCommand,
+        reviewerAgentCommand: reviewerCommand,
+      })
+  const controlPlane = options.execution === "local"
+    ? new LocalGitControlPlane({
+        repoRoot,
+        verificationRoot: path.join(path.dirname(worktreeRoot), "verification"),
+      })
+    : new GitHubCliAdapter({ cwd: repoRoot })
+
   return runAgentExecutionPlan(plan, {
     repository: new GitAgentExecutionRepository({ repoRoot, worktreeRoot }),
-    containers: new DockerAgentExecutor({
-      mounts,
-      environmentVariables,
-      literalEnvironment: { PYTHONDONTWRITEBYTECODE: "1" },
-      initializationCommand: ["/bin/sh", "-lc", bootstrap],
-      agentCommand,
-      reviewerAgentCommand: reviewerCommand,
-    }),
-    github: new GitHubCliAdapter({ cwd: repoRoot }),
+    containers,
+    controlPlane,
     concurrency: options.concurrency,
     failFast: true,
     resume: options.resume,

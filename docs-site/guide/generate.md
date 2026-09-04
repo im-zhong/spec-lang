@@ -19,7 +19,7 @@ merge, and resume protocol.
 - `uv` and the required Python toolchain for local deterministic checks;
 - a clean `spec-lang` development checkout for compiler work.
 
-The model, effort, maximum turns, container digest, and run id are mandatory
+Effort, maximum turns, container digest, and run id are mandatory
 for execution because they become immutable plan inputs.
 
 ## 1. Write and check the specification
@@ -59,7 +59,6 @@ byte for byte. If they differ, do not start real shots.
 pnpm spec generate examples/media-platform/app.spec.ts \
   --run-id media-platform-v1 \
   --image ghcr.io/OWNER/spec-agent@sha256:DIGEST \
-  --model MODEL_ID \
   --effort medium \
   --max-turns 100 \
   --target-dir products/media-platform/backend \
@@ -153,7 +152,7 @@ Use the exact original command with `--resume`:
 pnpm spec generate examples/media-platform/app.spec.ts \
   --run-id media-platform-v1 \
   --image ghcr.io/OWNER/spec-agent@sha256:DIGEST \
-  --model MODEL_ID --effort medium --max-turns 100 \
+  --effort medium --max-turns 100 \
   --target-dir products/media-platform/backend \
   --shots 2 --concurrency 2 \
   --resume
@@ -190,7 +189,7 @@ outcome in `docs/golden-rule-results.md`.
 | `--shots <n>` | Number of independent repositories/generations | `3` |
 | `--run-id <id>` | Stable run identity | required for execution |
 | `--image <repo@sha256:...>` | Immutable agent/container environment | required for execution |
-| `--model <id>` | Pinned coding-agent model | required for execution |
+| `--model <id>` | Optional coding-agent model override | Claude CLI selection |
 | `--effort <level>` | Pinned `low\|medium\|high\|xhigh\|max` effort | required for execution |
 | `--max-turns <n>` | Pinned task turn limit | required for execution |
 | `--target-dir <dir>` | Product path inside each shot repository | derived from app and target |

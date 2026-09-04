@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { execFileSync } from "node:child_process"
 import * as fs from "node:fs"
 import * as path from "node:path"
-import type { AgentExecutionEnvironment, SpecIR } from "@spec/core"
+import type { AgentExecutionEnvironment, AgentExecutionMergePolicy, SpecIR } from "@spec/core"
 import { stableStringify } from "@spec/compiler"
 import { lowerContainers } from "@spec/container"
 import {
@@ -23,9 +23,14 @@ export interface GitHubGenerateOptions {
   concurrency: number
   requiredCheck: string
   resume: boolean
-  model: string
+  model?: string
   effort: "low" | "medium" | "high" | "xhigh" | "max"
   maxTurns: number
+  /** Durable-branch control plane: real GitHub PRs/checks (default) or a plain local Git remote. */
+  execution: "github" | "local"
+  /** Where the agent and acceptance commands execute: a pinned container (default) or this host. */
+  runtime: "docker" | "host"
+  mergePolicy: AgentExecutionMergePolicy
   shotSpec: ShotSpec
   ir: SpecIR
 }
@@ -294,6 +299,67 @@ export function prepareTemporaryShotRepository(input: {
   return { repository, localRoot, defaultBranch, headSha, created: !exists }
 }
 
+/**
+ * Provision the fully local fast-iteration topology: one bare Git remote per
+ * shot plus its clone, no GitHub involved. The bare remote gives every shot
+ * the same durable-branch semantics (task branches, immutable plan ref,
+ * deterministic main merges) that the GitHub control plane provides, so a
+ * local run exercises the identical orchestration path at a fraction of the
+ * latency. Not golden-rule evidence — that still requires GitHub isolation.
+ */
+export function prepareLocalShotRepository(input: {
+  sourceRoot: string
+  repository: string
+  localRoot: string
+  runId: string
+  shot: string
+  resume: boolean
+}): TemporaryShotRepository {
+  const { sourceRoot, repository, localRoot, runId, shot, resume } = input
+  const bare = `${localRoot}.git`
+  if (!resume && (fs.existsSync(localRoot) || fs.existsSync(bare))) {
+    throw new Error(`local shot repository already exists at ${localRoot}; choose a new --run-id or use --resume`)
+  }
+  if (resume && (!fs.existsSync(localRoot) || !fs.existsSync(bare))) {
+    throw new Error(`cannot resume: local shot repository ${localRoot} does not exist`)
+  }
+  if (!fs.existsSync(localRoot)) {
+    fs.mkdirSync(path.dirname(bare), { recursive: true })
+    git(sourceRoot, ["init", "--bare", "-b", "main", bare])
+    execFileSync("git", ["clone", bare, localRoot], { cwd: sourceRoot, stdio: ["ignore", "pipe", "pipe"] })
+  }
+  const actualRemote = git(localRoot, ["config", "--get", "remote.origin.url"])
+  if (path.resolve(actualRemote) !== path.resolve(bare)) {
+    throw new Error(`local checkout ${localRoot} points at ${actualRemote}, expected ${bare}`)
+  }
+
+  const defaultBranch = "main"
+  if (!resume) {
+    fs.writeFileSync(path.join(localRoot, "README.md"), `Disposable local spec generation target for ${runId}/${shot}.\n`, "utf8")
+    git(localRoot, ["add", "README.md"])
+    execFileSync("git", [
+      "-c", "user.name=spec generator",
+      "-c", "user.email=spec-generator@invalid.local",
+      "commit", "-m", `chore: bootstrap local spec repository for ${runId}/${shot}`,
+    ], { cwd: localRoot, stdio: ["ignore", "pipe", "pipe"] })
+    git(localRoot, ["push", "-u", "origin", `HEAD:${defaultBranch}`])
+  } else {
+    git(localRoot, ["fetch", "origin", defaultBranch])
+    git(localRoot, ["checkout", "--detach", `origin/${defaultBranch}`])
+  }
+
+  const headSha = git(localRoot, ["rev-parse", "HEAD"])
+  const published = git(localRoot, ["ls-remote", "--heads", "origin", `refs/heads/${defaultBranch}`])
+    .split("\n")
+    .some((line) => line.trim().split(/\s+/)[0] === headSha)
+  if (!published) throw new Error(`local repository bootstrap ${headSha} is not published to ${bare}`)
+  return { repository, localRoot, defaultBranch, headSha, created: !resume }
+}
+
+export function localShotRepositoryName(appName: string, target: string, runId: string, shot: string): string {
+  return `local/${slug(`spec-${appName}-${target}`)}-${slug(runId)}-${slug(shot)}`
+}
+
 function hashFiles(root: string, files: string[]): string {
   const hash = createHash("sha256")
   for (const file of [...files].sort()) {
@@ -337,9 +403,14 @@ function assertTargetIsTracked(root: string, target: string): void {
 }
 
 export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise<boolean> {
-  const prefix = repositoryPrefix(options.repoRoot, options.repository, options.appName, options.target)
+  const prefix = options.execution === "local"
+    ? undefined
+    : repositoryPrefix(options.repoRoot, options.repository, options.appName, options.target)
   if (options.requiredCheck !== "spec-generation") {
     throw new Error('temporary repositories expose the compiler-owned required check "spec-generation"')
+  }
+  if (options.execution === "local" && options.mergePolicy !== "merge-to-main") {
+    throw new Error("local execution requires --merge-policy merge-to-main: without GitHub pull requests, merged main is the only durable landing evidence")
   }
   const containerPlan = lowerContainers(options.ir)
   const finalMaterializations = containerPlan.containers.length === 0 ? [] : [{
@@ -362,8 +433,18 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
   const repositories = Array.from({ length: options.shots }, (_, index) => {
     const shot = `shot-${index + 1}`
     const runId = options.shots === 1 ? options.runId : `${options.runId}-${shot}`
-    const remote = temporaryShotRepositoryName(prefix.owner, prefix.base, options.runId, shot)
     const localRoot = temporaryShotLocalRoot(options.repoRoot, options.runId, shot)
+    if (options.execution === "local") {
+      return prepareLocalShotRepository({
+        sourceRoot: options.repoRoot,
+        repository: localShotRepositoryName(options.appName, options.target, options.runId, shot),
+        localRoot,
+        runId,
+        shot,
+        resume: options.resume,
+      })
+    }
+    const remote = temporaryShotRepositoryName(prefix!.owner, prefix!.base, options.runId, shot)
     return prepareTemporaryShotRepository({
       sourceRoot: options.repoRoot,
       repository: remote,
@@ -399,6 +480,7 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
         maxConcurrency: perShotConcurrency,
       }),
       requiredChecks: [options.requiredCheck],
+      mergePolicy: options.mergePolicy,
       finalMaterializations,
     })
     const localPlan = path.join(options.repoRoot, ".spec", "generation", runId, "plan.json")
@@ -414,6 +496,8 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
       model: options.model,
       effort: options.effort,
       maxTurns: options.maxTurns,
+      runtime: options.runtime,
+      execution: options.execution,
       onTaskStart: (taskId) => process.stdout.write(`  ⟳ ${shot}/${taskId}\n`),
       onTaskEnd: (taskId, ok, sha) => process.stdout.write(`  ${ok ? "✓" : "✗"} ${shot}/${taskId}${sha ? ` ${sha.slice(0, 12)}` : ""}\n`),
     })

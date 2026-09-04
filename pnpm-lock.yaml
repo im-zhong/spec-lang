@@ -228,6 +228,15 @@ importers:
         specifier: workspace:*
         version: link:../../packages/web
 
+  examples/tiny-fastapi:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:../../packages/fastapi
+
   packages/agent:
     dependencies:
       '@spec/core':

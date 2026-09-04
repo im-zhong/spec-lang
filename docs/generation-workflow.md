@@ -118,7 +118,7 @@ Actual generation uses GitHub/container execution:
 spec generate examples/media-platform/app.spec.ts \
   --run-id media-platform-v1 \
   --image ghcr.io/OWNER/spec-agent@sha256:DIGEST \
-  --model MODEL_ID --effort high --max-turns 100 \
+  --effort high --max-turns 100 \
   --target-dir products/media-platform/backend \
   --shots 2 \
   --concurrency 2
@@ -127,12 +127,30 @@ spec generate examples/media-platform/app.spec.ts \
 spec generate examples/media-platform/app.spec.ts \
   --run-id media-platform-v1 \
   --image ghcr.io/OWNER/spec-agent@sha256:DIGEST \
-  --model MODEL_ID --effort high --max-turns 100 \
+  --effort high --max-turns 100 \
   --target-dir products/media-platform/backend \
   --shots 2 \
   --concurrency 2 \
   --resume
 ```
+
+Fast iteration can skip both GitHub and Docker. `--execution local` gives each
+shot a bare Git remote plus clone under `.spec/generation/`, and
+`--runtime host` runs the agent and acceptance commands directly in the
+per-task worktrees:
+
+```bash
+spec generate examples/media-platform/app.spec.ts \
+  --run-id media-fast-1 \
+  --image ghcr.io/OWNER/spec-agent@sha256:DIGEST \
+  --effort low --max-turns 40 --shots 1 \
+  --execution local --runtime host
+```
+
+Local runs use the identical orchestration path — task branches, per-branch
+verification of the pushed head, and deterministic `merge-to-main` landings —
+but are not golden-rule evidence; that still requires GitHub repository
+isolation.
 
 Multiple shots use independent temporary GitHub repositories, independent
 local checkout/worktree roots, and independent run ids. The generator creates
