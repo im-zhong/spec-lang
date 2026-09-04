@@ -110,6 +110,48 @@ improved accordingly (cblog's final run needed zero repairs).
 | `media-platform-golden-20260903-v6` | 2 new private temporary GitHub repositories + 2 new distinct local roots; original immutable plans resumed over GitHub SSH port 443 after the publication interruption | 0/2; both completed all 20 agent nodes. Shot 1 ran 85 tests: 76 passed and 9 failed (duplicate auth ownership/wrong error, missing `AssetOut.uploadedBy`, blob ABI mismatch). Shot 2 failed the import gate on a top-level `sqlalchemy.DeclarativeBase` import. `containers` was skipped in both | unavailable because neither shot passed individual first-attempt conformance | **terminal conformance failure; defects #23–#28 recorded, full code and evidence preserved, no generated code repaired, and generation paused for design work** |
 | `media-platform-golden-20260903-v7` | repository bootstrap stopped after creating shot 1; no second repository and no agent execution | not reached; HTTPS push of the compiler-owned workflow was rejected because the OAuth token lacks `workflow` scope | unavailable | **pre-execution transport experiment failed; defect #22 pinned and the bootstrap-only repository preserved** |
 
+## Store-platform runs (2026-09-03/04) — first golden-rule exercise of the interface-composite design
+
+Spec: `examples/store-platform/app.spec.ts` (87 lines). Three independent FastAPI
+modules — `warehouse`, `orders`, `reporting` — with two interfaces used
+exclusively between backend modules (`WarehouseApi` provided by warehouse and
+consumed by orders + reporting; `OrderApi` provided by orders and consumed by
+reporting), demonstrating that interfaces bind any module pair, not only
+frontend/backend. Deterministic gates were green before every run (143 unit
+tests, `spec check`, `--dry-run`: 3 modules / 2 interfaces / 18 DAG tasks).
+Target size ~1000 generated lines. Every run used fresh temporary GitHub
+repositories and distinct local roots; all repositories and evidence are
+preserved under `.spec/generation/store-platform-golden-20260903-*` and
+`im-zhong/spec-store-platform-*`.
+
+| Run | Outcome | Classification |
+| --- | --- | --- |
+| `…-20260903-v1` | both shots failed the first agent task before claude started: the per-exec credential copy (`cp -R src/. dst/`) is not re-runnable and the old design re-ran bootstrap on every exec | **checkpoint-resumable; defect #29 pinned; zero agent spend** |
+| `…-20260903-v2` | six concurrent boots each copied 785 MB of host `~/.claude` (22 s solo, >60 s contended): three initialize timeouts, remaining writers SIGKILLed (exit 137) under memory/I/O pressure; one resume attempt also misclassified a transient SSH failure as "repository does not exist" | **checkpoint-resumable; defects #30/#31 pinned; superseded by fresh run ids** |
+| `…-20260903-v3` | both shots lost all four project tasks at the loop write-back audit: interpreter artifacts (`app/__pycache__/*.pyc`) flagged as scope violations, and the tests agent placed its file inconsistently (`spec_tasks/…` vs `tests/spec_tasks/…`) because the prompt carried two contradictory scope statements | **golden-rule-invalid at node level; defects #32/#33 pinned; generated code untouched** |
+| `…-20260903-v4` | shot-1 orders failed identically to v3 despite prompt disambiguation (shot-2 placed the file correctly — cross-shot divergence); reporting was stopped by the operator to flush diagnostics | **defect #33 confirmed prose-only fixes insufficient → mechanical scaffold fix; superseded** |
+| `…-20260903-v5` | both shots' writers completed (symmetric 416/406-line test files, pyproject in place) but every reviewer returned "no structured verdict"; reviewer stdout was discarded so the cause was unverifiable | **defect #34 pinned (judge parsing + diagnostics retention); superseded** |
+| `…-20260903-v6` | writers on both shots died mid-round with `API Error: Request rejected (429) · 已达到 5 小时使用上限` (`api_error_status=429`, ~$0.96/$0.59 per exec); the machine then slept overnight. Retrospectively v5's verdict failures were most likely the same quota exhaustion | **control-plane (external quota); window reset 2026-09-04 02:42:48; superseded** |
+| `…-20260903-v7` | launched under `caffeinate` with the full fix set; both seeds pushed, four project agents in flight, zero failures — stopped by the operator at 09:59 before any judgment | **operator-stopped, not a judgment; repositories and checkpoints preserved** |
+
+Defects pinned (compiler/harness changes only, never agent retries):
+
+| # | Symptom | Fix |
+| --- | --- | --- |
+| 29 | `cp -R src/. dst/` fails on an already-populated credential tree; old design re-ran bootstrap on every exec | bootstrap runs once per container via `initializationCommand`; copy is an idempotent `tar … --skip-old-files` extraction |
+| 30 | 785 MB credential copy per container; 60 s initialize timeout under concurrent boot I/O; writers SIGKILLed | exclude `plugins/` + `projects/` (785 MB → 8.3 MB, 22 s → ~2 s); initialize timeout 300 s |
+| 31 | resume misread a transient `gh`/SSH failure as "temporary repository does not exist" | `repositoryExists` retries transport errors and only treats GitHub 404 as absence, then fails loud |
+| 32 | scope audit flagged interpreter artifacts as agent writes | `PYTHONDONTWRITEBYTECODE=1` in every container + audit ignores `__pycache__/`, `*.pyc`, `.pytest_cache/` |
+| 33 | tests-role path was prose-defined and contradicted the embedded contract, producing cross-shot divergence | compiler materializes a non-vacuous test scaffold at the exact owned path (`tests/spec_tasks/test_<task>.py`) for all 18 loop tasks; prompt says edit in place; empty scaffold keeps acceptance failing (exit 5) until real tests exist |
+| 34 | reviewer verdict parsing accepted only bare JSON and discarded reviewer stdout on failure | mechanical extraction of the `approved` object (tolerates fences/prose), prompt demands exactly one JSON object, bounded reviewer output retained in the diagnostic |
+
+Status: **golden rule not yet judged** for this spec. Mid-run evidence is
+encouraging (symmetric writer output across shots, all fixes unit-tested), but
+no run has reached the combined conformance + interfaceEqual + behaviorEqual
+judgment. Next step is one uninterrupted run in a fresh quota window —
+`spec generate examples/store-platform/app.spec.ts --shots 2 … --concurrency 4`
+(resume semantics preferred for any control-plane interruption).
+
 Shot 1's immutable plan and complete report remain under
 `.spec/generation/media-platform-golden-20260903-shot-1/`; both remote
 repositories and their published commits/PR checks were preserved. Shot 2 has

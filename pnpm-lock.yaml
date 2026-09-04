@@ -213,6 +213,21 @@ importers:
         specifier: workspace:*
         version: link:../../packages/web
 
+  examples/store-platform:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:../../packages/fastapi
+      '@spec/postgres':
+        specifier: workspace:*
+        version: link:../../packages/postgres
+      '@spec/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+
   packages/agent:
     dependencies:
       '@spec/core':
