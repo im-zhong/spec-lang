@@ -285,6 +285,42 @@ export interface AgentTask {
 
 export type ArtifactType = "source" | "config" | "test" | "document" | "verification"
 
+/* ------------------------------------------------------------------ */
+/* Clause tables — the machine-addressable node contract              */
+/* ------------------------------------------------------------------ */
+
+/** How a clause is mechanically judged during generation. */
+export type ClauseVerification = "oracle" | "lint" | "review"
+
+/** api = observable on the node's public surface; function = internal semantics. */
+export type ClauseLevel = "api" | "function"
+
+/**
+ * One machine-addressable obligation of one generation node. The clause
+ * table is the single source of truth a node's prompt kernel, its
+ * compiler-generated oracle, and its reviewer checklist all project from.
+ */
+export interface ContractClause {
+  /** Deterministic identifier derived from stable blueprint identifiers. */
+  id: string
+  /** Single-sentence imperative rendered verbatim by every projection. */
+  statement: string
+  /** Owning generation node id, e.g. "router:Booking". */
+  node: string
+  /** Target-scoped taxonomy, e.g. route/error/abi/import/pin/column/invariant/transition/serialization/adapter/file. */
+  kind: string
+  verification: ClauseVerification
+  level: ClauseLevel
+}
+
+/** Byte-stable clause table stamped for one generation node. */
+export interface NodeClauseTable {
+  schemaVersion: "spec-clause-table/0.1"
+  node: string
+  clauses: ContractClause[]
+}
+
+
 export interface Artifact {
   id: string
   type: ArtifactType
@@ -335,21 +371,28 @@ export interface AgentExecutionLoopWorker {
   scope: string[]
 }
 
+export interface AgentExecutionLoopReviewer {
+  instruction: string
+  commands: string[]
+  /** Frozen compiler-owned oracle files the commands execute (agent-unwritable). */
+  oracleFiles?: string[]
+  /** Structured checklist projected from the node's clause table. */
+  clauses?: ContractClause[]
+}
+
 /**
- * Pre-conformance synthesis loop for one DAG node. Implementation and tests
- * run concurrently from the same frozen task input, then a read-only reviewer
- * runs the declared tests and either approves or returns feedback for the next
- * bounded round. This is never a conformance-repair loop.
+ * Pre-conformance synthesis loop for one DAG node. A single implementation
+ * agent works against the frozen clause table while compiler-generated
+ * oracle tests stay materialized and uneditable; a read-only reviewer
+ * judges the machine evidence plus the review-kind clauses and either
+ * approves or returns feedback for the next bounded round. This is never
+ * a conformance-repair loop.
  */
 export interface AgentExecutionLoop {
-  schemaVersion: "spec-agent-task-loop/0.1"
+  schemaVersion: "spec-agent-task-loop/0.2"
   maxRounds: number
   implementation: AgentExecutionLoopWorker
-  tests: AgentExecutionLoopWorker
-  reviewer: {
-    instruction: string
-    commands: string[]
-  }
+  reviewer: AgentExecutionLoopReviewer
 }
 
 /**

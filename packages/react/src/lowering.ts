@@ -5,6 +5,7 @@ import { stableStringify, type AgentTask, type SpecIR } from "@spec/core"
 import { buildFrontendBlueprint, type FrontendBlueprint } from "./blueprint"
 import { buildFrontendConformanceSuite, type FrontendConformanceFiles } from "./conformance"
 import { buildFrontendDag, type FrontendDag } from "./dag"
+import { FRONTEND_ORACLE_FILE, frontendOracleFile } from "./oracle"
 import { buildRuntimeFiles } from "./runtime"
 import { frontendVerification, type FrontendVerificationPlan } from "./verify"
 
@@ -21,7 +22,12 @@ export interface FrontendGenerationPlan {
 export function planFrontendGeneration(ir: SpecIR): FrontendGenerationPlan {
   const blueprint = buildFrontendBlueprint(ir)
   const dag = buildFrontendDag(blueprint, ir)
-  const seedFiles = buildRuntimeFiles(blueprint)
+  const seedFiles = {
+    ...buildRuntimeFiles(blueprint),
+    // The frontend oracle is compiler-owned and frozen: it judges the node,
+    // so no agent may ever author or edit it.
+    [FRONTEND_ORACLE_FILE]: frontendOracleFile(blueprint),
+  }
   const conformance = buildFrontendConformanceSuite(blueprint)
   const verification = frontendVerification(blueprint)
   const agentTasks: AgentTask[] = dag.tasks.map((task) => ({

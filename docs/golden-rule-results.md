@@ -159,3 +159,25 @@ an immutable plan and published successful task commits but no final local
 report because the pre-fix harness only wrote a report after all runnable
 nodes completed. It was stopped after the failure was already decisive to
 avoid spending on eleven routers that could not unlock `app` or conformance.
+
+## Design change (2026-09-04): clause-driven generation — no agent spend
+
+Between-runs design change replacing the three-role loop. Full record:
+`docs/clause-driven-generation.md`.
+
+| Change | Rationale |
+| --- | --- |
+| Node contracts became machine **clause tables** (`ContractClause {id, statement, kind, verification, level}`); prompt kernel, node oracle, reviewer checklist, and plan fingerprint all project from one table | the old "frozen contract" was the dev's prose task brief reused verbatim as the tests agent's input; requirements were prose with no ids, so coverage was unauditable (the RTM gap) |
+| **Tests agent deleted**; per-node tests are compiler-generated (`tests/spec_oracle/`, contract-embedding style) and materialized with the seed — frozen from round 1, agent-unwritable; `reviewer.commands` and `acceptanceCommands` point at them | the judging tests were LLM-invented per shot per round: the judgment itself contained unpinned decisions (defect #33's root cause). Node judgment is now deterministic; the GitHub workflow's clean-container re-run is compiler-owned end to end |
+| Loop schema `spec-agent-task-loop/0.1 → 0.2`: single implementation writer (no snapshot/merge machinery), checks `generation/loop/<n>/{implementation,review}`, per-round cost one writer + one reviewer (~⅓ fewer execs) | parallel blind test-writing existed only to translate prose into pytest; with clause tables the compiler does that translation deterministically |
+| **Challenge protocol** added: a writer that concludes the contract is defective answers `{"challenge":{"clause":…,"reason":…}}`; docker.ts detects it and terminates with `SPEC_CONTRACT_CHALLENGED` — a spec defect, never a retry | agents previously had to improvise around contract defects; improvisation is an unpinned decision. Now the only correct response to a defect is to reject it |
+| Schema class names pinned (`<E>Create/Update/Out`); router/auth/cache/messaging/blob export surfaces and adapter call shapes are clauses | the oracle needs deterministic symbols; every pin traces to a clause id |
+| `AGENT_EXECUTION_LOOP_CLAUSE_INVALID` validation; `lint` verification reserved (zero clauses v1) | clause tables are plan data and must validate like the rest of the plan |
+
+Verification: deterministic gates only (`pnpm build && npx vitest run`
+158 passed; double dry-runs byte-identical for booking, media-platform,
+store-platform, interface-workspace, frontend-golden; oracle files
+py_compile-clean across all examples). The paused v7 run is permanently
+non-resumable across this boundary (prompt semantics changed) and is
+superseded. Next golden-rule attempt under the new loop: booking smoke,
+then store-platform.

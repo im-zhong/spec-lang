@@ -1,4 +1,5 @@
 export * from "./types"
+export * from "./clauses"
 export * from "./builder"
 export * from "./dsl"
 export * from "./logger"

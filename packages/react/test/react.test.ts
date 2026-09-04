@@ -18,6 +18,7 @@ describe("@spec/react frontend lowering", () => {
       "src/frontend.blueprint.json",
       "src/spec-runtime.css",
       "src/spec-runtime.tsx",
+      "tests/frontend.contract.test.mjs",
     ])
     expect(Object.keys(first.conformance.files).sort()).toEqual([
       "conformance/contract.json",
@@ -25,6 +26,16 @@ describe("@spec/react frontend lowering", () => {
       "conformance/playwright.config.ts",
     ])
     expect(first.seedFiles["src/spec-runtime.tsx"]).toContain("function SpecApp")
+    // The frontend oracle is compiler-owned and frozen: it judges the node.
+    expect(first.seedFiles["tests/frontend.contract.test.mjs"]).toContain("Compiler-owned frontend oracle")
+    expect(first.seedFiles["tests/frontend.contract.test.mjs"]).toContain("node:test")
+    const frontendTask = first.dag.tasks[0]
+    expect(frontendTask.loop?.schemaVersion).toBe("spec-agent-task-loop/0.2")
+    expect(frontendTask.loop?.tests).toBeUndefined()
+    expect(frontendTask.loop?.reviewer.commands).toEqual(["node --test tests/frontend.contract.test.mjs"])
+    expect(frontendTask.loop?.reviewer.oracleFiles).toEqual(["tests/frontend.contract.test.mjs"])
+    expect(frontendTask.loop?.reviewer.clauses?.map((clause) => clause.id)).toContain("frontend:import:main-tsx")
+    expect(frontendTask.scope).toEqual(["package.json", "index.html", "src/main.tsx"])
     expect(first.conformance.files["conformance/frontend.spec.ts"]).toContain("compiler-owned layout and behavior contract")
     // Golden-rule correctness clause: the oracle verifies every declared
     // screen and rejects navigation that no screen implements.

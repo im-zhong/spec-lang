@@ -137,9 +137,11 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
             ...task.loop.implementation,
             scope: task.loop.implementation.scope.map((file) => inTarget(directory, file)).sort(),
           },
-          tests: {
-            ...task.loop.tests,
-            scope: task.loop.tests.scope.map((file) => inTarget(directory, file)).sort(),
+          reviewer: {
+            ...task.loop.reviewer,
+            ...(task.loop.reviewer.oracleFiles ? {
+              oracleFiles: task.loop.reviewer.oracleFiles.map((file) => inTarget(directory, file)).sort(),
+            } : {}),
           },
         },
       } : {}),

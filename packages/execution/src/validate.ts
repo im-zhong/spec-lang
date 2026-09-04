@@ -90,35 +90,49 @@ export function validateAgentExecutionPlan(plan: AgentExecutionPlan): Diagnostic
       if (!task.workingDirectory) {
         diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_WORKDIR_REQUIRED", `Task "${task.id}" loop requires an isolated workingDirectory.`, { task: task.id }))
       }
-      if (loop.schemaVersion !== "spec-agent-task-loop/0.1" || !Number.isInteger(loop.maxRounds) || loop.maxRounds < 1 || loop.maxRounds > 20) {
+      if (loop.schemaVersion !== "spec-agent-task-loop/0.2" || !Number.isInteger(loop.maxRounds) || loop.maxRounds < 1 || loop.maxRounds > 20) {
         diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_INVALID", `Task "${task.id}" loop must use the supported schema and 1..20 rounds.`, { task: task.id }))
       }
       const implementation = loop.implementation.scope
-      const tests = loop.tests.scope
-      if (!loop.implementation.instruction.trim() || !loop.tests.instruction.trim() || !loop.reviewer.instruction.trim()) {
+      if (!loop.implementation.instruction.trim() || !loop.reviewer.instruction.trim()) {
         diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_INSTRUCTION_INVALID", `Task "${task.id}" loop roles require non-empty instructions.`, { task: task.id }))
       }
-      if (implementation.length === 0 || tests.length === 0 || loop.reviewer.commands.length === 0 || loop.reviewer.commands.some((command) => !command.trim() || command.trim() === "true")) {
-        diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_SCOPE_INVALID", `Task "${task.id}" loop requires source scope, test scope, and non-vacuous reviewer commands.`, { task: task.id }))
+      if (implementation.length === 0 || loop.reviewer.commands.length === 0 || loop.reviewer.commands.some((command) => !command.trim() || command.trim() === "true")) {
+        diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_SCOPE_INVALID", `Task "${task.id}" loop requires source scope and non-vacuous reviewer commands.`, { task: task.id }))
       }
-      const overlap = implementation.filter((file) => tests.includes(file))
       const owned = new Set(task.scope)
-      const outside = [...implementation, ...tests].filter((file) => !owned.has(file))
+      const outside = implementation.filter((file) => !owned.has(file))
       const workdirPrefix = task.workingDirectory ? `${task.workingDirectory.replace(/\/$/, "")}/` : ""
       const outsideWorkdir = workdirPrefix
-        ? [...implementation, ...tests].filter((file) => !file.startsWith(workdirPrefix))
+        ? implementation.filter((file) => !file.startsWith(workdirPrefix))
         : []
-      if (overlap.length > 0 || outside.length > 0 || outsideWorkdir.length > 0) {
+      if (outside.length > 0 || outsideWorkdir.length > 0) {
         diagnostics.push(diagnostic(
           "AGENT_EXECUTION_LOOP_SCOPE_INVALID",
-          `Task "${task.id}" implementation/test scopes must be disjoint subsets of the task scope.`,
+          `Task "${task.id}" loop writer scope must be a subset of the task scope.`,
           {
             task: task.id,
-            overlap: [...new Set(overlap)].sort(),
             outside: [...new Set(outside)].sort(),
             outsideWorkdir: [...new Set(outsideWorkdir)].sort(),
           },
         ))
+      }
+      const clauses = loop.reviewer.clauses ?? []
+      const clauseIds = new Set<string>()
+      for (const clause of clauses) {
+        if (!clause.id.trim() || !clause.statement.trim() || !clause.node.trim()) {
+          diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_CLAUSE_INVALID", `Task "${task.id}" loop clauses require non-empty id, statement, and node.`, { task: task.id }))
+        }
+        if (!["oracle", "lint", "review"].includes(clause.verification) || !["api", "function"].includes(clause.level)) {
+          diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_CLAUSE_INVALID", `Task "${task.id}" loop clause ${clause.id} has an out-of-enum verification or level.`, { task: task.id, clause: clause.id }))
+        }
+        if (clause.node !== task.id) {
+          diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_CLAUSE_INVALID", `Task "${task.id}" loop clause ${clause.id} declares node ${JSON.stringify(clause.node)}.`, { task: task.id, clause: clause.id }))
+        }
+        if (clauseIds.has(clause.id)) {
+          diagnostics.push(diagnostic("AGENT_EXECUTION_LOOP_CLAUSE_INVALID", `Task "${task.id}" loop clauses contain duplicate id ${clause.id}.`, { task: task.id, clause: clause.id }))
+        }
+        clauseIds.add(clause.id)
       }
     }
     if (task.workingDirectory && (task.workingDirectory === "." || task.workingDirectory.startsWith("/") || task.workingDirectory.startsWith("../") || task.workingDirectory.includes("/../") || /[*?{}[\]]/.test(task.workingDirectory))) {

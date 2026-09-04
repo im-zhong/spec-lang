@@ -20,9 +20,11 @@
  * agent can literally read. The harness (@spec/agent) executes tasks in
  * topological order — one agent run per node.
  */
-import type { AgentExecutionLoop, SpecIR } from "@spec/core"
+import type { AgentExecutionLoop, ContractClause, SpecIR } from "@spec/core"
 import { stableStringify } from "@spec/core"
 import type { BackendBlueprint } from "./blueprint"
+import { clausesByTask } from "./clauses"
+import { ORACLE_DIR, oracleFileFor, testCommandFor } from "./oracle"
 import {
   appPrompt,
   authRouterPrompt,
@@ -32,6 +34,7 @@ import {
   messagingPrompt,
   modelsPrompt,
   projectPrompt,
+  reviewerPrompt,
   routerPrompt,
   schemasPrompt,
   securityPrompt,
@@ -48,6 +51,8 @@ export interface DagTask {
   scope: string[]
   /** Deterministic prompt (pure function of the blueprint). */
   prompt: string
+  /** The node's machine-addressable contract (see clauses.ts). */
+  clauses: ContractClause[]
   /** Spec nodes this task derives from (provenance). */
   specNodeIds: string[]
   loop?: AgentExecutionLoop
@@ -75,7 +80,9 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     names.map((n) => `entity:${n}`).filter((id) => all.includes(id)).sort()
 
   const tasks: DagTask[] = []
-  const ctx = (scope: string[], context: string[]): TaskPromptInput => ({ blueprint: bp, scope, context })
+  const clauses = clausesByTask(bp)
+  const taskClauses = (node: string): ContractClause[] => clauses.get(node) ?? []
+  const ctx = (scope: string[], context: string[], node: string): TaskPromptInput => ({ blueprint: bp, scope, context, clauses: taskClauses(node) })
 
   /* ---- project skeleton (root) ---- */
   tasks.push({
@@ -84,7 +91,8 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     label: "project skeleton",
     dependsOn: [],
     scope: ["pyproject.toml", "app/__init__.py", ".gitignore"],
-    prompt: projectPrompt(bp, ctx(["pyproject.toml", "app/__init__.py", ".gitignore"], [])),
+    prompt: projectPrompt(bp, ctx(["pyproject.toml", "app/__init__.py", ".gitignore"], [], "project")),
+    clauses: taskClauses("project"),
     specNodeIds: all.filter((id) => id.startsWith("app:")),
   })
 
@@ -95,7 +103,8 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     label: "data models",
     dependsOn: ["project"],
     scope: ["app/models.py"],
-    prompt: modelsPrompt(bp, ctx(["app/models.py"], ["app/__init__.py"])),
+    prompt: modelsPrompt(bp, ctx(["app/models.py"], ["app/__init__.py"], "models")),
+      clauses: taskClauses("models"),
     specNodeIds: entityIds(bp.entities.map((e) => e.name)),
   })
 
@@ -106,7 +115,8 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     label: "database layer",
     dependsOn: ["project"],
     scope: ["app/config.py", "app/database.py"],
-    prompt: databasePrompt(bp, ctx(["app/config.py", "app/database.py"], ["app/__init__.py"])),
+    prompt: databasePrompt(bp, ctx(["app/config.py", "app/database.py"], ["app/__init__.py"], "database")),
+      clauses: taskClauses("database"),
     specNodeIds: all.filter((id) => id.startsWith("postgres:")),
   })
 
@@ -117,7 +127,8 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     label: "pydantic schemas",
     dependsOn: ["models"],
     scope: ["app/schemas.py"],
-    prompt: schemasPrompt(bp, ctx(["app/schemas.py"], ["app/models.py"])),
+    prompt: schemasPrompt(bp, ctx(["app/schemas.py"], ["app/models.py"], "schemas")),
+      clauses: taskClauses("schemas"),
     specNodeIds: entityIds(bp.entities.map((e) => e.name)),
   })
 
@@ -129,7 +140,8 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
       label: "auth security",
       dependsOn: ["models", "database"],
       scope: ["app/security.py", "app/deps.py"],
-      prompt: securityPrompt(bp, ctx(["app/security.py", "app/deps.py"], ["app/models.py", "app/database.py"])),
+      prompt: securityPrompt(bp, ctx(["app/security.py", "app/deps.py"], ["app/models.py", "app/database.py"], "security")),
+      clauses: taskClauses("security"),
       specNodeIds: all.filter((id) => id.startsWith("auth:")),
     })
   }
@@ -153,9 +165,10 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
       scope: [file],
       prompt: routerPrompt(
         bp,
-        ctx([file], contextFor(deps)),
+        ctx([file], contextFor(deps), taskId),
         entityName,
       ),
+      clauses: taskClauses(taskId),
       specNodeIds: [...new Set(routes.map((route) => route.owner.sourceNodeId))].sort(),
     })
   }
@@ -168,7 +181,8 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
       label: "router: auth",
       dependsOn: ["models", "schemas", "database", "security"],
       scope: ["app/routers/auth.py"],
-      prompt: authRouterPrompt(bp, ctx(["app/routers/auth.py"], contextFor(["models", "schemas", "security"]))),
+      prompt: authRouterPrompt(bp, ctx(["app/routers/auth.py"], contextFor(["models", "schemas", "security"]), "router:auth")),
+      clauses: taskClauses("router:auth"),
       specNodeIds: all.filter((id) => id.startsWith("auth:")),
     })
   }
@@ -181,7 +195,8 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
       label: "cache infrastructure",
       dependsOn: ["project"],
       scope: ["app/cache.py"],
-      prompt: cachePrompt(bp, ctx(["app/cache.py"], ["app/__init__.py"])),
+      prompt: cachePrompt(bp, ctx(["app/cache.py"], ["app/__init__.py"], "cache")),
+      clauses: taskClauses("cache"),
       specNodeIds: all.filter((id) => id.startsWith("cache:") || id.startsWith("redis:")),
     })
   }
@@ -192,7 +207,8 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
       label: "messaging infrastructure",
       dependsOn: ["project"],
       scope: ["app/messaging.py"],
-      prompt: messagingPrompt(bp, ctx(["app/messaging.py"], ["app/__init__.py"])),
+      prompt: messagingPrompt(bp, ctx(["app/messaging.py"], ["app/__init__.py"], "messaging")),
+      clauses: taskClauses("messaging"),
       specNodeIds: all.filter((id) => /^(message|queue|rabbitmq|kafka|sqs):/.test(id)),
     })
   }
@@ -203,7 +219,8 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
       label: "blob infrastructure",
       dependsOn: ["project"],
       scope: ["app/blob.py"],
-      prompt: blobPrompt(bp, ctx(["app/blob.py"], ["app/__init__.py"])),
+      prompt: blobPrompt(bp, ctx(["app/blob.py"], ["app/__init__.py"], "blob")),
+      clauses: taskClauses("blob"),
       specNodeIds: all.filter((id) => id.startsWith("blob:") || id.startsWith("s3:")),
     })
   }
@@ -223,7 +240,8 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     label: "application wiring",
     dependsOn: appDeps,
     scope: ["app/main.py"],
-    prompt: appPrompt(bp, ctx(["app/main.py"], contextFor(appDeps))),
+    prompt: appPrompt(bp, ctx(["app/main.py"], contextFor(appDeps), "app")),
+    clauses: taskClauses("app"),
     specNodeIds: all.filter((id) => id.startsWith("fastapi:") || id.startsWith("app:")),
   })
 
@@ -241,37 +259,23 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     .sort(([left], [right]) => left.localeCompare(right))
     .flatMap(([name, version]) => ["--with", shellWord(`${name}==${version}`)])
   for (const task of tasks) {
-    const sourceScope = [...task.scope]
-    const safe = task.id.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
-    const testFile = `tests/spec_tasks/test_${safe}.py`
-    const testCommand = [
-      "uv", "run", "--no-project", "--python", shellWord(bp.stack.python),
-      ...packages,
-      "python", "-B", "-m", "pytest", "-p", "no:cacheprovider", "-q", testFile,
-    ].join(" ")
-    task.scope = [...sourceScope, testFile].sort()
+    const oracleCommand = testCommandFor(bp, oracleFileFor(task.id))
     task.loop = {
-      schemaVersion: "spec-agent-task-loop/0.1",
+      schemaVersion: "spec-agent-task-loop/0.2",
       maxRounds: 3,
-      implementation: { instruction: task.prompt, scope: sourceScope },
-      tests: {
-        scope: [testFile],
-        instruction: `You are the unit-test author for generation node ${JSON.stringify(task.id)}.
-You and the implementation agent receive the same frozen specification progress. Read the dependency files and the complete node contract below, then create focused executable pytest tests in ${testFile}. Test declared behavior, exact public ABI, forbidden extras, and relevant failure cases. Do not weaken, delete, or rewrite tests to accommodate an implementation. Do not edit source files.
-
-Your working directory already mirrors the node's task workspace. A compiler-owned scaffold for your file already exists at exactly ${testFile} relative to your current directory — edit that file in place and never create tests anywhere else; that exact path is your only owned file. The "Your scope" list inside the contract below belongs to the implementation agent and is NOT your scope.
-
-Frozen implementation contract:
-${task.prompt}`,
-      },
+      implementation: { instruction: task.prompt, scope: [...task.scope] },
       reviewer: {
-        commands: [testCommand],
-        instruction: `You are the read-only code reviewer for generation node ${JSON.stringify(task.id)}. Verify both implementation and tests against the exact frozen specification. Look for missing behavior, extra public API/routes, ABI drift, invalid imports, tests that merely mirror the implementation, and uncovered constraints. Use test failures and direct code inspection. If rejecting, give actionable changes for both source and tests where applicable.`,
+        commands: [oracleCommand],
+        instruction: reviewerPrompt({ task: task.id, clauses: task.clauses }),
+        oracleFiles: [oracleFileFor(task.id), `${ORACLE_DIR}/runner.py`].sort(),
+        clauses: task.clauses,
       },
     }
     // This gate is outside the synthesis loop. Failure is the node's single
     // compiler-owned judgment and must never be fed back as a repair prompt.
-    task.acceptanceCommands = [testCommand]
+    // The command runs the compiler-generated oracle, not any agent-authored
+    // test file: the judgment itself is deterministic across shots.
+    task.acceptanceCommands = [oracleCommand]
   }
   const ordered = topologicalSort(tasks)
   const edges: GenerationDag["edges"] = []
@@ -338,6 +342,7 @@ export function dagFingerprint(dag: GenerationDag): string {
       dependsOn: [...t.dependsOn].sort(),
       scope: t.scope,
       prompt: t.prompt,
+      clauses: t.clauses,
       specNodeIds: t.specNodeIds,
       loop: t.loop,
       acceptanceCommands: t.acceptanceCommands,

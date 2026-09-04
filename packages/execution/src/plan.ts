@@ -34,13 +34,11 @@ function canonicalTask(task: AgentExecutionTask): AgentExecutionTask {
           instruction: task.loop.implementation.instruction,
           scope: [...task.loop.implementation.scope].sort(),
         },
-        tests: {
-          instruction: task.loop.tests.instruction,
-          scope: [...task.loop.tests.scope].sort(),
-        },
         reviewer: {
           instruction: task.loop.reviewer.instruction,
           commands: [...task.loop.reviewer.commands],
+          ...(task.loop.reviewer.oracleFiles ? { oracleFiles: [...task.loop.reviewer.oracleFiles].sort() } : {}),
+          ...(task.loop.reviewer.clauses ? { clauses: [...task.loop.reviewer.clauses].sort((left, right) => left.id.localeCompare(right.id)) } : {}),
         },
       },
     } : {}),

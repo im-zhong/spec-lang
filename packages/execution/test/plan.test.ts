@@ -87,32 +87,38 @@ describe("agent execution plan", () => {
     ]))
   })
 
-  it("fingerprints and validates a bounded parallel code/test/reviewer loop", () => {
+  it("validates the v0.2 single-writer loop and its clause table", () => {
     const value = plan([{
       id: "api",
       objective: "API",
       instruction: "build",
       dependsOn: [],
-      scope: ["product/src/api.ts", "product/test/api.test.ts"],
+      scope: ["product/src/api.ts"],
       workingDirectory: "product",
       specNodeIds: [],
       loop: {
-        schemaVersion: "spec-agent-task-loop/0.1" as const,
+        schemaVersion: "spec-agent-task-loop/0.2" as const,
         maxRounds: 3,
-        implementation: { instruction: "implement from spec", scope: ["product/src/api.ts"] },
-        tests: { instruction: "test from spec", scope: ["product/test/api.test.ts"] },
-        reviewer: { instruction: "review without edits", commands: ["node --test test/api.test.ts"] },
+        implementation: { instruction: "implement from the clause table", scope: ["product/src/api.ts"] },
+        reviewer: {
+          instruction: "review without edits",
+          commands: ["python -m pytest tests/spec_oracle/test_api.py"],
+          oracleFiles: ["product/tests/spec_oracle/test_api.py"],
+          clauses: [
+            { id: "route:POST /api", statement: "route exists", node: "api", kind: "route", verification: "oracle", level: "api" },
+            { id: "review:api:no-extras", statement: "no extra APIs", node: "api", kind: "review", verification: "review", level: "api" },
+          ],
+        },
       },
     }])
     expect(validateAgentExecutionPlan(value)).toEqual([])
-    expect(value.tasks[0].loop?.implementation.scope).toEqual(["product/src/api.ts"])
 
-    const invalid = structuredClone(value)
-    invalid.tasks[0].loop!.tests.scope = ["product/src/api.ts"]
-    invalid.tasks[0].loop!.reviewer.commands = ["true"]
-    expect(validateAgentExecutionPlan(invalid).map((item) => item.code)).toEqual(expect.arrayContaining([
-      "AGENT_EXECUTION_LOOP_SCOPE_INVALID",
-      "AGENT_EXECUTION_FINGERPRINT_MISMATCH",
-    ]))
+    const duplicateClause = structuredClone(value)
+    duplicateClause.tasks[0].loop!.reviewer.clauses![1] = duplicateClause.tasks[0].loop!.reviewer.clauses![0]
+    expect(validateAgentExecutionPlan(duplicateClause).map((item) => item.code)).toContain("AGENT_EXECUTION_LOOP_CLAUSE_INVALID")
+
+    const foreignNode = structuredClone(value)
+    foreignNode.tasks[0].loop!.reviewer.clauses![1].node = "other"
+    expect(validateAgentExecutionPlan(foreignNode).map((item) => item.code)).toContain("AGENT_EXECUTION_LOOP_CLAUSE_INVALID")
   })
 })

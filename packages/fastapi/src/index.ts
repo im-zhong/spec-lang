@@ -25,6 +25,8 @@ export {
   type GenerationDag,
   type DagTask,
 } from "./dag"
+export { deriveClauses, clausesByTask } from "./clauses"
+export { buildNodeOracles, testCommandFor, oracleFileFor, ORACLE_DIR } from "./oracle"
 export {
   planGeneration,
   type FastApiGenerationPlan,

@@ -128,6 +128,29 @@ function reviewerVerdict(stdout: string): { approved: boolean; feedback: string 
   }
 }
 
+/**
+ * Loop v0.2 challenge protocol: an implementation agent that concludes the
+ * frozen contract is defective must answer with exactly one JSON object
+ * {"challenge":{"clause":...,"reason":...}} instead of improvising. Parsing
+ * mirrors the reviewer verdict: tolerant of fences/prose, strictly shaped.
+ */
+function contractChallenge(stdout: string): { clause: string; reason: string } | undefined {
+  try {
+    const envelope = parseAgentEnvelope(stdout)
+    if (!envelope) return undefined
+    const raw = typeof envelope.result === "string" ? envelope.result : JSON.stringify(envelope)
+    const candidate = extractVerdictObject(raw)
+    const challenge = candidate?.challenge
+    if (!challenge || typeof challenge !== "object" || Array.isArray(challenge)) return undefined
+    const clause = (challenge as Record<string, unknown>).clause
+    const reason = (challenge as Record<string, unknown>).reason
+    if (typeof clause !== "string" || typeof reason !== "string" || !clause.trim() || !reason.trim()) return undefined
+    return { clause, reason }
+  } catch {
+    return undefined
+  }
+}
+
 function safeName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120)
 }
@@ -171,31 +194,6 @@ function roleScope(task: ResolvedAgentExecutionTask, files: string[]): string[] 
     if (prefix && !file.startsWith(prefix)) throw new Error(`loop role scope ${file} is outside ${task.workingDirectory}`)
     return prefix ? file.slice(prefix.length) : file
   })
-}
-
-function mergeRoleChanges(
-  taskDirectory: string,
-  roleDirectory: string,
-  before: Map<string, string>,
-  allowedFiles: string[],
-  role: string,
-): string | undefined {
-  const after = snapshot(roleDirectory)
-  const changes = changedPaths(before, after).filter((file) => !isToolArtifact(file))
-  const allowed = new Set(allowedFiles)
-  const violations = changes.filter((file) => !allowed.has(file))
-  if (violations.length > 0) return `${role} agent wrote outside its declared scope: ${violations.join(", ")}`
-  for (const file of changes) {
-    const source = path.join(roleDirectory, file)
-    const destination = path.join(taskDirectory, file)
-    if (!fs.existsSync(source)) {
-      if (fs.existsSync(destination)) fs.rmSync(destination)
-      continue
-    }
-    fs.mkdirSync(path.dirname(destination), { recursive: true })
-    fs.copyFileSync(source, destination)
-  }
-  return undefined
 }
 
 export class DockerAgentExecutor implements AgentExecutionContainerPort {
@@ -289,72 +287,51 @@ export class DockerAgentExecutor implements AgentExecutionContainerPort {
         }
         checks.push({ name: "generation/materialize", status: error ? "failure" : "success" })
       } else {
-        if (task.loop) {
+        if (task.loop?.schemaVersion === "spec-agent-task-loop/0.2") {
+          // Loop v0.2: one implementation agent per round working directly in
+          // the task workdir; compiler-generated oracles are the frozen
+          // reviewer evidence; a contract challenge aborts as a spec defect.
           let feedback = ""
           let approved = false
           costUsd = 0
           for (let round = 1; round <= task.loop.maxRounds; round++) {
             const shared = `\n\n# Frozen node context\nTask: ${task.id}\nRound: ${round}/${task.loop.maxRounds}\n` +
               (feedback ? `Reviewer feedback from the prior round:\n${feedback}\n` : "This is the first round.\n")
-            const implementationPrompt = `${task.loop.implementation.instruction}${shared}\nYou own only: ${task.loop.implementation.scope.join(", ")}. Do not edit tests.`
-            const testsPrompt = `${task.loop.tests.instruction}${shared}\nYou own only: ${task.loop.tests.scope.join(", ")}. Do not edit implementation files.`
-            const loopRoot = path.join(path.resolve(workspace), ".spec-loop", safeName(task.id), String(round))
-            const implementationDirectory = path.join(loopRoot, "implementation")
-            const testsDirectory = path.join(loopRoot, "tests")
-            fs.rmSync(loopRoot, { recursive: true, force: true })
-            fs.mkdirSync(loopRoot, { recursive: true })
-            fs.cpSync(taskDirectory, implementationDirectory, { recursive: true })
-            fs.cpSync(taskDirectory, testsDirectory, { recursive: true })
+            const writerPrompt = `${task.loop.implementation.instruction}${shared}\nYou own only: ${task.loop.implementation.scope.join(", ")}.`
             const before = snapshot(taskDirectory)
-            const implementationWorkdir = `/workspace/${path.relative(path.resolve(workspace), implementationDirectory).replaceAll("\\", "/")}`
-            const testsWorkdir = `/workspace/${path.relative(path.resolve(workspace), testsDirectory).replaceAll("\\", "/")}`
-            const [implementation, tests] = await Promise.all([
-              runProcess(docker, ["exec", "-w", implementationWorkdir, "-i", name, ...(this.options.agentCommand ?? DEFAULT_AGENT_COMMAND)], { input: implementationPrompt, timeoutMs }),
-              runProcess(docker, ["exec", "-w", testsWorkdir, "-i", name, ...(this.options.agentCommand ?? DEFAULT_AGENT_COMMAND)], { input: testsPrompt, timeoutMs }),
-            ])
-            checks.push({ name: `generation/loop/${round}/implementation`, status: implementation.ok ? "success" : "failure" })
-            checks.push({ name: `generation/loop/${round}/tests`, status: tests.ok ? "success" : "failure" })
-            costUsd += agentCost(implementation.stdout) + agentCost(tests.stdout)
-            if (!implementation.ok || !tests.ok) {
-              error = commandFailure(!implementation.ok ? implementation : tests).message
-              fs.rmSync(loopRoot, { recursive: true, force: true })
-              break
-            }
-            const directWrites = changedPaths(before, snapshot(taskDirectory))
-            if (directWrites.length > 0) {
-              error = `parallel loop agents bypassed their isolated snapshots: ${directWrites.join(", ")}`
-              fs.rmSync(loopRoot, { recursive: true, force: true })
-              break
-            }
-            const implementationViolation = mergeRoleChanges(
-              taskDirectory,
-              implementationDirectory,
-              before,
-              roleScope(task, task.loop.implementation.scope),
-              "implementation",
+            const writer = await runProcess(
+              docker,
+              ["exec", "-w", containerWorkdir, "-i", name, ...(this.options.agentCommand ?? DEFAULT_AGENT_COMMAND)],
+              { input: writerPrompt, timeoutMs },
             )
-            const testsViolation = mergeRoleChanges(
-              taskDirectory,
-              testsDirectory,
-              before,
-              roleScope(task, task.loop.tests.scope),
-              "tests",
-            )
-            fs.rmSync(loopRoot, { recursive: true, force: true })
-            if (implementationViolation || testsViolation) {
-              error = implementationViolation ?? testsViolation
+            checks.push({ name: `generation/loop/${round}/implementation`, status: writer.ok ? "success" : "failure" })
+            costUsd += agentCost(writer.stdout)
+            if (!writer.ok) {
+              error = commandFailure(writer).message
               break
             }
-
+            const challenge = contractChallenge(writer.stdout)
+            if (challenge) {
+              checks.push({ name: `generation/loop/${round}/challenge`, status: "failure" })
+              error = `SPEC_CONTRACT_CHALLENGED: task ${task.id} round ${round} rejected clause ${JSON.stringify(challenge.clause)}: ${challenge.reason} The specification is defective — fix the spec/blueprint and regenerate; do not retry.`
+              break
+            }
+            const writes = changedPaths(before, snapshot(taskDirectory)).filter((file) => !isToolArtifact(file))
+            const allowed = new Set(roleScope(task, task.loop.implementation.scope))
+            const illegal = writes.filter((file) => !allowed.has(file))
+            if (illegal.length > 0) {
+              error = `implementation agent wrote outside its declared scope: ${illegal.join(", ")}`
+              break
+            }
             const testEvidence: string[] = []
             for (const command of task.loop.reviewer.commands) {
               const result = await runProcess(docker, ["exec", name, "/bin/sh", "-lc", command], { timeoutMs })
               testEvidence.push(`$ ${command}\nexit=${result.exitCode}\n${result.stdout}\n${result.stderr}`)
             }
             const reviewPrompt = `${task.loop.reviewer.instruction}${shared}
-Review the implementation and generated tests against the frozen task/spec. The test evidence is:
+Review the implementation against the frozen node contract and its clause table. The machine evidence is:
 ${testEvidence.join("\n\n")}
-Do not edit any file. Your result must be exactly one JSON object and nothing else — no markdown fences, no prose before or after: {"approved":boolean,"feedback":"specific changes for both code and tests"}. Approve only when code, tests, and constraints all conform.`
+Do not edit any file. Your result must be exactly one JSON object and nothing else — no markdown fences, no prose before or after: {"approved":boolean,"feedback":"specific changes keyed to clause ids where applicable"}. Approve only when the implementation conforms to every clause and the review-kind clauses hold by inspection.`
             const beforeReviewer = snapshot(taskDirectory)
             const review = await runProcess(
               docker,
@@ -374,8 +351,6 @@ Do not edit any file. Your result must be exactly one JSON object and nothing el
             }
             const verdict = reviewerVerdict(review.stdout)
             if (!verdict) {
-              // Keep bounded reviewer output: an unparseable verdict is a
-              // judge failure whose evidence must not be discarded.
               const tail = review.stdout.length > 2_000 ? `…${review.stdout.slice(-2_000)}` : review.stdout
               error = `reviewer for ${task.id} round ${round} returned no structured verdict; reviewer output: ${tail}`
               break
@@ -384,7 +359,7 @@ Do not edit any file. Your result must be exactly one JSON object and nothing el
               approved = true
               break
             }
-            feedback = verdict.feedback || "Reviewer rejected the round without actionable feedback. Re-check the complete task contract."
+            feedback = verdict.feedback || "Reviewer rejected the round without actionable feedback. Re-check the complete clause table."
           }
           if (!error && !approved) error = `agent loop for ${task.id} exhausted ${task.loop.maxRounds} rounds without approval`
         } else {

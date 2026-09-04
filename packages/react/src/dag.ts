@@ -1,5 +1,6 @@
-import { stableStringify, type AgentExecutionLoop, type SpecIR } from "@spec/core"
+import { stableStringify, type AgentExecutionLoop, type ContractClause, type SpecIR } from "@spec/core"
 import type { FrontendBlueprint } from "./blueprint"
+import { FRONTEND_ORACLE_FILE } from "./oracle"
 
 export interface FrontendTask {
   id: string
@@ -8,6 +9,8 @@ export interface FrontendTask {
   dependsOn: string[]
   scope: string[]
   prompt: string
+  /** The node's machine-addressable contract (see the oracle projection). */
+  clauses: ContractClause[]
   specNodeIds: string[]
   loop?: AgentExecutionLoop
   acceptanceCommands?: string[]
@@ -35,6 +38,15 @@ export function buildFrontendDag(blueprint: FrontendBlueprint, ir: SpecIR): Fron
       vite: blueprint.stack.vite,
     },
   }
+  const clauses: ContractClause[] = [
+    { id: "frontend:pin:package-name", statement: `package.json declares name ${JSON.stringify(packageJson.name)}, private true, type module, and exactly the scripts dev/build/preview.`, node: "frontend", kind: "pin", verification: "oracle", level: "api" },
+    { id: "frontend:pin:dependencies", statement: `package.json dependencies are exactly react@${blueprint.stack.react} and react-dom@${blueprint.stack.reactDom}; devDependencies carry the pinned Playwright/TypeScript/Vite toolchain.`, node: "frontend", kind: "pin", verification: "oracle", level: "api" },
+    { id: "frontend:file:index-html", statement: `index.html is an HTML5 document with lang="en", title exactly ${JSON.stringify(blueprint.app.title)}, exactly one <div id="root">, and exactly one module script loading /src/main.tsx.`, node: "frontend", kind: "file", verification: "oracle", level: "api" },
+    { id: "frontend:import:main-tsx", statement: 'src/main.tsx imports React from react, a createRoot binding from react-dom/client, the blueprint from ./frontend.blueprint.json, the named SpecApp export from ./spec-runtime, and ./spec-runtime.css; it mounts <React.StrictMode><SpecApp blueprint={blueprint} /></React.StrictMode> into #root.', node: "frontend", kind: "import", verification: "oracle", level: "api" },
+    { id: "frontend:file:exact-set", statement: "The implementation owns exactly package.json, index.html, and src/main.tsx — no CSS, components, state, routes, packages, or configuration beyond them.", node: "frontend", kind: "file", verification: "review", level: "api" },
+    { id: "frontend:runtime-untouched", statement: "The compiler-owned files src/frontend.blueprint.json, src/spec-runtime.tsx, and src/spec-runtime.css are imported, never modified.", node: "frontend", kind: "file", verification: "review", level: "api" },
+  ]
+  const clauseTable = clauses.map((clause) => `- [${clause.id}]${clause.verification === "review" ? " (reviewer-judged)" : ""} ${clause.statement}`).join("\n")
   const prompt = `You are implementing the integration shell for a compiler-specified React frontend.
 
 The compiler has already written these IMMUTABLE files. Read and import them; never modify them:
@@ -42,29 +54,25 @@ The compiler has already written these IMMUTABLE files. Read and import them; ne
 - src/spec-runtime.tsx
 - src/spec-runtime.css
 
-Create EXACTLY these three files and no others:
-- package.json
-- index.html
-- src/main.tsx
+## Node contract (clause table)
+
+These clauses are the COMPLETE behavioral contract for this task. Each is
+machine-verified (oracle) or reviewer-judged (review) exactly as written.
+
+${clauseTable}
+
+## Reference data (subordinate to the clause table)
 
 package.json must equal this JSON semantically:
 ${stableStringify(packageJson)}
 
-index.html contract:
-- normal HTML5 document, lang="en"
-- title exactly ${JSON.stringify(blueprint.app.title)}
-- one <div id="root"></div>
-- one module script loading /src/main.tsx
-
-src/main.tsx contract:
-- import React from "react"
-- import createRoot from react-dom/client
-- import blueprint from "./frontend.blueprint.json"
-- import SpecApp from the named export in "./spec-runtime"
-- import "./spec-runtime.css"
-- require #root to exist, then render <React.StrictMode><SpecApp blueprint={blueprint} /></React.StrictMode>
-
-Do not reinterpret the blueprint. Do not add CSS, components, content, state, routes, packages, tests, configuration, or behavior. Do not modify compiler-owned files. This task is wiring only.`
+## Engineering notes
+- Do not reinterpret the blueprint. This task is wiring only.
+- If you conclude this contract is internally unsatisfiable or wrong, make no
+  edits and reply with exactly one JSON object and nothing else:
+  {"challenge":{"clause":"<clause id>","reason":"<one paragraph>"}}
+  Never improvise around a defect; challenging it is the only correct response.`
+  const oracleCommand = `node --test ${FRONTEND_ORACLE_FILE}`
   return {
     blueprint,
     tasks: [{
@@ -72,26 +80,25 @@ Do not reinterpret the blueprint. Do not add CSS, components, content, state, ro
       kind: "frontend",
       label: "React frontend integration shell",
       dependsOn: [],
-      scope: ["package.json", "index.html", "src/main.tsx", "tests/frontend.contract.test.mjs"],
+      scope: ["package.json", "index.html", "src/main.tsx"],
       prompt,
+      clauses,
       specNodeIds: ir.nodes.map((node) => node.id).filter((id) => /^(app|frontend|screen|react):/.test(id)).sort(),
       loop: {
-        schemaVersion: "spec-agent-task-loop/0.1",
+        schemaVersion: "spec-agent-task-loop/0.2",
         maxRounds: 3,
         implementation: {
           instruction: prompt,
           scope: ["package.json", "index.html", "src/main.tsx"],
         },
-        tests: {
-          scope: ["tests/frontend.contract.test.mjs"],
-          instruction: `You are the unit-test author for the frozen React integration-shell contract below. Create tests/frontend.contract.test.mjs relative to your current directory, creating any missing parent directories; that exact path is your only owned file, and the "scope" list inside the contract belongs to the implementation agent, not to you. Use only node:test and node:assert. Inspect the generated files as text/JSON and verify every declared import, mount, package pin, and forbidden extra. Do not edit implementation or compiler-owned files.\n\n${prompt}`,
-        },
         reviewer: {
-          instruction: "Review the React shell and its tests against the frozen blueprint. Run the declared test command, inspect for missing constraints or implementation-shaped tests, and return actionable feedback without editing files.",
-          commands: ["node --test tests/frontend.contract.test.mjs"],
+          instruction: "Review the React shell against the frozen clause table. The machine evidence comes from the compiler-owned oracle; confirm the implementation does not game it, and judge the review-kind clauses (exact file set, untouched compiler-owned runtime) by inspection. Do not edit any file. Your result must be exactly one JSON object: {\"approved\":boolean,\"feedback\":\"specific changes keyed to clause ids\"}.",
+          commands: [oracleCommand],
+          oracleFiles: [FRONTEND_ORACLE_FILE],
+          clauses,
         },
       },
-      acceptanceCommands: ["node --test tests/frontend.contract.test.mjs"],
+      acceptanceCommands: [oracleCommand],
     }],
     edges: [],
   }

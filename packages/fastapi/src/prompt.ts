@@ -6,29 +6,32 @@
  * task's prompt is a pure function of the blueprint slice it needs:
  * narrow scope, explicit file ownership, previous artifacts readable.
  *
+ * Every prompt is KERNEL + BRIEF. The kernel renders the node's clause
+ * table (see clauses.ts) — the complete behavioral contract, shared
+ * byte-for-byte with the node oracle and the reviewer checklist — plus
+ * the shared operational constraints and the contract challenge
+ * protocol. The brief carries engineering guidance and reference data
+ * blocks, explicitly subordinate to the clause table.
+ *
  * Determinism rules: no timestamps, no randomness, no session state.
  * Identical blueprints produce identical prompts (and identical DAGs).
  */
-import { stableStringify } from "@spec/core"
-import type { BackendBlueprint, BlueprintRoute } from "./blueprint"
+import { stableStringify, type ContractClause } from "@spec/core"
+import type { BackendBlueprint } from "./blueprint"
 
-const SHARED_INVARIANTS = `## Global invariants (hold for every task)
-- Entity JSON keys are the field names EXACTLY as declared (camelCase stays camelCase).
-- ref fields serialize as the referenced row's id string.
-- Implicit columns (created_at on every entity, password_hash on the auth
-  principal) are NEVER serialized; created_at only orders lists (ascending).
-- list returns EVERY row of the entity (including the requesting principal
-  when applicable) as a bare JSON array, ordered by created_at ascending.
-- Fields with a declared default are omittable in create bodies; the
-  default applies when omitted; optional-without-default stores null.
-- Server generates uuid4 ids; id in request bodies is ignored.
-- Error bodies (exact): 401 {"detail": "Not authenticated"} ·
-  404 {"detail": "Not found"} (unknown id AND dangling refs) ·
-  409 {"detail": "Already exists"} (unique violations) · 422 = FastAPI default.
+const CHALLENGE_PROTOCOL = `## Contract challenge protocol
+If you conclude this contract is internally unsatisfiable or wrong, make no
+edits and reply with exactly one JSON object and nothing else:
+{"challenge":{"clause":"<clause id>","reason":"<one paragraph>"}}
+Never improvise around a defect; challenging it is the only correct response.`
+
+function sharedOperationalConstraints(bp: BackendBlueprint): string {
+  return `## Shared operational constraints
 - Path parameters are named exactly \`id\`.
-- Do not add any route, file or path beyond your scope — the conformance
-  suite asserts STRICT OpenAPI equality.
-- SQLite-compatible SQL only (tests run on SQLite).`
+- Error bodies are exact JSON, never wrapped, renamed, or extended: 401 ${JSON.stringify(bp.contract.errors.unauthenticated.body)} · 404 ${JSON.stringify(bp.contract.errors.notFound.body)} · 409 bodies as pinned per clause · 422 = the FastAPI default.
+- SQLite-compatible SQL only (tests run on SQLite).
+- Do not add any route, file, or path beyond your scope — the conformance suite asserts STRICT OpenAPI equality.`
+}
 
 /** Package-owned instructions selected for one target task kind. */
 function guidanceSection(bp: BackendBlueprint, taskKind: string): string {
@@ -36,24 +39,17 @@ function guidanceSection(bp: BackendBlueprint, taskKind: string): string {
     contribution.tasks.includes(taskKind),
   )
   if (contributions.length === 0) return ""
-  const lines = ["", "## Target and package engineering guidance"]
+  const lines = ["## Target and package engineering guidance"]
   for (const contribution of contributions) {
     lines.push("", `### ${contribution.package} · ${contribution.id}`)
     for (const instruction of contribution.instructions) lines.push(`- ${instruction}`)
   }
   lines.push(
     "",
-    "This guidance is subordinate to the compiler-derived behavioral contract.",
-    "If guidance appears to conflict with the blueprint, implement the blueprint.",
-    "",
+    "This guidance is subordinate to the node contract in the clause table.",
+    "If guidance appears to conflict with a clause, implement the clause.",
   )
   return lines.join("\n")
-}
-
-function routeTable(routes: BlueprintRoute[]): string {
-  return routes
-    .map((r) => `| ${r.method} | ${r.path} | ${r.status} | ${r.auth ? "bearer" : "public"} | ${r.operation} |`)
-    .join("\n")
 }
 
 function taskHeader(task: string, scope: string[], context: string[]): string {
@@ -80,317 +76,174 @@ conventions, and do NOT modify anything outside your scope.
   the pinned contract and write only the owned files.`
 }
 
+function clauseLines(clauses: ContractClause[]): string[] {
+  return clauses.map((clause) => `- [${clause.id}]${clause.verification === "review" ? " (reviewer-judged)" : ""} ${clause.statement}`)
+}
+
+export interface RenderKernelInput {
+  task: string
+  scope: string[]
+  context: string[]
+  clauses: ContractClause[]
+  blueprint: BackendBlueprint
+}
+
+/** The role-shared half of every prompt: the clause table and its protocol. */
+export function renderKernel(input: RenderKernelInput): string {
+  const api = input.clauses.filter((clause) => clause.level === "api")
+  const fn = input.clauses.filter((clause) => clause.level === "function")
+  const hasRoutes = input.clauses.some((clause) => clause.kind === "route" || clause.kind === "transition")
+  const hasAbi = input.clauses.some((clause) => clause.kind === "abi")
+  const forbidden: string[] = []
+  if (hasRoutes) forbidden.push("- No routes exist beyond the clause-listed interface of this task.")
+  if (hasAbi) forbidden.push("- The module's public surface is exactly the declared export list — no additional APIs, registries, or framework code.")
+  forbidden.push("- Files beyond your scope are never created or modified.")
+  return `${taskHeader(input.task, input.scope, input.context)}
+
+## Node contract (clause table)
+
+These clauses are the COMPLETE behavioral contract for this task. Each is
+machine-verified (oracle) or reviewer-judged (review) exactly as written;
+anything not stated here is implementation freedom.
+
+### api-level clauses
+${clauseLines(api).join("\n")}
+${fn.length > 0 ? `\n### function-level clauses\n${clauseLines(fn).join("\n")}` : ""}
+
+## Forbidden extras
+${forbidden.join("\n")}
+
+${sharedOperationalConstraints(input.blueprint)}
+
+${CHALLENGE_PROTOCOL}`
+}
+
+export interface RenderBriefInput {
+  blueprint: BackendBlueprint
+  taskKind: string
+  dataBlocks: Array<{ title: string; json: unknown }>
+  notes: string[]
+}
+
+/** The role-private half: engineering guidance and reference data. */
+export function renderBrief(input: RenderBriefInput): string {
+  const sections: string[] = []
+  const guidance = guidanceSection(input.blueprint, input.taskKind)
+  if (guidance) sections.push(guidance)
+  if (input.dataBlocks.length > 0) {
+    sections.push(
+      [
+        "## Reference data (subordinate to the clause table)",
+        ...input.dataBlocks.flatMap((block) => [`### ${block.title}`, "```json", stableStringify(block.json), "```"]),
+      ].join("\n"),
+    )
+  }
+  if (input.notes.length > 0) {
+    sections.push([`## Engineering notes`, ...input.notes.map((note) => `- ${note}`)].join("\n"))
+  }
+  return sections.join("\n\n")
+}
+
+/** The reviewer's projection of the clause table: machine clauses are
+ * evidence-checked, review clauses are judged by inspection. */
+export function reviewerPrompt(input: { task: string; clauses: ContractClause[] }): string {
+  const oracle = input.clauses.filter((clause) => clause.verification !== "review")
+  const review = input.clauses.filter((clause) => clause.verification === "review")
+  return `You are the read-only reviewer for generation node ${JSON.stringify(input.task)}.
+Verify the implementation against the frozen node contract below. The
+oracle clauses are already machine-verified by the compiler-owned tests in
+the evidence — confirm the implementation does not merely game those
+tests (hardcoded outputs, condition-special-casing, dead code paths).
+The reviewer-judged clauses MUST be verified by code inspection.
+
+## Oracle clauses (machine-verified — check for gaming, not re-derivation)
+${oracle.map((clause) => `- [${clause.id}] ${clause.statement}`).join("\n") || "- (none)"}
+
+## Reviewer-judged clauses (verify by inspection)
+${review.map((clause) => `- [${clause.id}] ${clause.statement}`).join("\n") || "- (none)"}
+
+Look for missing behavior, extra public API or routes, ABI drift, invalid
+imports, and uncovered constraints. Do not edit any file. Your result must
+be exactly one JSON object and nothing else: {"approved":boolean,"feedback":"specific changes keyed to clause ids"}.`
+}
+
 export interface TaskPromptInput {
   blueprint: BackendBlueprint
   scope: string[]
   context: string[]
+  clauses: ContractClause[]
+}
+
+function compose(kernel: RenderKernelInput, brief: RenderBriefInput): string {
+  return `${renderKernel(kernel)}\n\n${renderBrief(brief)}`
 }
 
 export function projectPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
-  const deps = Object.entries(bp.stack.dependencies)
-    .map(([name, version]) => `"${name}==${version}"`)
-    .join(",\n    ")
-  const dev = Object.entries(bp.stack.dev)
-    .map(([name, version]) => `"${name}==${version}"`)
-    .join(",\n    ")
-  return `${taskHeader("project skeleton", ctx.scope, ctx.context)}
-
-${guidanceSection(bp, "project")}
-
-Create the Python project skeleton for "${bp.app.title}".
-
-## Requirements
-- \`pyproject.toml\`: project name \`${bp.app.name.toLowerCase()}\`, version
-  \`${bp.app.version}\`, installable (hatchling or setuptools),
-  \`requires-python = "==${bp.stack.python}.*"\`, with EXACTLY these pinned
-  dependencies (the stack is part of the specification — do not add,
-  remove or float any version):
-  \`\`\`toml
-  dependencies = [
-    ${deps},
-  ]
-
-  [project.optional-dependencies]
-  dev = [
-    ${dev},
-  ]
-  \`\`\`
-  Do NOT add passlib (it crashes with bcrypt >= 5); bcrypt is already
-  pinned.
-- Package directory \`app/\` with \`app/__init__.py\`.
-- A \`.gitignore\` covering caches and virtualenvs.
-
-## App metadata
-\`\`\`json
-${stableStringify(bp.app)}
-\`\`\``
+  return compose(
+    { task: "project skeleton", scope: ctx.scope, context: ctx.context, clauses: ctx.clauses, blueprint: bp },
+    {
+      blueprint: bp,
+      taskKind: "project",
+      dataBlocks: [{ title: "App metadata", json: bp.app }],
+      notes: ["pyproject.toml must be installable (hatchling or setuptools)."],
+    },
+  )
 }
 
 export function modelsPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
-  return `${taskHeader("data models", ctx.scope, ctx.context)}
-
-${guidanceSection(bp, "models")}
-
-Implement the SQLAlchemy models (\`app/models.py\`).
-
-${SHARED_INVARIANTS}
-
-## Entities (the complete data model)
-\`\`\`json
-${stableStringify(bp.entities)}
-\`\`\`
-
-## Requirements
-- One class per entity; \`__tablename__\` = the blueprint's \`table\`
-  (snake_case plural); columns = the blueprint's \`column\` names.
-- \`id\`: string uuid primary key, server-side uuid4 default (Python-side
-  default is fine).
-- \`created_at\`: naive-UTC datetime column on EVERY entity, set once on
-  insert (a shared mixin is idiomatic).
-${bp.auth ? `- The principal \`${bp.auth.principal}\` additionally gets the implicit column \`${bp.auth.passwordColumn}\` (bcrypt hash).` : "- No auth in this specification: no password columns."}
-- \`ref\` fields become string(36) columns with ForeignKey("<target table>.id").
-- \`enum\` fields become string columns validated against their \`states\`;
-  a lifecycle-bound enum column defaults to the lifecycle's initial state.
-- Unique constraints for \`unique\` fields; nullable for \`optional\` fields.${
-    bp.effects
-      ? `
-- ALSO generate the outbox table \`${bp.effects.eventsTable}\` with EXACTLY
-  these columns: id (string uuid pk), event (string), payload (string
-  holding a JSON object), created_at (naive-UTC datetime). Transitions
-  with emit effects insert into it in-transaction; expose NO routes
-  for it.`
-      : ""
-  }`
+  const notes = [
+    "One class per entity; a shared mixin for id/created_at is idiomatic.",
+    "The uuid4 default may be Python-side; it must produce distinct ids per insert.",
+  ]
+  if (!bp.auth) notes.push("No auth in this specification: no password columns.")
+  return compose(
+    { task: "data models", scope: ctx.scope, context: ctx.context, clauses: ctx.clauses, blueprint: bp },
+    {
+      blueprint: bp,
+      taskKind: "models",
+      dataBlocks: [{ title: "Entities (the complete data model)", json: bp.entities }],
+      notes,
+    },
+  )
 }
 
 export function databasePrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
-  return `${taskHeader("database layer", ctx.scope, ctx.context)}
-
-${guidanceSection(bp, "database")}
-
-Implement the database/engine layer.
-
-${SHARED_INVARIANTS}
-
-## Database contract
-\`\`\`json
-${stableStringify(bp.database)}
-\`\`\`
-
-## Requirements
-- \`app/config.py\` exports only a pydantic-settings \`Settings\` class whose
-  optional \`database_url\` field reads \`DATABASE_URL\`; it does not read a
-  dotenv file or instantiate settings at module import.
-- \`app/database.py\` exports \`Base\`, \`normalize_database_url(value)\`,
-  \`resolve_database_url(explicit=None)\`, \`create_engine_from_url(explicit=None)\`,
-  \`create_session_factory(engine)\`, module defaults \`engine\` and
-  \`SessionLocal\`, \`get_db()\`, and \`session_dependency(factory)\`.
-- \`Base\` is the one SQLAlchemy \`DeclarativeBase\` imported by models.
-  \`create_session_factory\` returns a synchronous sessionmaker with
-  \`autoflush=False\` and \`expire_on_commit=False\`. SQLite engines use
-  \`check_same_thread=False\`; in-memory SQLite additionally uses \`StaticPool\`.
-- \`get_db\` yields from the module default \`SessionLocal\` and always closes
-  the session. \`session_dependency(factory)\` returns the same yielding
-  dependency bound to the supplied factory, for \`create_app\` isolation.
-- URL resolution order (pinned): explicit argument → \`DATABASE_URL\` env →
-  \`${bp.database.fallback}\`. Values are ALWAYS SQLAlchemy URLs
-  (\`sqlite:///...\`, \`postgresql+psycopg://...\`); a non-empty bare path is
-  normalized to \`sqlite:///<path>\`, and an empty string uses the fallback.
-- Tables are created via \`Base.metadata.create_all(engine)\` at app
-  startup (the app task wires this). Do not add caches, registries, dotenv
-  support, lazy module attributes, or other APIs.`
+  return compose(
+    { task: "database layer", scope: ctx.scope, context: ctx.context, clauses: ctx.clauses, blueprint: bp },
+    {
+      blueprint: bp,
+      taskKind: "database",
+      dataBlocks: [{ title: "Database contract", json: bp.database }],
+      notes: [
+        "Base is the one SQLAlchemy DeclarativeBase imported by models.",
+        "Tables are created via Base.metadata.create_all(engine) at app startup (the app task wires this).",
+      ],
+    },
+  )
 }
 
 export function schemasPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
-  return `${taskHeader("pydantic schemas", ctx.scope, ctx.context)}
-
-${guidanceSection(bp, "schemas")}
-
-Implement the request/response schemas (\`app/schemas.py\`).
-
-${SHARED_INVARIANTS}
-
-## Entities
-\`\`\`json
-${stableStringify(bp.entities.map((e) => ({ name: e.name, fields: e.fields })))}
-\`\`\`
-
-## Requirements
-- Per entity: a Create model (all fields except \`id\`; defaulted and
-  optional fields omittable), an Update model (every field optional —
-  partial PATCH semantics), and a response serializer producing EXACTLY
-  the declared field names in responses (never password_hash/created_at).
-- Field validation by type: string/int/boolean/uuid/email/datetime; ref
-  fields are id strings; enum fields validate against their \`states\`.
-- Lifecycle-bound state fields are EXCLUDED from Create and Update models
-  entirely (the server assigns the initial state; PATCH ignores the field).
-- Response serialization is contract-critical: keys and casing must match
-  the declared field names exactly.`
+  return compose(
+    { task: "pydantic schemas", scope: ctx.scope, context: ctx.context, clauses: ctx.clauses, blueprint: bp },
+    {
+      blueprint: bp,
+      taskKind: "schemas",
+      dataBlocks: [{ title: "Entities", json: bp.entities.map((e) => ({ name: e.name, fields: e.fields })) }],
+      notes: ["Response serialization is contract-critical; the clause table pins the exact key sets."],
+    },
+  )
 }
 
 export function securityPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
-  return `${taskHeader("auth security", ctx.scope, ctx.context)}
-
-${guidanceSection(bp, "security")}
-
-Implement JWT/bcrypt security (\`app/security.py\`, \`app/deps.py\`).
-
-${SHARED_INVARIANTS}
-
-## Auth contract
-\`\`\`json
-${stableStringify({ auth: bp.auth, unauthenticated: bp.contract.errors.unauthenticated })}
-\`\`\`
-
-## Requirements
-- Password hashing with the \`bcrypt\` package DIRECTLY (\`bcrypt.hashpw\` /
-  \`bcrypt.checkpw\`) — do NOT use passlib (passlib 1.7.4 crashes with
-  bcrypt >= 5). bcrypt rejects secrets longer than 72 bytes: truncate to
-  72 bytes in both hash and verify.
-- Expose \`hash_password\`, \`verify_password(password, password_hash | None) -> bool\`
-  (None or ValueError → False), \`create_access_token(subject) -> str\`,
-  \`decode_access_token(token) -> str | None\` from \`app/security.py\`.
-- JWT bearer tokens (sub = principal id, secret/expiry via env).
-- \`get_current_user\` dependency in \`app/deps.py\`: missing/invalid token →
-  401 \`{"detail": "Not authenticated"}\` (exact body). Use
-  \`HTTPBearer(auto_error=False)\` — the default \`auto_error\` raises **403**,
-  which violates the contract. If the models use SQLAlchemy \`Uuid\` columns,
-  parse \`uuid.UUID(sub)\` before \`db.get(...)\` — raw string binds against
-  \`Uuid\` columns raise and 500.`
-}
-
-/** The invariant section of a router prompt (empty when none apply). */
-function invariantSection(bp: BackendBlueprint, entityName: string): string {
-  const relevant = bp.invariants.filter((inv) =>
-    bp.routes.some(
-      (r) => r.entity === entityName && r.invariantIds?.includes(inv.id),
-    ),
+  return compose(
+    { task: "auth security", scope: ctx.scope, context: ctx.context, clauses: ctx.clauses, blueprint: bp },
+    {
+      blueprint: bp,
+      taskKind: "security",
+      dataBlocks: [{ title: "Auth contract", json: { auth: bp.auth, unauthenticated: bp.contract.errors.unauthenticated } }],
+      notes: ["JWT bearer tokens carry sub = principal id with secret/expiry via env."],
+    },
   )
-  if (relevant.length === 0) return ""
-  const lines: string[] = [
-    "",
-    "### Invariants (truths that must hold at ALL times)",
-    "",
-  ]
-  for (const inv of relevant) {
-    if (inv.shape === "crossRowCount") {
-      const c = inv.count!
-      const bound =
-        c.bound.kind === "field" ? `<row>.${c.bound.name}` : String(c.bound.value)
-      lines.push(
-        `- ${inv.name}: for every ${inv.entity} row — count of ${c.entity} rows whose`,
-        `  ${c.refField} points at it must be ${c.op === "lt" ? "<" : "≤"} ${bound}.`,
-        `  Enforced in create/update handlers of ${c.entity} and update handlers of`,
-        `  ${inv.entity}, INSIDE the request transaction: apply the mutation, re-check`,
-        `  the affected ${inv.entity} row, roll back and answer 409 on violation.`,
-      )
-    } else {
-      lines.push(
-        `- ${inv.name}: every ${inv.entity} row must satisfy the check tree below.`,
-        `  Validate on create/update before committing.`,
-      )
-    }
-  }
-  lines.push(
-    "",
-    "Pinned violation outcome (exact body, row rolled back):",
-    '409 `{"detail": "Invariant violated"}`',
-    "",
-    "Check trees (data, from the specification):",
-    "",
-    "```json",
-    stableStringify(relevant.map((inv) => ({ id: inv.id, shape: inv.shape, check: inv.check, count: inv.count }))),
-    "```",
-    "",
-  )
-  return lines.join("\n")
-}
-
-/** The lifecycle section of a router prompt (empty when no transitions). */
-function transitionSection(
-  transitions: Array<{
-    event: string
-    path: string
-    field: string
-    from: string[]
-    to: string
-    guard?: unknown
-    effects?: unknown[]
-  }>,
-): string {
-  if (transitions.length === 0) return ""
-  const hasEmits = transitions.some((tr) =>
-    Array.isArray(tr.effects) &&
-    tr.effects.some((e) => { const o = e as Record<string, unknown>; return o?.__effect === "emit" }),
-  )
-  const rows = transitions
-    .map(
-      (tr) =>
-        `| ${tr.event} | POST ${tr.path} | ${tr.field} ∈ {${tr.from.join(", ")}}${tr.guard ? " + guard" : ""} | ${tr.field} = ${tr.to}${Array.isArray(tr.effects) && tr.effects.length > 0 ? " + effects" : ""} |`,
-    )
-    .join("\n")
-  const lines = [
-    "",
-    "### Lifecycle transitions (state machine — the \"when it is allowed\" contract)",
-    "",
-    "| event | route | guard (current state) | sets |",
-    "| --- | --- | --- | --- |",
-    rows,
-    "",
-    "Implement each transition as an ATOMIC guarded update — the guard never",
-    "leaves SQL, so two concurrent transitions of the same row serialize and",
-    "the loser observes the guard failure:",
-    "",
-    "```sql",
-    "UPDATE <table> SET <state_col> = '<to>'",
-    "WHERE id = :id AND <state_col> IN ('<from>', ...) RETURNING *;",
-    "```",
-    "",
-    "Pinned outcomes (exact bodies):",
-    "- success → 200 with the updated row",
-    "- row exists but wrong current state (or a failed guard) → 409 `{\"detail\": \"Invalid state\"}`",
-    "- unknown id → 404 `{\"detail\": \"Not found\"}`",
-    "",
-    "The state field is server-controlled: it must NOT appear in create or",
-    "update schemas (create assigns the initial state; update ignores it).",
-  ]
-  if (transitions.some((tr) => tr.guard)) {
-    lines.push(
-      "",
-      "Guards (beyond the state check) are expression trees over row fields,",
-      "constants and `requestTime` (the request's receipt time, naive UTC —",
-      "evaluate it ONCE per request and bind it into the SQL comparison;",
-      "never bake a timestamp into code). Guard data:",
-      "",
-      "```json",
-      stableStringify(transitions.filter((tr) => tr.guard).map((tr) => ({ event: tr.event, guard: tr.guard }))),
-      "```",
-    )
-  }
-  if (transitions.some((tr) => Array.isArray(tr.effects) && tr.effects.length > 0)) {
-    lines.push(
-      "",
-      "Effects run inside the transition's transaction, in declared order,",
-      "all-or-nothing:",
-      "- `set`: assign the field in the same UPDATE (value: a constant or",
-      "  requestTime, naive UTC).",
-      hasEmits
-        ? "- `emit`: INSERT a row into the generated outbox table `events` —\n  columns EXACTLY (id TEXT uuid pk, event TEXT, payload TEXT holding a\n  JSON object, created_at datetime). The payload object's keys are the\n  effect's declared field names with the post-transition row's values."
-        : "- (this entity emits no events)",
-      "",
-      "Effects data:",
-      "",
-      "```json",
-      stableStringify(
-        transitions
-          .filter((tr) => Array.isArray(tr.effects) && tr.effects.length > 0)
-          .map((tr) => ({ event: tr.event, effects: tr.effects })),
-      ),
-      "```",
-    )
-  }
-  lines.push("")
-  return lines.join("\n")
 }
 
 export function routerPrompt(
@@ -399,247 +252,102 @@ export function routerPrompt(
   entityName: string,
 ): string {
   const entity = bp.entities.find((e) => e.name === entityName)!
-  const routes = bp.routes.filter((r) => r.owner.taskId === `router:${entityName}`)
   const transitions = bp.routes
     .filter((r) => r.operation === "transition" && r.entity === entityName && r.transition)
     .map((r) => ({
-      ...r.transition!,
+      event: r.transition!.event,
       path: r.path,
       ...(r.transition!.guard !== undefined ? { guard: r.transition!.guard } : {}),
       ...(r.transition!.effects !== undefined ? { effects: r.transition!.effects } : {}),
     }))
-  return `${taskHeader(`router: ${entityName}`, ctx.scope, ctx.context)}
-
-${guidanceSection(bp, "router")}
-
-Implement the API router for the **${entityName}** entity.
-
-${SHARED_INVARIANTS}
-
-## Entity
-\`\`\`json
-${stableStringify(entity)}
-\`\`\`
-
-## Routes for this router (the exact interface — no more, no less)
-| method | path | success | auth | operation |
-| --- | --- | --- | --- | --- |
-${routeTable(routes)}
-${transitionSection(transitions)}${invariantSection(bp, entityName)}
-## Requirements
-- Register count routes BEFORE any \`{id}\` route of the same prefix.
-- Use the schemas from \`app/schemas.py\` and the models from \`app/models.py\`.
-- Model/base ownership is exact: routers MUST NOT define an ORM base or import
-  \`Base\`/\`DeclarativeBase\`; all mapped classes already come from
-  \`app.models\`. If a reference-validation helper needs a model-class type,
-  use \`type[Any]\` (with \`Any\` from \`typing\`) or omit that annotation.
-- SQLAlchemy import locations are exact: \`func\`, \`select\`, and \`update\`
-  come from \`sqlalchemy\`; \`IntegrityError\` comes from
-  \`sqlalchemy.exc\`; \`Session\` comes from \`sqlalchemy.orm\`. Never import
-  \`DeclarativeBase\` from top-level \`sqlalchemy\`.
-- \`list\`: every row ordered by created_at ascending; bare JSON array.
-- \`create\`: 201 + stored row; validate that ref ids reference EXISTING
-  rows — dangling refs are 404 \`{"detail": "Not found"}\`.
-- \`update\`: partial PATCH; 200 + full row.
-- \`delete\`: 204, empty body.
-- \`count\`: \`{"count": <int>}\` (total rows).
-- Unique violations → 409 \`{"detail": "Already exists"}\`.
-${routes.some((r) => r.auth) ? "- Protected routes require the bearer token dependency (`get_current_user`)." : "- Every route here is public: no auth dependency."}`
+  const relevantInvariants = bp.invariants.filter((inv) =>
+    bp.routes.some((r) => r.entity === entityName && r.invariantIds?.includes(inv.id)),
+  )
+  const dataBlocks: RenderBriefInput["dataBlocks"] = [{ title: "Entity", json: entity }]
+  if (transitions.some((tr) => tr.guard !== undefined)) {
+    dataBlocks.push({ title: "Guard expressions (data, from the specification)", json: transitions.filter((tr) => tr.guard !== undefined).map((tr) => ({ event: tr.event, guard: tr.guard })) })
+  }
+  if (transitions.some((tr) => Array.isArray(tr.effects) && tr.effects.length > 0)) {
+    dataBlocks.push({ title: "Effects (data, applied inside the transition transaction in declared order)", json: transitions.filter((tr) => Array.isArray(tr.effects) && tr.effects.length > 0).map((tr) => ({ event: tr.event, effects: tr.effects })) })
+  }
+  if (relevantInvariants.length > 0) {
+    dataBlocks.push({ title: "Invariant check trees (data, from the specification)", json: relevantInvariants.map((inv) => ({ id: inv.id, shape: inv.shape, check: inv.check, count: inv.count })) })
+  }
+  const notes = [
+    "Use the schemas from `app/schemas.py` and the models from `app/models.py`.",
+    "Guards evaluate `requestTime` (the request's receipt time, naive UTC) ONCE per request, bound into the SQL comparison — never baked into code.",
+    "If a reference-validation helper needs a model-class type, use `type[Any]` (with `Any` from `typing`) or omit that annotation.",
+  ]
+  return compose(
+    { task: `router: ${entityName}`, scope: ctx.scope, context: ctx.context, clauses: ctx.clauses, blueprint: bp },
+    { blueprint: bp, taskKind: "router", dataBlocks, notes },
+  )
 }
 
 export function authRouterPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
   const auth = bp.auth!
   const principal = bp.entities.find((e) => e.name === auth.principal)!
-  return `${taskHeader("router: auth", ctx.scope, ctx.context)}
-
-${guidanceSection(bp, "router")}
-
-Implement the auth router (\`app/routers/auth.py\`).
-
-${SHARED_INVARIANTS}
-
-## Auth contract
-\`\`\`json
-${stableStringify(auth)}
-\`\`\`
-
-## Principal entity
-\`\`\`json
-${stableStringify(principal)}
-\`\`\`
-
-## Requirements
-- \`POST ${auth.routes.find((r) => r.operation === "login")!.path}\`: body
-  \`{"${auth.identityField}": ..., "password": ...}\` → 200
-  \`{"access_token": "<jwt>", "token_type": "bearer"}\`; wrong identity or
-  password → 401 \`{"detail": "Invalid credentials"}\` (identical for both —
-  no user enumeration).
-- \`POST ${auth.routes.find((r) => r.operation === "register")!.path}\`: body
-  = principal fields + \`"password"\` (bcrypt-hash before storage) → 201
-  with the principal row (never the hash). Duplicate identity → 409
-  \`{"detail": "Already exists"}\`.
-- \`GET ${auth.routes.find((r) => r.operation === "me")!.path}\`: bearer
-  token → 200 principal row.
-- Never serialize \`${auth.passwordColumn}\`.`
+  return compose(
+    { task: "router: auth", scope: ctx.scope, context: ctx.context, clauses: ctx.clauses, blueprint: bp },
+    {
+      blueprint: bp,
+      taskKind: "router",
+      dataBlocks: [
+        { title: "Auth contract", json: auth },
+        { title: "Principal entity", json: principal },
+      ],
+      notes: [],
+    },
+  )
 }
 
 export function appPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
-  const registrationOrder = bp.routes
-    .filter((r) => r.entity !== undefined || r.operation === "login" || r.operation === "register" || r.operation === "me")
-    .map((r) => `${r.method} ${r.path}`)
-  return `${taskHeader("application wiring", ctx.scope, ctx.context)}
-
-${guidanceSection(bp, "app")}
-
-Implement the application factory (\`app/main.py\`).
-
-${SHARED_INVARIANTS}
-
-## Application
-\`\`\`json
-${stableStringify(bp.app)}
-\`\`\`
-
-## Complete route interface (register every one, nothing else)
-${registrationOrder.map((r) => `- ${r}`).join("\n")}
-
-## Requirements
-- \`app/main.py\` MUST export
-  \`create_app(database_url: str | None = None) -> FastAPI\` AND a
-  module-level \`app = create_app()\`.
-- Title \`${bp.app.title}\`, version \`${bp.app.version}\`.
-- Include every router produced by previous tasks; count routes must be
-  reachable. Import \`ROUTERS\` from the compiler-owned
-  \`app.router_registry\` and include each entry exactly once in tuple order.
-  Do not import or register routers by any other path.
-- Call \`create_engine_from_url(database_url)\` and
-  \`create_session_factory(engine)\` once per application. Store the engine and
-  factory on \`app.state\`, override \`get_db\` with
-  \`session_dependency(factory)\`, and create tables on startup against that
-  engine. Dispose that engine on shutdown. This is what makes separate
-  \`create_app(database_url=...)\` calls isolated.
-- Construct deterministic in-memory cache, messaging, and blob adapters by
-  default and expose them as \`app.state.cache\`, \`app.state.messaging\`,
-  and \`app.state.blob\` when their corresponding contracts exist. Provider
-  adapters remain available for deployment, but tests require no external services.
-- Do not add extra routes: the conformance suite asserts strict OpenAPI
-  equality (FastAPI's automatic /openapi.json and /docs are fine).`
+  return compose(
+    { task: "application wiring", scope: ctx.scope, context: ctx.context, clauses: ctx.clauses, blueprint: bp },
+    {
+      blueprint: bp,
+      taskKind: "app",
+      dataBlocks: [{ title: "Application", json: bp.app }],
+      notes: ["Count routes must be reachable after inclusion (registration order comes from the compiler-owned registry tuple)."],
+    },
+  )
 }
 
 export function cachePrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
-  return `${taskHeader("cache infrastructure", ctx.scope, ctx.context)}
-
-${guidanceSection(bp, "cache")}
-
-Implement \`app/cache.py\` from this exact cache contract:
-
-\`\`\`json
-${stableStringify(bp.caches)}
-\`\`\`
-
-## Required public API
-- \`CacheUnavailable\` and immutable \`CachePolicy\`.
-- \`CACHE_POLICIES: dict[str, CachePolicy]\` containing every declared cache.
-- \`InMemoryCacheBackend\` with async \`get(policy_name, key)\`,
-  \`set(policy_name, key, value)\`, \`delete(policy_name, key)\`, and
-  \`get_or_set(policy_name, key, loader)\` methods. \`policy_name\` is always
-  the declared cache name string, never a \`CachePolicy\` object.
-- \`RedisCacheBackend(client)\` receives an already connected redis.asyncio-
-  compatible client and implements exactly the same four methods; it never
-  creates a client itself.
-- Values are JSON-compatible and isolated from caller mutation. In-memory TTL
-  uses monotonic time; expired entries are misses. Full provider keys are
-  \`<keyPrefix>:<key>\`.
-- Redis \`get\` calls \`await client.get(full_key)\`, \`set\` calls
-  \`await client.set(full_key, json_payload, ex=ttl_seconds)\`, and \`delete\`
-  calls \`await client.delete(full_key)\`. Decode bytes before JSON parsing.
-  A provider \`OSError\` is a miss/no-op for \`bypass\`; for \`fail-closed\`
-  it raises \`CacheUnavailable\` with the provider error preserved as its cause.
-- Unknown policy names raise \`KeyError\`. Empty keys raise \`ValueError\`.
-- Do not connect to Redis at import time. Do not add APIs beyond this list or
-  build a deployment framework in this module; keep the implementation focused.`
+  return compose(
+    { task: "cache infrastructure", scope: ctx.scope, context: ctx.context, clauses: ctx.clauses, blueprint: bp },
+    {
+      blueprint: bp,
+      taskKind: "cache",
+      dataBlocks: [{ title: "Cache contract", json: bp.caches }],
+      notes: [],
+    },
+  )
 }
 
 export function messagingPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
-  return `${taskHeader("messaging infrastructure", ctx.scope, ctx.context)}
-
-${guidanceSection(bp, "messaging")}
-
-Implement \`app/messaging.py\` from this exact contract:
-
-\`\`\`json
-${stableStringify({ messages: bp.messages, queues: bp.queues })}
-\`\`\`
-
-## Required public API
-- \`MessageValidationError\` plus immutable \`MessageDefinition\`, \`QueuePolicy\`,
-  and \`MessageEnvelope\` types. MessageEnvelope fields are exactly
-  \`message\`, \`version\`, \`id\`, \`occurred_at\`, and \`payload\`.
-- \`MESSAGE_DEFINITIONS\` and \`QUEUE_POLICIES\` maps containing every declaration.
-- \`validate_payload(message, payload)\` rejects missing, extra, or wrongly typed fields.
-- \`build_envelope(message, payload, *, message_id, occurred_at)\` returns a stable
-  version-1 envelope after validation; datetime values serialize as ISO strings.
-- Async \`InMemoryMessageBroker.publish(queue, envelope)\` and \`drain(queue)\`.
-  Publishing rejects messages not allowed by the queue and deduplicates message ids
-  for at-least-once queues. Drain preserves publish order.
-- Provider adapters named \`RabbitMQBroker\`, \`KafkaBroker\`, and \`SQSBroker\`
-  for selected providers. Each receives its already-connected provider client
-  in the constructor and exposes async \`publish(queue, envelope)\`; it must not
-  create or connect a client at import time.
-- Provider adapters validate the queue/message before any client call and use
-  deterministic compact JSON (\`sort_keys=True\`, separators \`(',', ':')\`) for
-  the envelope. A message not allowed by the queue raises
-  \`MessageValidationError\`. Provider errors propagate unchanged.
-- \`KafkaBroker.publish\` calls
-  \`await client.send_and_wait(queue_name, payload_bytes, key=ordering_key_bytes)\`;
-  the key is the declared ordering field encoded as UTF-8, or the message id
-  when the queue has no ordering field.
-- \`RabbitMQBroker.publish\` calls
-  \`await client.publish(queue_name, payload_bytes, message_id=envelope.id)\`.
-- \`SQSBroker.publish\` runs the blocking
-  \`client.send_message(QueueUrl=queue_name, MessageBody=payload_text,
-  MessageDeduplicationId=envelope.id, MessageGroupId=ordering_value_or_id)\`
-  through \`asyncio.to_thread\`.
-- Do not add APIs beyond this list or build worker/runtime orchestration in this
-  module; keep the implementation focused.`
+  return compose(
+    { task: "messaging infrastructure", scope: ctx.scope, context: ctx.context, clauses: ctx.clauses, blueprint: bp },
+    {
+      blueprint: bp,
+      taskKind: "messaging",
+      dataBlocks: [{ title: "Messaging contract", json: { messages: bp.messages, queues: bp.queues } }],
+      notes: [],
+    },
+  )
 }
 
 export function blobPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
-  const abi = bp.moduleAbis.blob
-  return `${taskHeader("blob infrastructure", ctx.scope, ctx.context)}
-
-${guidanceSection(bp, "blob")}
-
-Implement \`app/blob.py\` from this exact blob contract:
-
-\`\`\`json
-${stableStringify(bp.blobs)}
-\`\`\`
-
-## Exact module ABI (the only source of parameter names and selector type)
-\`\`\`json
-${stableStringify(abi)}
-\`\`\`
-
-## Required public API
-- \`BlobValidationError\` and immutable \`BlobPolicy\`.
-- \`BLOB_POLICIES: dict[str, BlobPolicy]\` containing every declaration.
-- \`normalize_blob_key(${abi?.selector.name ?? "policy_name"}, key)\` receives the declared policy name as a string and returns \`<keyPrefix>/<key>\` without
-  duplicate separators and rejects absolute paths, dot segments, and empty keys.
-- \`InMemoryBlobStore\` with async \`put(policy_name, key, data, content_type)\`,
-  \`get(policy_name, key)\`, \`delete(policy_name, key)\`, and \`signed_url(policy_name, key)\`.
-  Enforce byte limit and MIME allowlist before storing. Missing objects raise KeyError.
-  Signed URLs are exactly \`memory://<bucket>/<normalized-key>?expires=<ttl>\`.
-- \`S3BlobStore(client)\` receives an already configured boto3-compatible client
-  and implements the same four async methods. It never creates a client itself.
-- \`put\` validates before calling
-  \`client.put_object(Bucket=..., Key=..., Body=..., ContentType=...)\`;
-  \`get\` calls \`client.get_object(Bucket=..., Key=...)\` and returns
-  \`response["Body"].read()\`; \`delete\` calls
-  \`client.delete_object(Bucket=..., Key=...)\`; \`signed_url\` calls
-  \`client.generate_presigned_url("get_object", Params={"Bucket": ...,
-  "Key": ...}, ExpiresIn=<declared ttl>)\`.
-- Run every blocking client call and response-body read through
-  \`asyncio.to_thread\`. Never create or contact an S3 client during module
-  import. Do not add APIs beyond this list; keep the module focused.`
+  return compose(
+    { task: "blob infrastructure", scope: ctx.scope, context: ctx.context, clauses: ctx.clauses, blueprint: bp },
+    {
+      blueprint: bp,
+      taskKind: "blob",
+      dataBlocks: [
+        { title: "Blob contract", json: bp.blobs },
+        { title: "Exact module ABI (the only source of parameter names and selector type)", json: bp.moduleAbis.blob },
+      ],
+      notes: [],
+    },
+  )
 }

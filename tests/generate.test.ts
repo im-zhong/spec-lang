@@ -82,16 +82,25 @@ describe("spec generate (dry-run planning)", () => {
     const orderSeed = cases[0].setup?.body
     expect(orderSeed).toMatchObject({ quantity: 7, reference: "interface-reference", status: "placed" })
     expect(orderSeed?.status).not.toMatch(/^interface-/)
-    // Every loop's tests role owns one exact path; the compiler materializes
-    // its scaffold there so agents can never invent a different location.
-    const scaffolds = Object.keys(composite.shot.seedFiles ?? {}).filter((file) => file.includes("spec_tasks"))
-    expect(scaffolds).toHaveLength(18)
-    expect(scaffolds.filter((file) => file.endsWith("/test_project.py")).sort()).toEqual([
-      "orders/tests/spec_tasks/test_project.py",
-      "reporting/tests/spec_tasks/test_project.py",
-      "warehouse/tests/spec_tasks/test_project.py",
+    // Every node's oracle is compiler-owned at one exact path; the seed
+    // materializes it so the judgment can never be agent-invented.
+    const oracles = Object.keys(composite.shot.seedFiles ?? {}).filter((file) => file.includes("spec_oracle/test_"))
+    expect(oracles).toHaveLength(18)
+    expect(oracles.filter((file) => file.endsWith("/test_project.py")).sort()).toEqual([
+      "orders/tests/spec_oracle/test_project.py",
+      "reporting/tests/spec_oracle/test_project.py",
+      "warehouse/tests/spec_oracle/test_project.py",
     ])
-    expect(composite.shot.seedFiles?.["orders/tests/spec_tasks/test_project.py"]).toContain("Compiler-owned test scaffold")
+    expect(composite.shot.seedFiles?.["orders/tests/spec_oracle/test_project.py"]).toContain("Compiler-owned node oracle")
+    expect(composite.shot.seedFiles?.["orders/tests/spec_oracle/runner.py"]).toBeDefined()
+    // The loop is v0.2: no tests worker, reviewer evidence is the oracle.
+    const ordersProject = composite.shot.tasks.find((task) => task.id === "orders:project")!
+    expect(ordersProject.loop?.schemaVersion).toBe("spec-agent-task-loop/0.2")
+    expect(ordersProject.loop?.tests).toBeUndefined()
+    expect(ordersProject.loop?.reviewer.commands[0]).toContain("tests/spec_oracle/test_project.py")
+    expect(ordersProject.loop?.reviewer.oracleFiles).toContain("orders/tests/spec_oracle/test_project.py")
+    expect(ordersProject.loop?.reviewer.clauses?.length).toBeGreaterThan(0)
+    expect(ordersProject.scope).not.toContain("orders/tests/spec_oracle/test_project.py")
   })
 
   it("lowers interface-bound backend and frontend modules as parallel isolated roots", async () => {
@@ -197,7 +206,10 @@ describe("spec generate (dry-run planning)", () => {
     expect(plan.tasks).toHaveLength(generation.dag.tasks.length + 3)
     expect(plan.tasks.find((task) => task.id === "models")?.scope).toEqual([
       "products/media-platform/backend/app/models.py",
-      "products/media-platform/backend/tests/spec_tasks/test_models.py",
+    ])
+    expect(plan.tasks.find((task) => task.id === "models")?.loop?.reviewer.oracleFiles).toEqual([
+      "products/media-platform/backend/tests/spec_oracle/runner.py",
+      "products/media-platform/backend/tests/spec_oracle/test_models.py",
     ])
     expect(plan.tasks.find((task) => task.id === "conformance")?.dependsOn).toEqual(["app"])
     expect(plan.tasks.find((task) => task.id === "containers")?.dependsOn).toEqual(["conformance"])

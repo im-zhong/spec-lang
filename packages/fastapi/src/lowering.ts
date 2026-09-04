@@ -19,6 +19,7 @@ import { stableStringify } from "@spec/core"
 import { buildBlueprint, type BackendBlueprint } from "./blueprint"
 import { buildConformanceSuite, type ConformanceFiles } from "./conformance"
 import { buildTaskDag, dagFingerprint, type GenerationDag } from "./dag"
+import { buildNodeOracles } from "./oracle"
 import { fastApiVerification, type VerificationPlan } from "./verify"
 
 export interface FastApiGenerationPlan {
@@ -58,22 +59,12 @@ export function planGeneration(ir: SpecIR): FastApiGenerationPlan {
       "",
     ].join("\n"),
   }
-  // Every loop's tests role owns exactly one file. Materializing the scaffold
-  // at that exact path mechanically pins the location: the agent edits the
-  // seeded file in place instead of inventing a path, and an empty scaffold
-  // collects no tests, so acceptance stays failing until real tests exist.
-  for (const task of dag.tasks) {
-    const testFile = task.loop?.tests?.scope[0]
-    if (!testFile) continue
-    seedFiles[testFile] = [
-      '"""Compiler-owned test scaffold for this generation node.',
-      "",
-      "Replace this body with real executable tests. An empty scaffold collects",
-      "no tests, so the node's acceptance command keeps failing until real tests",
-      'exist. Do not rename or move this file."""',
-      "",
-    ].join("\n")
-  }
+  // The per-node oracles are compiler-owned: materialized with the seed,
+  // identical in every shot, frozen across loop rounds, and unwritable by
+  // any agent (the scope audit rejects writes outside the implementation
+  // scope). The node's acceptance command runs these files, so the node
+  // judgment itself is deterministic.
+  Object.assign(seedFiles, buildNodeOracles(blueprint, dag.tasks).files)
 
   const constraints: Constraint[] = [
     { kind: "interface", value: blueprint.routes.map((r) => r.id).sort() },

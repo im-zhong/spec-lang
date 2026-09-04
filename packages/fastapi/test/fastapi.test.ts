@@ -291,10 +291,10 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
     expect(testFile).toContain('"MessageDeduplicationId": envelope.id')
 
     const cache = plan.dag.tasks.find((task) => task.id === "cache")!.prompt
-    expect(cache).toContain("policy_name` is always")
+    expect(cache).toContain("policy_name is always the declared cache name string")
     const database = plan.dag.tasks.find((task) => task.id === "database")!.prompt
     expect(database).toContain("session_dependency(factory)")
-    expect(database).toContain("Do not add caches, registries, dotenv")
+    expect(database).toContain("no caches, registries, dotenv")
     expect(database).toContain("Do not invoke `pip`, `venv`")
     const messaging = plan.dag.tasks.find((task) => task.id === "messaging")!.prompt
     expect(messaging).toContain("client.send_and_wait(queue_name")
@@ -370,10 +370,13 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
     expect(models).toContain("use `/tmp`")
     expect(models).toContain("Never create `.pkg-tmp`")
     const shared = a.dag.tasks.find((t) => t.id === "router:Post")!.prompt
-    expect(shared).toContain('"detail": "Not authenticated"')
-    expect(shared).toContain('"detail": "Already exists"')
-    expect(shared).toContain("list returns EVERY row")
-    expect(shared).toContain("routers MUST NOT define an ORM base")
-    expect(shared).toContain("`DeclarativeBase` from top-level `sqlalchemy`")
+    expect(shared).toContain('"detail":"Not authenticated"')
+    expect(shared).toContain("EVERY row as a bare JSON array")
+    expect(shared).toContain("defines no ORM base")
+    expect(shared).toContain("never DeclarativeBase from top-level sqlalchemy")
+    expect(shared).toContain("[route:POST /posts]")
+    const auth = a.dag.tasks.find((t) => t.id === "router:auth")!.prompt
+    expect(auth).toContain('"detail":"Already exists"')
+    expect(auth).toContain('"detail":"Invalid credentials"')
   })
 })

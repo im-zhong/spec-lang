@@ -54,7 +54,10 @@ function prefixTask(module: SpecModuleDefinition, directory: string, task: Harne
       loop: {
         ...task.loop,
         implementation: { ...task.loop.implementation, scope: task.loop.implementation.scope.map(prefix) },
-        tests: { ...task.loop.tests, scope: task.loop.tests.scope.map(prefix) },
+        reviewer: {
+          ...task.loop.reviewer,
+          ...(task.loop.reviewer.oracleFiles ? { oracleFiles: task.loop.reviewer.oracleFiles.map(prefix) } : {}),
+        },
       },
     } : {}),
   }

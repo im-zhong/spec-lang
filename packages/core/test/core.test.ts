@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
+  clauseId,
+  clauseTable,
   constraint,
   defineApp,
   isFieldRef,
@@ -9,6 +11,7 @@ import {
   serializeValue,
   fieldRef,
   toReference,
+  type ContractClause,
 } from "../src"
 
 describe("@spec/core types and DSL", () => {
@@ -71,5 +74,42 @@ describe("@spec/core types and DSL", () => {
     expect(JSON.stringify(serializeValue(value))).toBe(
       JSON.stringify({ a: { x: "s", y: [1, 2] }, b: 1, f: { type: "email", unique: true } }),
     )
+  })
+})
+
+describe("clause tables", () => {
+  const clause = (id: string, overrides: Partial<ContractClause> = {}): ContractClause => ({
+    id,
+    statement: `statement for ${id}`,
+    node: "router:Booking",
+    kind: "route",
+    verification: "oracle",
+    level: "api",
+    ...overrides,
+  })
+
+  it("clauseId joins stable identifier parts and keeps route ids verbatim", () => {
+    expect(clauseId("route", "POST /api/posts")).toBe("route:POST /api/posts")
+    expect(clauseId("entity", "Booking", "column", "startsAt")).toBe("entity:Booking:column:startsAt")
+    expect(clauseId("invariant:no-overbooking")).toBe("invariant:no-overbooking")
+  })
+
+  it("clauseId rejects empty and whitespace-only parts", () => {
+    expect(() => clauseId()).toThrow("at least one part")
+    expect(() => clauseId("route", " ")).toThrow("cannot be empty")
+  })
+
+  it("clauseTable sorts by id and stamps the schema version", () => {
+    const table = clauseTable("router:Booking", [clause("route:POST /bookings"), clause("abi:x")])
+    expect(table.schemaVersion).toBe("spec-clause-table/0.1")
+    expect(table.node).toBe("router:Booking")
+    expect(table.clauses.map((c) => c.id)).toEqual(["abi:x", "route:POST /bookings"])
+  })
+
+  it("clauseTable rejects duplicate ids, foreign nodes, and empty statements", () => {
+    expect(() => clauseTable("router:Booking", [clause("a"), clause("a")])).toThrow("duplicate id a")
+    expect(() => clauseTable("router:Booking", [clause("a", { node: "app" })])).toThrow("declares node")
+    expect(() => clauseTable("router:Booking", [clause("a", { statement: " " })])).toThrow("empty statement")
+    expect(() => clauseTable("  ", [])).toThrow("non-empty node id")
   })
 })
