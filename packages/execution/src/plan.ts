@@ -74,6 +74,7 @@ export function createAgentExecutionPlan(input: AgentExecutionPlanInput): AgentE
     defaultBranch: input.defaultBranch ?? "main",
     rootBaseSha: input.rootBaseSha,
     branchPrefix: (input.branchPrefix ?? "spec/generate").replace(/\/$/, ""),
+    ...(input.planVersion !== undefined && input.planVersion > 1 ? { planVersion: input.planVersion } : {}),
     environment: {
       ...(input.environment.image ? { image: input.environment.image } : {}),
       ...(input.environment.runtime ? { runtime: input.environment.runtime } : {}),
