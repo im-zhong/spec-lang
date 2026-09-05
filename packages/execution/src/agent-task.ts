@@ -357,11 +357,11 @@ export async function executeAgentTask(
         ? `${task.loop.implementation.instruction}${shared}\nYou own only: ${task.loop.implementation.scope.join(", ")}.`
         : `${shared}Fix the reviewer's findings and ensure ALL clauses pass.\nYou own only: ${task.loop.implementation.scope.join(", ")}.`
       // R2+: resume the previous implementer session for speed
-      const roundCommand = round > 1 && writerSessionId !== undefined
-        ? options.agentCommand.map((arg, i) =>
-            arg === "--no-session-persistence" ? "--resume" :
-            arg === "--no-session-persistence" || (options.agentCommand[i - 1] === "--no-session-persistence") ? writerSessionId : arg)
-        : options.agentCommand
+      const resumeId = round > 1 ? writerSessionId : undefined
+      const roundCommand: string[] = resumeId !== undefined
+        ? options.agentCommand.flatMap((arg) =>
+            arg === "--no-session-persistence" ? ["--resume", resumeId] : [arg])
+        : [...options.agentCommand]
       const before = snapshot(taskDirectory)
       events?.emit({ kind: "round.started", task: task.id, round })
       const writer = await runAgent("implementation", round, roundCommand, writerPrompt)
