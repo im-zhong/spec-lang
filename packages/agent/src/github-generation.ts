@@ -132,7 +132,7 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
         // constraints), runs no agent, no oracle; the DAG placeholder lets
         // children's integration bases resolve against main HEAD.
         const marker = `.spec-landed/${safeTaskId(task.id)}`
-        return { ...task, loop: undefined, acceptanceCommands: [], executor: "materialize" as const, materializedFiles: { [marker]: `reused from v1: ${task.id}\n` }, scope: [marker] }
+        return { ...task, loop: undefined, acceptanceCommands: [], executor: "materialize" as const, materializedFiles: { [marker]: `reused from v1: ${task.id}\n` }, scope: [...task.scope, marker] }
       }
       return task
     })
