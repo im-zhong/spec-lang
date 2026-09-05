@@ -603,6 +603,9 @@ Field modifiers：
 unique()
 optional()
 default(...)
+min(n)        // int 字段：验证下界（含），越界 422
+max(n)        // int 字段：验证上界（含），越界 422
+maxLength(n)  // string 字段：最大长度（含），越界 422
 ```
 
 设计成 chain API：
@@ -611,7 +614,14 @@ default(...)
 field.email()
   .unique()
   .optional()
+
+field.int().min(1).max(10)
+field.string().maxLength(40)
 ```
+
+bounds 是**验证语义**（pydantic 层 → 默认 422），与 invariant 的语义约束
+（409）刻意分开：声明了 bounds 的字段，conformance 采样器会把样本夹进
+界内，并对每个边界生成越界 422 探针 + 界内 201 探针。
 
 ---
 
@@ -2370,3 +2380,55 @@ pnpm spec build examples/basic-web-app/app.spec.ts
 * README 可以让新开发者从零运行项目。
 
 我建议你把这份直接作为 Coding Agent 的 **顶层 implementation spec**。第一版刻意没有让它碰 LLM、Agent Runtime 和形式化验证，先把 **Spec → Package → Compiler → IR → Diagnostic** 这条最核心的骨架做稳。等这个 MVP 跑起来后，第二阶段再加 `Agentic Compiler Pass`，整个系统会清晰很多。
+
+---
+
+# 61. Test Package（@spec/test）
+
+测试词汇：作者声明的 input→output 契约，编译成冻结的测试字节。
+**agent 永远不写测试**——测试和 Dockerfile 一样是 lowering 输出。
+
+宪法：`{given, input, expect}` 三元组是唯一测试原语；property/fuzz/
+probe/scenario 都是编译期坍缩回该三元组的糖。
+
+```ts
+import { ANY, NOT_NULL, example, fixture, op } from "@spec/test"
+
+example("venue-create-exact", {
+  on: op(Venues, "create"),            // crud 方法或 lifecycle 事件
+  input: { name: "annex", capacity: 7 },  // 完整 literal 请求体（$binding 引用 fixture 行）
+  expect: {
+    status: 201,
+    match: "exact",                    // 默认 subset：键集精确性由规则推导 clause 免费保证
+    body: { id: NOT_NULL, name: "annex", capacity: ANY },
+    state: {                           // 世界效果（golden rule (c) 正确性）
+      outbox: [{ event: "venue.opened", from: "$v", fields: ["id", "name"] }],
+      counts: [{ entity: Venue, delta: -1 }],   // delta 0 = 回滚断言
+    },
+  },
+})
+
+example("venue-open", {
+  on: op(VenueFlow, "open"),
+  subject: "$v",                        // 路径 {id} 指向的行
+  given: [fixture(Venue, { as: "v", fields: { capacity: 7 } })],  // fields 是合成世界的 overrides
+  expect: { status: 200, body: { state: "open" } },
+})
+```
+
+封闭词表与校验（`spec check` 拒绝，EXAMPLE_* 诊断）：
+
+```text
+expect.body 值 = literal | "$binding"（ref target 类型校验）| NOT_NULL | ANY
+非 2xx body   = 只许 {"detail"} 键（错误体归目标契约）
+match         = "subset"（默认）| "exact"（必须覆盖全部响应字段）
+state.outbox  = event + from:$fixture + payload 字段（值编译期算出）
+state.counts  = entity + delta（整数；0 表示"不变"）
+```
+
+降低路径：DSL → IR → blueprint（examples 解析到路由）→ 节点 `test`
+clause（值进 prompt）→ `conformance/test_examples.py`（终点）**以及**
+router 节点 oracle 的 behavior 三元组（循环内，一次性 app 执行器）。
+
+fixture 示例：`examples/bounds`（其中 `invalid-example.spec.ts` 故意无
+效，只被测试编译）。字段 bounds（min/max/maxLength → 422）见 §16。

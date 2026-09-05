@@ -3,7 +3,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { buildClaudeArgs, parseResultJson } from "../src/runner"
-import { normalizeJson, OPENAPI_SNIPPET } from "../src/repeatability"
+import { normalizeJson, OPENAPI_SNIPPET } from "../src/snapshots"
 import { isCompilerWorkspace, MARKER_FILE, prepareWorkspace, scanArtifacts, sha256 } from "../src/artifacts"
 import { runCommand } from "../src/orchestrate"
 import { AgentHarness, schedule, type HarnessTask } from "../src/harness"
@@ -104,7 +104,7 @@ describe("runCommand", () => {
   }, 10_000)
 })
 
-describe("repeatability helpers", () => {
+describe("snapshot helpers", () => {
   it("normalizeJson extracts the canonical JSON object", () => {
     expect(normalizeJson('noise {"a":1} trailing')).toBe('{"a":1}')
     expect(normalizeJson("nothing")).toBeNull()

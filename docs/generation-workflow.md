@@ -31,14 +31,21 @@ For run `R` and generator node `T`:
 3. A ready node gets an immutable integration-base ref and branch
    `spec/generate/R/T`.
 4. A fresh digest-pinned container receives a disposable detached worktree.
-   An agent node runs a bounded synthesis loop. Its implementation and unit-test
-   Claude instances start concurrently from separate snapshots of the same
-   frozen spec progress and have disjoint exact scopes. The harness audits each
-   snapshot before merging it into the node workspace.
-5. A read-only reviewer Claude runs the declared tests, reviews code and tests
-   against the frozen spec, and returns a structured approve/reject verdict.
-   Rejection starts the next bounded synthesis round with feedback for both
-   writers. Reviewer changes to files are rejected by the harness.
+   An agent node runs a bounded synthesis loop (v0.2, see
+   `docs/clause-driven-generation.md`): ONE implementer Claude works directly
+   in the task workdir against the node's frozen clause table, with exactly
+   one correct response to an unsatisfiable contract — the challenge
+   protocol. The harness audits every file change against the declared
+   scope.
+5. A read-only reviewer Claude runs the compiler-owned node oracle — shape
+   checks plus, for router nodes, the in-loop BEHAVIOR probes (a throwaway
+   app: only this router + in-memory SQLite + a `get_db` override,
+   interpreting compiled `{given, request, expect}` triples) — reviews the
+   implementation against the same clause table, and returns a structured
+   approve/reject verdict. Rejection starts the next bounded synthesis
+   round with clause-keyed feedback. Reviewer changes to files are rejected
+   by the harness. Agents never author test code; every test byte is
+   compiler output.
 6. After reviewer approval, the compiler-owned node acceptance runs exactly
    once. Its result never becomes repair feedback. The final compiler-owned
    conformance node still runs exactly once after the generated-code sink.

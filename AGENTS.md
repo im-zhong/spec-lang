@@ -125,9 +125,9 @@ detail. For every non-dry-run golden-rule generation:
   evidence.
 
 If the implementation cannot create this topology, stop before spending agent
-tokens and report a generator implementation defect. Do not fall back to the
-legacy local `runRepeatability` harness or to multiple branches/directories in
-one target repository.
+tokens and report a generator implementation defect. (The legacy local
+`runRepeatability` harness has been deleted; there is no non-GitHub fallback,
+and multiple branches/directories in one target repository never count.)
 
 - Run installs, tests, Git commands, and dev servers against the intended
   shot's local checkout/worktree only; never let an enclosing spec-lang
@@ -172,9 +172,11 @@ which a generator run stores generated products or GitHub control-plane state.
 ## Pointers
 
 - Pinned gaps and run history: `docs/golden-rule-results.md`
+- Pending work, phased: `docs/TODO.md`
 - Backend anti-overfit trio: `examples/cblog`, `examples/inventory`,
   `examples/booking` must all pass `spec generate --shots 2`
+- Test vocabulary fixture: `examples/bounds` (bounds + author examples;
+  `invalid-example.spec.ts` in it is compiled only by tests, on purpose)
 - Frontend acceptance: `examples/frontend-golden` (multi-screen, live nav)
 - Agent runs are slow and cost real money (~$1–4/shot backend, 10–30 min;
-  frontend wiring ~$0.4, ~2 min). E2E agent tests are opt-in via
-  `SPEC_AGENT_E2E=1`.
+  frontend wiring ~$0.4, ~2 min).

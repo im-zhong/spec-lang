@@ -162,3 +162,65 @@ formulas; see `examples/store-platform/prompts.md`).
   app+sqlite client) as clause vocabulary grows; every new probe must
   trace to clause ids.
 - `lint` verification remains reserved for real lint rules.
+
+## 11. Addenda (2026-09-05)
+
+- **Oracle v2 — in-loop behavior execution**: router node oracles no
+  longer stop at shape. Each router CONTRACT now embeds a `behavior`
+  block of interpretable `{given, request, expect}` triples — rule-derived
+  probes for every owned route (create echo/conflict/dangling/422/bounds,
+  get/list/update/delete, every transition direction incl. a statically
+  derived guard-violation probe, protected-route 401) PLUS the author
+  examples targeting those routes, verbatim. The runner assembles a
+  throwaway app per triple (FastAPI + only this router + in-memory SQLite
+  + a `get_db` override), seeds fixtures by direct table inserts (sibling
+  routers do not exist yet; uuid/datetime column values are coerced),
+  sends real HTTP, and asserts status/body predicates/bindings, exact key
+  sets, list shapes, table counts, and outbox event payloads. Every value
+  is a compiled literal (deterministic uuids, guard-directed samples
+  evaluated tri-state at compile time), so the block is byte-stable.
+  Behavior defects die in loop round 1 instead of detonating at the
+  single-shot terminal conformance. Verified three ways: py_compile across
+  all examples, a green run against a hand-written contract-conformant
+  node implementation, and two mutations (guard boundary off-by-one,
+  dropped emit) both rejected with labeled triples.
+
+Three contract surfaces landed on top of the v0.2 loop, all in the same
+discipline (pure data → clause table → frozen bytes; agents author no
+tests, ever):
+
+- **Field bounds** (`field.int().min/.max`, `field.string().maxLength`):
+  validation vocabulary answering the default 422, deliberately distinct
+  from invariant semantics (409). Bounds flow into schemas clauses
+  (`schemas:<E>:bound:<f>`), the schemas node oracle asserts the pydantic
+  constraints, and conformance clamps every sampler into bounds while
+  probing both sides of each boundary (min-1/min/max+1 → 422, distinct
+  in-bounds value → 201).
+- **`@spec/test` example vocabulary** (`example`/`op`/`fixture`): an
+  author-declared input→output contract — the strongest per-route test.
+  Resolution, input completeness, and field/binding validity are checked
+  at `spec check` (EXAMPLE_* diagnostics); each example lowers onto its
+  owning router node as a `test` clause (values included) and into a
+  frozen `conformance/test_examples.py` (literal body in, pinned status +
+  body subset out; fixtures are overrides over the synthesized world).
+  `examples/bounds` is the fixture spec; subset match is the default
+  because exact response key sets are already pinned by rule-derived
+  clauses.
+- **Expectation language v2** (same day): body values widen from literals
+  to literals | `$binding` row-id references (ref-target checked) | the
+  closed predicates `NOT_NULL` / `ANY`; `match: "exact"` additionally
+  pins the full response key set (completeness enforced at `spec check`);
+  `state` asserts what the request did to the WORLD — outbox event rows
+  (`event`, `from: $fixture`, payload `fields` matched against the row)
+  and per-table row-count deltas snapshot around the request (delta 0
+  asserts rollback). Error-status bodies address the pinned `{"detail"}`
+  envelope and are exempt from entity-field membership. The design tenet:
+  input→output is the ONE test primitive; every future form (properties,
+  boundary lattices, scenarios) is sugar that compiles down to the same
+  `{given, input, expect}` triple.
+- **Compiled import surface + reading discipline** (prompt kernel): the
+  task header no longer invites the agent to read dependency sources for
+  conventions. The compiler inlines the exact importable symbol slice
+  (computed from the blueprint, per dependency set) and forbids reading
+  `conformance/`, `tests/spec_oracle/`, `.spec/`, `.spec-input/`, and
+  sibling routers — the clause table is the complete contract.

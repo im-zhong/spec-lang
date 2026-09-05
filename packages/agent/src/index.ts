@@ -22,13 +22,7 @@ export {
   type CommandResult,
   type VerificationCommand,
 } from "./orchestrate"
-export {
-  runRepeatability,
-  normalizeJson,
-  OPENAPI_SNIPPET,
-  type RepeatabilityReport,
-  type RepeatabilityOptions,
-} from "./repeatability"
+export { normalizeJson, OPENAPI_SNIPPET } from "./snapshots"
 export { scanArtifacts, prepareWorkspace, isCompilerWorkspace, sha256, MARKER_FILE } from "./artifacts"
 export { diagnostic } from "./diagnostics"
 export {
