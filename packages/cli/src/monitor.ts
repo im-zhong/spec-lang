@@ -183,7 +183,10 @@ export function buildMonitorState(runRoot: string): MonitorState {
     const kind = String(event.kind)
     if (kind === "run.started") startedAt = ts
     if (kind === "run.finished") {
-      finished = { ts, ok: event.ok === true, costUsd: typeof event.costUsd === "number" ? event.costUsd : undefined }
+      const candidate = { ts, ok: event.ok === true, costUsd: typeof event.costUsd === "number" ? event.costUsd : undefined }
+      // Only the LATEST run.finished matters; older attempts' failures
+      // must not leak into the display while a retry is still running.
+      finished = candidate
     }
     if (kind === "node.started") {
       const task = String(event.task)
@@ -542,7 +545,7 @@ async function tick() {
   try {
     const s = await (await fetch("/api/state")).json();
     const mins = s.startedAt ? Math.round((Date.now() - new Date(s.startedAt)) / 60000) : "?";
-    const banner = s.finishedAt
+    const banner = s.finishedAt && !s.processAlive
       ? '<div class="' + (s.ok ? "banner-ok" : "banner-bad") + '">' + (s.ok ? "✓ conformance passed" : "✗ run failed") + " · $" + (s.costUsd ?? 0).toFixed(2) + "</div>"
       : "";
     const bannerEl = document.getElementById("banner");
