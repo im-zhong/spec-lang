@@ -1,0 +1,12 @@
+{
+  "name": "@spec/example-bounds",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@spec/core": "workspace:*",
+    "@spec/fastapi": "workspace:*",
+    "@spec/postgres": "workspace:*",
+    "@spec/test": "workspace:*",
+    "@spec/web": "workspace:*"
+  }
+}

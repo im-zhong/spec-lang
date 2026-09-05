@@ -29,17 +29,32 @@ export interface ConformanceFiles {
 }
 
 /** Sample request value for a field, as a Python literal/expression. */
+/** A deterministic in-bounds int for a bounded field (clamps 42). */
+function intInBounds(field: BlueprintField, preferred: number): number {
+  if (field.min !== undefined && preferred < field.min) return field.min
+  if (field.max !== undefined && preferred > field.max) return field.max
+  return preferred
+}
+
 function sampleValue(field: BlueprintField): string {
   switch (field.type) {
-    case "string":
+    case "string": {
       // Unique string fields need per-call values or repeated creates 409.
+      // Declared maxLength caps the emitted sample (uuid hex stays unique).
+      if (field.maxLength !== undefined) {
+        const cap = field.maxLength
+        return field.unique
+          ? `f"{uuid.uuid4().hex[:${cap}]}"`
+          : JSON.stringify(`sample-${field.name}`.slice(0, cap))
+      }
       return field.unique
         ? `f"{uuid.uuid4()}-sample-${field.name}"`
         : JSON.stringify(`sample-${field.name}`)
+    }
     case "email":
       return `f"{uuid.uuid4()}@example.com"`
     case "int":
-      return "42"
+      return String(intInBounds(field, 42))
     case "boolean":
       return "True"
     case "uuid":
@@ -57,13 +72,23 @@ function sampleValue(field: BlueprintField): string {
 function updateSample(field: BlueprintField): string {
   switch (field.type) {
     case "string":
+      if (field.maxLength !== undefined) {
+        const cap = field.maxLength
+        return field.unique
+          ? `f"{uuid.uuid4().hex[:${cap}]}"`
+          : JSON.stringify(`updated-${field.name}`.slice(0, cap))
+      }
       return field.unique
         ? `f"{uuid.uuid4()}-updated-${field.name}"`
         : JSON.stringify(`updated-${field.name}`)
     case "email":
       return `f"{uuid.uuid4()}@example.com"`
-    case "int":
-      return "7"
+    case "int": {
+      // Distinct in-bounds second value when the declared range allows one.
+      const first = intInBounds(field, 42)
+      const second = intInBounds(field, 7)
+      return String(second !== first ? second : first)
+    }
     case "boolean":
       return "False"
     case "uuid":
@@ -1082,6 +1107,40 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
             t.push("    assert r.status_code == 422, r.text")
             t.push('    assert isinstance(r.json()["detail"], list)')
           }
+          // Declared bounds are validation: one out-of-range probe per bound
+          // (inclusive edges), answered by the default 422 — never the 409
+          // invariant body.
+          for (const boundField of entity.fields.filter(
+            (f) => f.min !== undefined || f.max !== undefined || f.maxLength !== undefined,
+          )) {
+            if (boundField.min !== undefined) {
+              t.push(`    body_b = {**body, ${JSON.stringify(boundField.name)}: ${boundField.min - 1}}`)
+              t.push(`    r = client.post(${JSON.stringify(route.path)}, json=body_b${suffix})`)
+              t.push("    assert r.status_code == 422, r.text")
+            }
+            if (boundField.max !== undefined) {
+              t.push(`    body_b = {**body, ${JSON.stringify(boundField.name)}: ${boundField.max + 1}}`)
+              t.push(`    r = client.post(${JSON.stringify(route.path)}, json=body_b${suffix})`)
+              t.push("    assert r.status_code == 422, r.text")
+            }
+            if (boundField.maxLength !== undefined) {
+              t.push(`    body_b = {**body, ${JSON.stringify(boundField.name)}: "x".repeat(${boundField.maxLength + 1})}`)
+              t.push(`    r = client.post(${JSON.stringify(route.path)}, json=body_b${suffix})`)
+              t.push("    assert r.status_code == 422, r.text")
+            }
+            // The inclusive edge itself is valid — the probe pair pins which
+            // side of the boundary 422s. Uses the DISTINCT in-bounds sample
+            // (updateSample) so unique fields do not 409 against the row
+            // body_for already created; when no distinct value exists
+            // (min == max), every other create in this suite already uses
+            // the edge value, so the valid side is covered.
+            const edgeValue = updateSample(boundField)
+            if (edgeValue !== sampleValue(boundField)) {
+              t.push(`    body_b = {**body, ${JSON.stringify(boundField.name)}: ${edgeValue}}`)
+              t.push(`    r = client.post(${JSON.stringify(route.path)}, json=body_b${suffix})`)
+              t.push("    assert r.status_code == 201, r.text")
+            }
+          }
           const uniqueField = entity.fields.find((f) => f.unique && f.type !== "ref" && !f.optional)
           if (uniqueField && (!hasAuth || entity.name !== bp.auth!.principal)) {
             t.push(`    body2, _ = body_for(client, ${JSON.stringify(entity.name)}${tokenArg})`)
@@ -1365,8 +1424,126 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
       "conformance/test_infrastructure.py": infrastructureTests(bp),
       "conformance/behavior_snapshot.py": behaviorSnapshot(bp),
       "conformance/contract.json": stableStringify(bp) + "\n",
+      ...(bp.examples.length > 0 ? { "conformance/test_examples.py": examplesTests(bp) } : {}),
     },
   }
+}
+
+/** conformance/test_examples.py — author-declared input→output examples.
+ *
+ * One test per @spec/test example: build the declared fixture world via
+ * the API, send the literal input exactly as written, assert the pinned
+ * status and the body subset. No sampling, no synthesis — the author's
+ * literals are the contract. */
+function examplesTests(bp: BackendBlueprint): string {
+  const hasAuth = !!bp.auth
+  const createRoutes = createRoutesByEntity(bp)
+  const tableOf = (entity: string): string => bp.entities.find((e) => e.name === entity)?.table ?? entity
+  const usesCounts = bp.examples.some((e) => (e.expect.state?.counts ?? []).length > 0)
+  const lines: string[] = [
+    '"""Compiler-generated author examples — DO NOT EDIT.',
+    "",
+    "One test per @spec/test example declaration: create the fixture world,",
+    "send the literal request body, assert the pinned status, body subset or",
+    "exact key set, and the declared world effects (outbox rows, row deltas).",
+    '"""',
+    "",
+    `from helpers import create_row${hasAuth ? ", auth_token" : ""}`,
+    ...(usesCounts
+      ? [
+          "",
+          "",
+          "def _table_count(client, table):",
+          "    import sqlite3",
+          "    conn = sqlite3.connect(client.db_path)",
+          "    n = conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]",
+          "    conn.close()",
+          "    return n",
+        ]
+      : []),
+    "",
+  ]
+  for (const example of bp.examples) {
+    const route = bp.routes.find((r) => r.id === example.routeId)!
+    const needsToken =
+      hasAuth && (route.auth || example.given.some((f) => createRoutes.get(f.entity)?.auth === true))
+    const headers = needsToken && route.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
+    const safeName = example.name.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()
+    lines.push("", "", `def test_example_${safeName}(client):`)
+    if (needsToken) lines.push("    token = auth_token(client)")
+    for (const fixture of example.given) {
+      const overrides = Object.entries(fixture.fields ?? {}).map(([key, value]) =>
+        `${JSON.stringify(key)}: ${typeof value === "string" && value.startsWith("$") ? `_${value.slice(1)}["id"]` : pythonLiteral(value)}`,
+      )
+      lines.push(
+        `    _${fixture.as} = create_row(client, ${JSON.stringify(fixture.entity)}` +
+          (needsToken ? ", token=token" : "") +
+          (overrides.length > 0 ? `, overrides={${overrides.join(", ")}}` : "") +
+          ")",
+      )
+    }
+    for (const count of example.expect.state?.counts ?? []) {
+      lines.push(`    _before_${tableOf(count.entity)} = _table_count(client, ${JSON.stringify(tableOf(count.entity))})`)
+    }
+    const path = pathExpr(route, example.subjectAs !== undefined ? `_${example.subjectAs}["id"]` : '""')
+    const inputParts =
+      example.input !== undefined
+        ? Object.entries(example.input).map(([key, value]) =>
+            `${JSON.stringify(key)}: ${typeof value === "string" && value.startsWith("$") ? `_${value.slice(1)}["id"]` : pythonLiteral(value)}`,
+          )
+        : undefined
+    const method =
+      route.method === "GET" ? "client.get" : route.method === "PATCH" ? "client.patch" : route.method === "PUT" ? "client.put" : route.method === "DELETE" ? "client.delete" : "client.post"
+    lines.push(
+      `    r = ${method}(${path}${inputParts !== undefined ? `, json={${inputParts.join(", ")}}` : ""}${headers})`,
+    )
+    lines.push(`    assert r.status_code == ${example.expect.status}, r.text`)
+    if (example.expect.match === "exact" && route.entity !== undefined) {
+      const entity = bp.entities.find((e) => e.name === route.entity)
+      const keys = (entity?.fields ?? []).map((f) => JSON.stringify(f.name)).sort((a, b) => a.localeCompare(b))
+      lines.push(`    assert set(r.json().keys()) == {${keys.join(", ")}}`)
+    }
+    for (const [key, value] of Object.entries(example.expect.body ?? {})) {
+      if (typeof value === "object" && value !== null) {
+        const marker = (value as Record<string, unknown>).__expect
+        if (marker === "notNull") {
+          lines.push(`    assert r.json()[${JSON.stringify(key)}] is not None`)
+          continue
+        }
+        if (marker === "any") {
+          lines.push(`    assert ${JSON.stringify(key)} in r.json()`)
+          continue
+        }
+      }
+      if (typeof value === "string" && value.startsWith("$")) {
+        lines.push(`    assert r.json()[${JSON.stringify(key)}] == _${value.slice(1)}["id"]`)
+        continue
+      }
+      lines.push(`    assert r.json()[${JSON.stringify(key)}] == ${pythonLiteral(value)}`)
+    }
+    for (const row of example.expect.state?.outbox ?? []) {
+      const fields = row.fields.map((f) => JSON.stringify(f)).join(", ")
+      lines.push("    import json as _json, sqlite3")
+      lines.push("    conn = sqlite3.connect(client.db_path)")
+      lines.push('    rows = conn.execute("SELECT event, payload FROM events").fetchall()')
+      lines.push("    conn.close()")
+      lines.push(`    matching = [rw for rw in rows if rw[0] == ${JSON.stringify(row.event)}]`)
+      lines.push("    assert len(matching) >= 1, rows")
+      lines.push("    payload = _json.loads(matching[-1][1])")
+      lines.push(`    assert set(payload.keys()) == {${fields}}`)
+      for (const field of row.fields) {
+        lines.push(`    assert payload[${JSON.stringify(field)}] == _${row.fromAs}[${JSON.stringify(field)}]`)
+      }
+    }
+    for (const count of example.expect.state?.counts ?? []) {
+      const delta =
+        count.delta === 0 ? "" : count.delta > 0 ? ` + ${count.delta}` : ` - ${Math.abs(count.delta)}`
+      lines.push(
+        `    assert _table_count(client, ${JSON.stringify(tableOf(count.entity))}) == _before_${tableOf(count.entity)}${delta}`,
+      )
+    }
+  }
+  return lines.join("\n") + "\n"
 }
 
 /** Bare request expression used by the no-token protection tests. */

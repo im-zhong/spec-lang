@@ -92,6 +92,33 @@ describe("clause derivation", () => {
     expect(cache.find((c) => c.id === "review:app:cache:no-extra-apis")?.verification).toBe("review")
   })
 
+  it("compiles the import slice into the kernel and pins the reading discipline", async () => {
+    const ir = await irFor("booking")
+    const plan = planGeneration(ir)
+    for (const task of plan.dag.tasks) {
+      expect(task.prompt, task.id).not.toContain("READ them for context")
+      expect(task.prompt, task.id).toContain("## Reading discipline")
+      expect(task.prompt, task.id).toContain("`conformance/`")
+      expect(task.prompt, task.id).toContain("`tests/spec_oracle/`")
+      expect(task.prompt, task.id).toContain("`.spec-input/`")
+    }
+    // The Booking router depends on models/schemas/database/security (auth):
+    // its slice names every importable module and nothing else.
+    const router = plan.dag.tasks.find((t) => t.id === "router:Booking")!
+    expect(router.prompt).toContain("## Import surface")
+    expect(router.prompt).toContain("`app.database`")
+    expect(router.prompt).toContain("`app.models`")
+    expect(router.prompt).toContain("`app.schemas`")
+    expect(router.prompt).toContain("`app.security`")
+    expect(router.prompt).not.toContain("`app.router_registry`")
+    // The app task consumes the compiler-owned registry instead of siblings.
+    const app = plan.dag.tasks.find((t) => t.id === "app")!
+    expect(app.prompt).toContain("`app.router_registry`")
+    // A dependency-free task says so instead of rendering an empty slice.
+    const project = plan.dag.tasks.find((t) => t.id === "project")!
+    expect(project.prompt).toContain("this task stands alone")
+  })
+
   it("renders every clause verbatim inside the task prompt kernel", async () => {
     const ir = await irFor("booking")
     const plan = planGeneration(ir)

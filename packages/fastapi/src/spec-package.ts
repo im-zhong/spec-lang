@@ -25,7 +25,7 @@ export const validateFastApi = defineValidator("fastapi/validate-server", (ctx) 
   const byId = new Map(all.map((n) => [n.id, n]))
 
   for (const server of ctx.findNodes("fastapi")) {
-    const serviceKinds = new Set(["crud", "api", "auth", "lifecycle", "invariant", "cache", "queue", "blob"])
+    const serviceKinds = new Set(["crud", "api", "auth", "lifecycle", "invariant", "cache", "queue", "blob", "example"])
     const services = server.attributes.services
     if (!Array.isArray(services) || services.length === 0) {
       diagnostics.push(
@@ -112,6 +112,173 @@ export const validateFastApi = defineValidator("fastapi/validate-server", (ctx) 
               "error",
               `api() node "${api.id}" has no pinned operation; only count(...) endpoints are supported by @spec/fastapi.`,
               { nodeId: api.id },
+            ),
+          )
+        }
+      }
+    }
+
+    // Served @spec/test examples must resolve onto a served operation with
+    // a complete literal input — an unresolvable example is an authoring
+    // contract error, not something generation may discover.
+    const servedIds = new Set(
+      (Array.isArray(services) ? services : [])
+        .filter((ref): ref is { nodeId: string } => isPlainObject(ref) && typeof ref.nodeId === "string")
+        .map((ref) => ref.nodeId),
+    )
+    for (const ref of Array.isArray(services) ? services : []) {
+      const exampleNode = isPlainObject(ref) ? byId.get(String(ref.nodeId)) : undefined
+      if (!exampleNode || exampleNode.kind !== "example") continue
+      const target = exampleNode.attributes.target
+      if (!isPlainObject(target) || !isPlainObject(target.service) || typeof target.service.nodeId !== "string") continue
+      const service = byId.get(target.service.nodeId)
+      const selector = typeof target.selector === "string" ? target.selector : ""
+      if (!service || !servedIds.has(service.id)) {
+        diagnostics.push(
+          diag(
+            "EXAMPLE_TARGET_UNRESOLVED",
+            "error",
+            `Example "${exampleNode.name ?? exampleNode.id}" targets a service that is not served by this server.`,
+            { nodeId: exampleNode.id, details: { target: target.service.nodeId } },
+          ),
+        )
+        continue
+      }
+      if (service.kind === "crud" || service.kind === "api") {
+        const methods = Array.isArray(service.attributes.methods)
+          ? (service.attributes.methods as string[])
+          : ["list", "get", "create", "update", "delete"]
+        if (!methods.includes(selector)) {
+          diagnostics.push(
+            diag(
+              "EXAMPLE_TARGET_UNRESOLVED",
+              "error",
+              `Example "${exampleNode.name ?? exampleNode.id}" targets "${selector}" which ${service.id} does not expose (${methods.join(", ")}).`,
+              { nodeId: exampleNode.id, details: { selector } },
+            ),
+          )
+          continue
+        }
+        if (["get", "update", "delete"].includes(selector)) {
+          const subject = exampleNode.attributes.subject
+          if (typeof subject !== "string" || !subject.startsWith("$")) {
+            diagnostics.push(
+              diag(
+                "EXAMPLE_SUBJECT_INVALID",
+                "error",
+                `Example "${exampleNode.name ?? exampleNode.id}" targets ${selector} (an {id} route) and must declare subject: "$<fixture>" — the row to act on.`,
+                { nodeId: exampleNode.id, details: { selector } },
+              ),
+            )
+          }
+        }
+        // A create example must carry every required field: partial inputs
+        // would turn the author's contract into an unsatisfiable 422.
+        if (selector === "create") {
+          const entityRef = service.attributes.entity
+          const entity =
+            isPlainObject(entityRef) && typeof entityRef.nodeId === "string" ? byId.get(entityRef.nodeId) : undefined
+          const fields = entity !== undefined ? entity.attributes.fields : undefined
+          const input = exampleNode.attributes.input
+          if (isPlainObject(fields) && isPlainObject(input)) {
+            const lifecycleNodes = ctx.findNodes("lifecycle").filter(
+              (l) => isPlainObject(l.attributes.entity) && (l.attributes.entity as { nodeId?: string }).nodeId === entity?.id,
+            )
+            const stateFields = new Set(
+              lifecycleNodes.flatMap((l) => (typeof l.attributes.field === "string" ? [l.attributes.field] : [])),
+            )
+            for (const [fieldName, def] of Object.entries(fields)) {
+              if (!isPlainObject(def)) continue
+              if (fieldName === "id" || stateFields.has(fieldName)) continue
+              if (def.optional === true || def.default !== undefined) continue
+              if (!(fieldName in input)) {
+                diagnostics.push(
+                  diag(
+                    "EXAMPLE_INPUT_INCOMPLETE",
+                    "error",
+                    `Example "${exampleNode.name ?? exampleNode.id}" targets create but omits required field "${fieldName}" — the literal input must be complete.`,
+                    { nodeId: exampleNode.id, details: { field: fieldName } },
+                  ),
+                )
+              }
+            }
+          }
+        }
+
+        // Non-2xx example bodies address the pinned error envelope, never
+        // entity fields; 422 is the framework default (list-shaped) and is
+        // asserted only by status.
+        const expectAttr = exampleNode.attributes.expect
+        if (isPlainObject(expectAttr) && isPlainObject(expectAttr.body)) {
+          const status = expectAttr.status
+          if (Number.isInteger(status) && (status as number) >= 300 && (status as number) !== 422) {
+            for (const key of Object.keys(expectAttr.body)) {
+              if (key !== "detail") {
+                diagnostics.push(
+                  diag(
+                    "EXAMPLE_EXPECT_INVALID",
+                    "error",
+                    `Example "${exampleNode.name ?? exampleNode.id}" expects status ${String(status)} — error bodies pin exactly {"detail": ...}, but expect.body declares "${key}".`,
+                    { nodeId: exampleNode.id, details: { key } },
+                  ),
+                )
+              }
+            }
+          }
+        }
+
+        // Exact match pins the full response key set: every declared field
+        // (the Out shape) must appear in expect.body, with a predicate for
+        // server-generated values.
+        if (
+          isPlainObject(expectAttr) &&
+          expectAttr.match === "exact" &&
+          (selector === "create" || selector === "update" || selector === "get")
+        ) {
+          const entityRef = service.attributes.entity
+          const entity =
+            isPlainObject(entityRef) && typeof entityRef.nodeId === "string" ? byId.get(entityRef.nodeId) : undefined
+          const fields = entity !== undefined ? entity.attributes.fields : undefined
+          const body = expectAttr.body
+          if (isPlainObject(fields) && isPlainObject(body)) {
+            for (const fieldName of Object.keys(fields)) {
+              if (!(fieldName in body)) {
+                diagnostics.push(
+                  diag(
+                    "EXAMPLE_EXPECT_INCOMPLETE",
+                    "error",
+                    `Example "${exampleNode.name ?? exampleNode.id}" uses match "exact" but expect.body omits "${fieldName}" — exact pins every response field (use NOT_NULL for generated values).`,
+                    { nodeId: exampleNode.id, details: { field: fieldName } },
+                  ),
+                )
+              }
+            }
+          }
+        }
+      } else if (service.kind === "lifecycle") {
+        const events = new Set(
+          (Array.isArray(service.attributes.transitions) ? service.attributes.transitions : [])
+            .filter((tr): tr is Record<string, unknown> => isPlainObject(tr) && typeof tr.event === "string")
+            .map((tr) => tr.event),
+        )
+        if (!events.has(selector)) {
+          diagnostics.push(
+            diag(
+              "EXAMPLE_TARGET_UNRESOLVED",
+              "error",
+              `Example "${exampleNode.name ?? exampleNode.id}" targets transition "${selector}" which ${service.id} does not declare.`,
+              { nodeId: exampleNode.id, details: { selector } },
+            ),
+          )
+        }
+        const subject = exampleNode.attributes.subject
+        if (typeof subject !== "string" || !subject.startsWith("$")) {
+          diagnostics.push(
+            diag(
+              "EXAMPLE_SUBJECT_INVALID",
+              "error",
+              `Example "${exampleNode.name ?? exampleNode.id}" targets a transition and must declare subject: "$<fixture>" (the row to transition).`,
+              { nodeId: exampleNode.id },
             ),
           )
         }

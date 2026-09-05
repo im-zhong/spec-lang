@@ -82,7 +82,8 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
   const tasks: DagTask[] = []
   const clauses = clausesByTask(bp)
   const taskClauses = (node: string): ContractClause[] => clauses.get(node) ?? []
-  const ctx = (scope: string[], context: string[], node: string): TaskPromptInput => ({ blueprint: bp, scope, context, clauses: taskClauses(node) })
+  const ctx = (scope: string[], context: string[], node: string, deps: string[] = []): TaskPromptInput =>
+    ({ blueprint: bp, scope, context, deps, clauses: taskClauses(node) })
 
   /* ---- project skeleton (root) ---- */
   tasks.push({
@@ -103,7 +104,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     label: "data models",
     dependsOn: ["project"],
     scope: ["app/models.py"],
-    prompt: modelsPrompt(bp, ctx(["app/models.py"], ["app/__init__.py"], "models")),
+    prompt: modelsPrompt(bp, ctx(["app/models.py"], ["app/__init__.py"], "models", ["project"])),
       clauses: taskClauses("models"),
     specNodeIds: entityIds(bp.entities.map((e) => e.name)),
   })
@@ -115,7 +116,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     label: "database layer",
     dependsOn: ["project"],
     scope: ["app/config.py", "app/database.py"],
-    prompt: databasePrompt(bp, ctx(["app/config.py", "app/database.py"], ["app/__init__.py"], "database")),
+    prompt: databasePrompt(bp, ctx(["app/config.py", "app/database.py"], ["app/__init__.py"], "database", ["project"])),
       clauses: taskClauses("database"),
     specNodeIds: all.filter((id) => id.startsWith("postgres:")),
   })
@@ -127,7 +128,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     label: "pydantic schemas",
     dependsOn: ["models"],
     scope: ["app/schemas.py"],
-    prompt: schemasPrompt(bp, ctx(["app/schemas.py"], ["app/models.py"], "schemas")),
+    prompt: schemasPrompt(bp, ctx(["app/schemas.py"], ["app/models.py"], "schemas", ["models"])),
       clauses: taskClauses("schemas"),
     specNodeIds: entityIds(bp.entities.map((e) => e.name)),
   })
@@ -140,7 +141,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
       label: "auth security",
       dependsOn: ["models", "database"],
       scope: ["app/security.py", "app/deps.py"],
-      prompt: securityPrompt(bp, ctx(["app/security.py", "app/deps.py"], ["app/models.py", "app/database.py"], "security")),
+      prompt: securityPrompt(bp, ctx(["app/security.py", "app/deps.py"], ["app/models.py", "app/database.py"], "security", ["models", "database"])),
       clauses: taskClauses("security"),
       specNodeIds: all.filter((id) => id.startsWith("auth:")),
     })
@@ -165,7 +166,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
       scope: [file],
       prompt: routerPrompt(
         bp,
-        ctx([file], contextFor(deps), taskId),
+        ctx([file], contextFor(deps), taskId, deps),
         entityName,
       ),
       clauses: taskClauses(taskId),
@@ -181,7 +182,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
       label: "router: auth",
       dependsOn: ["models", "schemas", "database", "security"],
       scope: ["app/routers/auth.py"],
-      prompt: authRouterPrompt(bp, ctx(["app/routers/auth.py"], contextFor(["models", "schemas", "security"]), "router:auth")),
+      prompt: authRouterPrompt(bp, ctx(["app/routers/auth.py"], contextFor(["models", "schemas", "security", "database"]), "router:auth", ["models", "schemas", "database", "security"])),
       clauses: taskClauses("router:auth"),
       specNodeIds: all.filter((id) => id.startsWith("auth:")),
     })
@@ -195,7 +196,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
       label: "cache infrastructure",
       dependsOn: ["project"],
       scope: ["app/cache.py"],
-      prompt: cachePrompt(bp, ctx(["app/cache.py"], ["app/__init__.py"], "cache")),
+      prompt: cachePrompt(bp, ctx(["app/cache.py"], ["app/__init__.py"], "cache", ["project"])),
       clauses: taskClauses("cache"),
       specNodeIds: all.filter((id) => id.startsWith("cache:") || id.startsWith("redis:")),
     })
@@ -207,7 +208,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
       label: "messaging infrastructure",
       dependsOn: ["project"],
       scope: ["app/messaging.py"],
-      prompt: messagingPrompt(bp, ctx(["app/messaging.py"], ["app/__init__.py"], "messaging")),
+      prompt: messagingPrompt(bp, ctx(["app/messaging.py"], ["app/__init__.py"], "messaging", ["project"])),
       clauses: taskClauses("messaging"),
       specNodeIds: all.filter((id) => /^(message|queue|rabbitmq|kafka|sqs):/.test(id)),
     })
@@ -219,7 +220,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
       label: "blob infrastructure",
       dependsOn: ["project"],
       scope: ["app/blob.py"],
-      prompt: blobPrompt(bp, ctx(["app/blob.py"], ["app/__init__.py"], "blob")),
+      prompt: blobPrompt(bp, ctx(["app/blob.py"], ["app/__init__.py"], "blob", ["project"])),
       clauses: taskClauses("blob"),
       specNodeIds: all.filter((id) => id.startsWith("blob:") || id.startsWith("s3:")),
     })
@@ -240,7 +241,7 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     label: "application wiring",
     dependsOn: appDeps,
     scope: ["app/main.py"],
-    prompt: appPrompt(bp, ctx(["app/main.py"], contextFor(appDeps), "app")),
+    prompt: appPrompt(bp, ctx(["app/main.py"], contextFor(appDeps), "app", appDeps)),
     clauses: taskClauses("app"),
     specNodeIds: all.filter((id) => id.startsWith("fastapi:") || id.startsWith("app:")),
   })

@@ -42,6 +42,11 @@ export interface BlueprintField {
   unique?: boolean
   optional?: boolean
   default?: unknown
+  /** Validation bounds (pydantic layer → 422); int fields. */
+  min?: number
+  max?: number
+  /** Validation bound (pydantic layer → 422); string fields. */
+  maxLength?: number
 }
 
 export interface BlueprintEntity {
@@ -89,6 +94,31 @@ export interface BlueprintRoute {
   }
   /** Invariants this operation must preserve (ids into blueprint.invariants). */
   invariantIds?: string[]
+}
+
+/** An author-declared input→output example (@spec/test), lowered verbatim. */
+export interface BlueprintExample {
+  id: string            // "example:<name>"
+  name: string
+  routeId: string       // resolved target route id
+  /** Fixture binding whose row id fills the path {id} (transition/get style). */
+  subjectAs?: string
+  /** World rows created before the request, in declaration order. */
+  given: Array<{ entity: string; as: string; fields?: Record<string, unknown> }>
+  /** Literal request body (sent exactly as written); undefined = no body. */
+  input?: Record<string, unknown>
+  /** Subset match (default): pinned keys must equal; unpinned keys stay
+   * free. Exact: the response key set is pinned too — every field appears. */
+  expect: {
+    status: number
+    body?: Record<string, unknown>
+    match?: "subset" | "exact"
+    /** What the request did to the WORLD (not just the response). */
+    state?: {
+      outbox: Array<{ event: string; fromAs: string; fields: string[] }>
+      counts: Array<{ entity: string; delta: number }>
+    }
+  }
 }
 
 /** A served invariant (behavior Phase 2): a truth that must always hold. */
@@ -245,6 +275,8 @@ export interface BackendBlueprint {
   routes: BlueprintRoute[]
   lifecycles: BlueprintLifecycle[]
   invariants: BlueprintInvariant[]
+  /** Author-declared examples (@spec/test), resolved onto their target routes. */
+  examples: BlueprintExample[]
   /** Present iff any transition emits: the generated outbox table. */
   effects?: {
     eventsTable: string
@@ -449,6 +481,9 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
         if (def.unique === true) field.unique = true
         if (def.optional === true) field.optional = true
         if (def.default !== undefined) field.default = def.default
+        if (typeof def.min === "number") field.min = def.min
+        if (typeof def.max === "number") field.max = def.max
+        if (typeof def.maxLength === "number") field.maxLength = def.maxLength
         fields.push(field)
       }
     }
@@ -897,6 +932,89 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
     .filter((value): value is BlueprintBlob => value !== undefined)
     .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
 
+  /* ---------------- author examples (@spec/test) ---------------- */
+  const CRUD_OPERATIONS = new Set(["list", "get", "create", "update", "delete"])
+  const examples: BlueprintExample[] = nodes
+    .filter((node) => node.kind === "example" && isServed(node))
+    .map((node): BlueprintExample | undefined => {
+      const target = isPlainObject(node.attributes.target) ? node.attributes.target : undefined
+      const serviceId =
+        target !== undefined && isPlainObject(target.service) && typeof target.service.nodeId === "string"
+          ? target.service.nodeId
+          : undefined
+      const selector = target !== undefined && typeof target.selector === "string" ? target.selector : undefined
+      const service = serviceId !== undefined ? byId.get(serviceId) : undefined
+      if (service === undefined || selector === undefined || node.name === undefined) return undefined
+      const route = routes.find((r) => {
+        if (r.owner.sourceNodeId !== service.id) return false
+        if (service.kind === "crud" || service.kind === "api") {
+          return CRUD_OPERATIONS.has(selector) && r.operation === selector
+        }
+        return r.operation === "transition" && r.transition?.event === selector
+      })
+      if (route === undefined) return undefined
+      const given = (Array.isArray(node.attributes.given) ? node.attributes.given : []).flatMap((item) => {
+        if (!isPlainObject(item) || typeof item.as !== "string") return []
+        const entityNode =
+          isPlainObject(item.entity) && typeof item.entity.nodeId === "string" ? byId.get(item.entity.nodeId) : undefined
+        if (entityNode?.kind !== "entity" || typeof entityNode.name !== "string") return []
+        return [
+          {
+            entity: entityNode.name,
+            as: item.as,
+            ...(isPlainObject(item.fields) ? { fields: item.fields as Record<string, unknown> } : {}),
+          },
+        ]
+      })
+      const expectAttr = isPlainObject(node.attributes.expect) ? node.attributes.expect : undefined
+      if (expectAttr === undefined || !Number.isInteger(expectAttr.status)) return undefined
+      const stateAttr = isPlainObject(expectAttr.state) ? expectAttr.state : undefined
+      const outbox = (Array.isArray(stateAttr?.outbox) ? stateAttr.outbox : []).flatMap((entry) => {
+        if (
+          !isPlainObject(entry) ||
+          typeof entry.event !== "string" ||
+          typeof entry.from !== "string" ||
+          !entry.from.startsWith("$") ||
+          !Array.isArray(entry.fields)
+        ) {
+          return []
+        }
+        return [
+          {
+            event: entry.event,
+            fromAs: entry.from.slice(1),
+            fields: entry.fields.filter((f): f is string => typeof f === "string"),
+          },
+        ]
+      })
+      const counts = (Array.isArray(stateAttr?.counts) ? stateAttr.counts : []).flatMap((entry) => {
+        if (!isPlainObject(entry) || !isPlainObject(entry.entity)) return []
+        const entityNode = byId.get(String(entry.entity.nodeId))
+        if (entityNode?.kind !== "entity" || typeof entityNode.name !== "string") return []
+        return Number.isInteger(entry.delta)
+          ? [{ entity: entityNode.name, delta: entry.delta as number }]
+          : []
+      })
+      return {
+        id: `example:${node.name}`,
+        name: node.name,
+        routeId: route.id,
+        ...(typeof node.attributes.subject === "string" && node.attributes.subject.startsWith("$")
+          ? { subjectAs: node.attributes.subject.slice(1) }
+          : {}),
+        given,
+        ...(isPlainObject(node.attributes.input) ? { input: node.attributes.input as Record<string, unknown> } : {}),
+        expect: {
+          status: expectAttr.status as number,
+          ...(isPlainObject(expectAttr.body) ? { body: expectAttr.body as Record<string, unknown> } : {}),
+          ...(expectAttr.match === "exact" ? { match: "exact" as const } : {}),
+          ...(outbox.length > 0 || counts.length > 0 ? { state: { outbox, counts } } : {}),
+        },
+      }
+    })
+    .filter((value): value is BlueprintExample => value !== undefined)
+    .sort((left, right) => left.name.localeCompare(right.name))
+
   /* ---------------- database ---------------- */
   const databaseNode = nodes.find(
     (n) => n.kind === "postgres" || n.kind === "sqlite" || n.kind === "database",
@@ -953,6 +1071,7 @@ export function buildBlueprint(ir: SpecIR): BackendBlueprint {
     routes,
     lifecycles: blueprintLifecycles,
     invariants: blueprintInvariants,
+    examples,
     ...(blueprintLifecycles.some((l) =>
       l.transitions.some((t) =>
         Array.isArray(t.effects) &&

@@ -69,6 +69,24 @@ importers:
         specifier: workspace:*
         version: link:../../packages/web
 
+  examples/bounds:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:../../packages/fastapi
+      '@spec/postgres':
+        specifier: workspace:*
+        version: link:../../packages/postgres
+      '@spec/test':
+        specifier: workspace:*
+        version: link:../../packages/test
+      '@spec/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+
   examples/cblog:
     dependencies:
       '@spec/auth':
@@ -506,6 +524,22 @@ importers:
         specifier: workspace:*
         version: link:../package-sdk
     devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/test:
+    dependencies:
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../core
+      '@spec/package-sdk':
+        specifier: workspace:*
+        version: link:../package-sdk
+    devDependencies:
+      '@spec/web':
+        specifier: workspace:*
+        version: link:../web
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)

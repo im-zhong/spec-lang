@@ -179,6 +179,17 @@ export function deriveClauses(bp: BackendBlueprint): ContractClause[] {
       clause("schemas", "serialization", `schemas:${entity.name}:response`, `The ${entity.name}Out model emits EXACTLY {${responseFields.join(", ")}} (never password_hash/created_at).`),
       clause("schemas", "serialization", `schemas:${entity.name}:validation`, "Field validation follows declared types: string/int/boolean/uuid/email/datetime; ref fields are id strings; enum fields validate against their states.", "oracle", "function"),
     )
+    for (const field of entity.fields) {
+      const parts: string[] = []
+      if (field.min !== undefined) parts.push(`>= ${field.min}`)
+      if (field.max !== undefined) parts.push(`<= ${field.max}`)
+      if (field.maxLength !== undefined) parts.push(`length <= ${field.maxLength}`)
+      if (parts.length > 0) {
+        clauses.push(
+          clause("schemas", "serialization", `schemas:${entity.name}:bound:${field.name}`, `${field.name} enforces ${parts.join(" and ")} on Create/Update via pydantic constraints (inclusive); violations answer the default 422 — this is validation, never the 409 invariant body.`, "oracle", "function"),
+        )
+      }
+    }
   }
   clauses.push(...serializationClauses("schemas", bp, bp.entities.some((e) => e.fields.some((f) => f.default !== undefined))))
 
@@ -228,6 +239,46 @@ export function deriveClauses(bp: BackendBlueprint): ContractClause[] {
       clauses.push(clause(node, "import", `import:${node}:count-before-id`, "The count route is registered BEFORE any {id} route of the same prefix."))
     }
     clauses.push(...serializationClauses(node, bp, routes.some((r) => r.operation === "create")))
+  }
+
+  /* ---- author examples (@spec/test): the strongest per-route contract ---- */
+  const expectValueText = (value: unknown): string => {
+    if (typeof value === "object" && value !== null) {
+      const marker = (value as Record<string, unknown>).__expect
+      if (marker === "notNull") return "<not-null>"
+      if (marker === "any") return "<any>"
+    }
+    return JSON.stringify(value)
+  }
+  for (const example of bp.examples) {
+    const route = bp.routes.find((r) => r.id === example.routeId)
+    if (route === undefined) continue
+    const world = example.given
+      .map((f) => `${f.as}:${f.entity}${f.fields ? `=${JSON.stringify(f.fields)}` : ""}`)
+      .join(", ")
+    const body = example.input !== undefined ? JSON.stringify(example.input) : "(no body)"
+    const match = example.expect.match === "exact" ? "exact key set" : "subset match — unpinned keys are free"
+    const expected =
+      example.expect.body !== undefined
+        ? `a response containing {${Object.entries(example.expect.body)
+            .map(([key, value]) => `${JSON.stringify(key)}: ${expectValueText(value)}`)
+            .join(", ")}} (${match})`
+        : "no pinned body keys"
+    const stateParts: string[] = []
+    for (const row of example.expect.state?.outbox ?? []) {
+      stateParts.push(`the events table gains a ${JSON.stringify(row.event)} row with payload fields {${row.fields.join(", ")}} from $${row.fromAs}`)
+    }
+    for (const count of example.expect.state?.counts ?? []) {
+      stateParts.push(`${count.entity} rows ${count.delta > 0 ? "+" : ""}${count.delta}`)
+    }
+    clauses.push(
+      clause(
+        route.owner.taskId,
+        "test",
+        example.id,
+        `Author example ${JSON.stringify(example.name)}: with world fixtures [${world || "none"}] and request body ${body}, ${route.method} ${route.path} answers exactly ${example.expect.status} with ${expected}${stateParts.length > 0 ? `, and ${stateParts.join(", ")}` : ""}.`,
+      ),
+    )
   }
 
   /* ---- auth router ---- */

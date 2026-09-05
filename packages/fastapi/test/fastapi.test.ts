@@ -254,7 +254,7 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
 
   it("generated conformance python is syntactically valid", async () => {
     if (!hasPython) return
-    for (const name of ["cblog", "inventory", "booking", "media-platform", "tiny-fastapi"]) {
+    for (const name of ["cblog", "inventory", "booking", "media-platform", "tiny-fastapi", "bounds"]) {
       const result = await compileExample(name)
       const plan = planGeneration(result.ir)
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `spec-conf-`))
@@ -263,8 +263,11 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
         fs.mkdirSync(path.dirname(target), { recursive: true })
         fs.writeFileSync(target, content)
       }
+      const files = Object.keys(plan.conformance.files)
+        .filter((rel) => rel.endsWith(".py"))
+        .sort()
       expect(() =>
-        execFileSync("python3", ["-m", "py_compile", "conformance/conftest.py", "conformance/test_contract.py"], { cwd: tmp }),
+        execFileSync("python3", ["-m", "py_compile", ...files], { cwd: tmp }),
       ).not.toThrow()
     }
   })
