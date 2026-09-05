@@ -226,7 +226,7 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
         // no commands — the default git-diff-check would create verification
         // worktrees that cause concurrent same-SHA lock conflicts.
         commands: task.executor === "materialize" && task.acceptanceCommands?.length === 0
-          ? []
+          ? ["true"]
           : task.acceptanceCommands?.length ? [...task.acceptanceCommands] : ["git diff --check"],
       },
     })
