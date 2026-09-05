@@ -185,6 +185,10 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
         const [commit, ...parents] = lines[index]!.split(/\s+/)
         for (const dependency of dependencyResults) {
           if (dependency.headSha && parents.includes(dependency.headSha)) landingIndex.set(dependency.taskId, index)
+          // Idempotent materialize: head IS main HEAD (no separate merge
+          // commit). Treat "head == a commit in the first-parent chain"
+          // as landed.
+          if (dependency.headSha && commit === dependency.headSha) landingIndex.set(dependency.taskId, index)
         }
       }
       let newest: number | undefined
