@@ -184,6 +184,7 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
         ? task.dependsOn.map((dependency) => ids.get(dependency)!).sort()
         : hasSeed ? ["compiler-seed"] : [],
       workingDirectory: taskDirectory,
+      ...(task.materializedFiles !== undefined ? { materializedFiles: Object.fromEntries(Object.entries(task.materializedFiles).map(([file, content]) => [inTarget(directory, file), content])) } : {}),
       scope: task.scope.map((file) => inTarget(directory, file)).sort(),
       specNodeIds: [...(task.specNodeIds ?? [])].sort(),
       ...(task.loop ? {
