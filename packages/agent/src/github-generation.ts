@@ -264,6 +264,7 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
     defaultBranch: input.defaultBranch,
     rootBaseSha: input.rootBaseSha,
     branchPrefix: "spec/generate",
+    ...(input.planVersion !== undefined && input.planVersion > 1 ? { planVersion: input.planVersion } : {}),
     environment: input.environment,
     acceptance: { requiredChecks: input.requiredChecks, commands: ["true"] },
     mergePolicy: input.mergePolicy ?? "pull-request",
