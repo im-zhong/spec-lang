@@ -63,7 +63,10 @@ export class LocalGitControlPlane implements AgentExecutionControlPlanePort {
   }
 
   async waitForChecks(input: WaitForChecksInput): Promise<AgentExecutionCheckResult[]> {
-    if (input.requiredChecks.length === 0) return []
+    // No commands to run → no worktree needed. Retry pass-through tasks
+    // have empty acceptance commands; creating a verification worktree for
+    // them causes concurrent same-SHA lock conflicts.
+    if (input.requiredChecks.length === 0 || input.acceptance.commands.length === 0) return []
     fs.mkdirSync(this.verificationRoot, { recursive: true })
     const workspace = path.join(this.verificationRoot, `verify-${input.expectedHeadSha}`)
     if (fs.existsSync(workspace)) await this.removeWorkspace(workspace)
