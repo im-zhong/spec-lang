@@ -242,13 +242,16 @@ export async function executeAgentTask(
     prompt: string,
   ): Promise<ProcessResult> => {
     events?.emit({ kind: "agent.spawned", task: task.id, round, role, command: `${command.slice(0, 4).join(" ")} …` })
+    // The rolling window keeps the CURRENT block's tail so the monitor can
+    // render live thinking as ONE growing line; only completed activities
+    // (tool calls, messages, tool results) become history entries.
     let deltaBuffer = ""
     let deltaKind: "thinking" | "text" = "thinking"
     let lastFlush = 0
-    const flushDelta = (force: boolean) => {
+    const flushDelta = (reset: boolean) => {
       const now = Date.now()
-      if (!force && (now - lastFlush < 1500 || deltaBuffer.trim() === "")) return
       if (deltaBuffer.trim() === "") return
+      if (!reset && now - lastFlush < 1500) return
       events?.emit({
         kind: "agent.activity",
         task: task.id,
@@ -256,9 +259,10 @@ export async function executeAgentTask(
         role,
         activity: deltaKind,
         summary: deltaBuffer.replace(/\s+/g, " ").slice(-400),
+        partial: true,
       })
-      deltaBuffer = ""
       lastFlush = now
+      deltaBuffer = reset ? "" : deltaBuffer.slice(-400)
     }
     const result = await runner.agent(command, prompt, options.timeoutMs, (line) => {
       const envelope = parseAgentResultLine(line)
@@ -277,8 +281,7 @@ export async function executeAgentTask(
       }
       const partial = parsePartialDelta(line)
       if (partial !== undefined) {
-        // Reset the buffer when the block kind switches (thinking → text)
-        // or the deltas would concatenate across blocks.
+        // Flush-and-reset when the block kind switches (thinking → text).
         if (deltaKind !== partial.kind) {
           flushDelta(true)
           deltaKind = partial.kind

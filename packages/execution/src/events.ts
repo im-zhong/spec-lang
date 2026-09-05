@@ -16,6 +16,7 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 
 export const SNIPPET_LIMIT = 400
+export const FULL_LIMIT = 64 * 1024
 
 export type GenerationEvent =
   | { kind: "run.started"; run: string; shots: string[] }
@@ -25,7 +26,7 @@ export type GenerationEvent =
   | { kind: "round.started"; task: string; round: number }
   | { kind: "round.finished"; task: string; round: number; approved: boolean }
   | { kind: "agent.spawned"; task: string; round: number; role: "implementation" | "reviewer"; command: string }
-  | { kind: "agent.activity"; task: string; round: number; role: "implementation" | "reviewer"; activity: "thinking" | "tool" | "text"; tool?: string; summary: string }
+  | { kind: "agent.activity"; task: string; round: number; role: "implementation" | "reviewer"; activity: "thinking" | "tool" | "text"; tool?: string; summary: string; /** true = throttled delta flush, rendered as ONE live-updating line */ partial?: true; /** Untruncated block text for expand-on-click; bounded at 64 KiB — the only cap, protecting NDJSON line sanity. */ full?: string }
   | { kind: "agent.result"; task: string; round: number; role: "implementation" | "reviewer"; ok: boolean; turns?: number; costUsd?: number; durationMs?: number }
   | { kind: "challenge"; task: string; clause?: string }
   | { kind: "conformance.result"; ok: boolean; output?: string }
@@ -51,7 +52,7 @@ export function parseAgentStreamLine(line: string): GenerationEvent | undefined 
         last = typeof content === "string" ? content : block.contentIsArray ? undefined : typeof (content as { text?: string })?.text === "string" ? (content as { text: string }).text : undefined
       }
     }
-    return last === undefined ? undefined : { kind: "agent.activity", task: "", round: 0, role: "implementation", activity: "tool", tool: "result", summary: truncate(last) }
+    return last === undefined ? undefined : { kind: "agent.activity", task: "", round: 0, role: "implementation", activity: "tool", tool: "result", summary: truncate(last), full: hardCap(last) }
   }
   if (parsed.type === "assistant") {
     const message = parsed.message as { content?: unknown } | undefined
@@ -61,11 +62,11 @@ export function parseAgentStreamLine(line: string): GenerationEvent | undefined 
     let event: GenerationEvent | undefined
     for (const block of blocks) {
       if (block.type === "thinking" && typeof block.thinking === "string") {
-        event = { kind: "agent.activity", task: "", round: 0, role: "implementation", activity: "thinking", summary: truncate(block.thinking) }
+        event = { kind: "agent.activity", task: "", round: 0, role: "implementation", activity: "thinking", summary: truncate(block.thinking), full: hardCap(block.thinking) }
       } else if (block.type === "tool_use" && typeof block.name === "string") {
-        event = { kind: "agent.activity", task: "", round: 0, role: "implementation", activity: "tool", tool: block.name, summary: truncate(toolSummary(block.name, block.input)) }
+        event = { kind: "agent.activity", task: "", round: 0, role: "implementation", activity: "tool", tool: block.name, summary: truncate(toolSummary(block.name, block.input)), full: hardCap(JSON.stringify(block.input ?? null)) }
       } else if (block.type === "text" && typeof block.text === "string" && block.text.trim() !== "") {
-        event = { kind: "agent.activity", task: "", round: 0, role: "implementation", activity: "text", summary: truncate(block.text) }
+        event = { kind: "agent.activity", task: "", round: 0, role: "implementation", activity: "text", summary: truncate(block.text), full: hardCap(block.text) }
       }
     }
     return event
@@ -117,6 +118,11 @@ function toolSummary(name: string, input: unknown): string {
     typeof record?.prompt === "string" ? record.prompt :
     undefined
   return prime === undefined ? name : `${name} ${prime}`
+}
+
+/** Full-text bound for expand-on-click; protects NDJSON line sanity only. */
+function hardCap(value: string): string {
+  return value.length > FULL_LIMIT ? `${value.slice(0, FULL_LIMIT)}…[truncated at 64KiB]` : value
 }
 
 function truncate(value: string): string {

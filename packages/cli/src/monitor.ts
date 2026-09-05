@@ -33,7 +33,11 @@ export interface AgentLane {
   role: string
   round: number
   alive: boolean
+  /** ISO ts of agent.spawned — the lane's position in launch order. */
+  spawnedAt: string
   feed: Array<Record<string, unknown>>
+  /** The currently-streaming activity, rendered as ONE refreshing line. */
+  live?: Record<string, unknown>
 }
 
 export interface DagTaskInfo {
@@ -192,7 +196,7 @@ export function buildMonitorState(runRoot: string): MonitorState {
     }
     if (kind === "agent.spawned") {
       const key = `${String(event.task)}·${String(event.role)}·R${String(event.round)}`
-      lanes.set(key, { key, task: String(event.task), role: String(event.role), round: Number(event.round ?? 1), alive: true, feed: [] })
+      lanes.set(key, { key, task: String(event.task), role: String(event.role), round: Number(event.round ?? 1), alive: true, spawnedAt: ts, feed: [] })
     }
     if (kind === "agent.result") {
       const key = `${String(event.task)}·${String(event.role)}·R${String(event.round)}`
@@ -230,8 +234,57 @@ export function buildMonitorState(runRoot: string): MonitorState {
     nodes: [...nodes.values()].sort((left, right) => left.task.localeCompare(right.task)),
     dag: buildDagView(runRoot, typeof run === "string" ? run : undefined, nodes),
     agents: [...lanes.values()]
-      .sort((left, right) => (right.alive ? 1 : 0) - (left.alive ? 1 : 0) || right.key.localeCompare(left.key))
-      .map((lane) => ({ ...lane, feed: lane.feed.slice(-18) })),
+      // Launch order, newest first: stable (no reshuffle when lanes die)
+      // and the running agents — spawned latest — stay on top.
+      .sort((left, right) => (right.spawnedAt ?? "").localeCompare(left.spawnedAt ?? ""))
+      // Full history, no cap: a 90-minute run is ~3k events (~1.5 MB),
+      // parsed in milliseconds on loopback, and the DOM is append-only.
+      // (If runs ever grow 100×, the fix is incremental ?since= polling,
+      // not a truncating cap.)
+      //
+      // Live-line derivation: the trailing partial is the live line. For
+      // events from generators PREDATING the partial flag (version skew
+      // during a live run), a trailing RUN of consecutive same-kind
+      // thinking/text events is coalesced the same way — those are 1.5s
+      // throttle flushes of one ongoing block, not separate activities.
+      .map((lane) => {
+        // Generators predating the partial flag emit 1.5s throttle flushes
+        // as UNMARKED thinking/text events. Fold EVERY consecutive run of
+        // them — anywhere in the lane, not just the tail — into ONE event
+        // per run (their chunks concatenate into the block's text), then
+        // derive the live line from the trailing run/partial.
+        const folded: Array<Record<string, unknown>> = []
+        for (const event of lane.feed) {
+          if (event.partial === true) continue
+          const streaming = (event.activity === "thinking" || event.activity === "text") && event.tool === undefined
+          const previous = folded[folded.length - 1]
+          if (
+            streaming &&
+            previous !== undefined &&
+            previous.activity === event.activity &&
+            previous.tool === undefined
+          ) {
+            previous.summary = String(previous.summary ?? "") + " " + String(event.summary ?? "")
+            continue
+          }
+          folded.push({ ...event })
+        }
+        let live: Record<string, unknown> | undefined
+        let end = folded.length
+        const last = lane.feed[lane.feed.length - 1]
+        if (last !== undefined && last.partial === true) {
+          live = last
+        } else if (end > 0 && lane.alive) {
+          // Only a RUNNING lane has a live line; a finished lane's trailing
+          // thinking is history, not an ongoing stream.
+          const tail = folded[end - 1]!
+          if ((tail.activity === "thinking" || tail.activity === "text") && tail.tool === undefined) {
+            live = tail
+            end -= 1
+          }
+        }
+        return { ...lane, feed: folded.slice(0, end), ...(live !== undefined ? { live } : {}) }
+      }),
     feed: feed.slice(-250),
     git: gitSnapshot(runRoot),
   }
@@ -267,6 +320,12 @@ const DASHBOARD = `<!doctype html>
   .lane-on{border-color:#d29922}.lane-off{opacity:.55}
   .lane-head{padding:4px 8px;border-bottom:1px solid #21262d;font-size:12px}
   .lane-feed{padding:4px 8px;max-height:220px;overflow:auto}
+  .ev{cursor:default}
+  .ev.has-full{cursor:pointer}
+  .ev.has-full::after{content:" ⌄";color:#58a6ff}
+  .ev.open .evfull{display:block}
+  .evfull{display:none;white-space:pre-wrap;background:#0a0d12;border-left:2px solid #30363d;margin:2px 0 4px;padding:4px 6px;max-height:300px;overflow:auto;font-size:11px;color:#8b949e}
+  .live{padding:3px 8px;border-top:1px dashed #30363d;color:#a371f7;font-size:11px;min-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .lane.collapsed .lane-feed{display:none}
   .lane-head{cursor:pointer;user-select:none}
   .lane-head::after{content:"▾";float:right;color:#8b949e}
@@ -289,6 +348,8 @@ const DASHBOARD = `<!doctype html>
 <div id="app">loading…</div>
 <script>
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// Event timestamps are ISO-UTC; always render LOCAL time.
+const loc = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString("en-GB", { hour12: false }); };
 const app = document.getElementById("app");
 // Static skeleton built once; every tick only MUTATES text or APPENDS nodes,
 // so selections, scroll, and hover survive re-renders.
@@ -312,7 +373,7 @@ function applyLaneFilter() {
 }
 
 const evLine = (e) => {
-  const t = (e.ts || "").slice(11, 19);
+  const t = loc(e.ts);
   if (e.kind === "agent.activity") return "<div><span class='muted'>" + t + "</span> <span class='" + e.activity + "'>[" + (e.tool || e.activity) + "]</span> " + esc((e.summary || "").slice(0, 120)) + "</div>";
   if (e.kind === "node.started") return "<div><span class='muted'>" + t + "</span> ⟳ <b>" + esc(e.task) + "</b> 启动</div>";
   if (e.kind === "node.finished") return "<div><span class='muted'>" + t + "</span> <span class='" + (e.ok ? "done" : "failed") + "'>" + (e.ok ? "✓" : "✗") + " " + esc(e.task) + "</span> " + esc((e.headSha || "").slice(0, 8)) + "</div>";
@@ -328,7 +389,10 @@ function ensureLane(a) {
     const root = document.createElement("div");
     root.className = "lane";
     root.innerHTML = '<div class="lane-head"></div><div class="lane-feed"></div>';
-    entry = { root, feed: root.querySelector(".lane-feed"), head: root.querySelector(".lane-head"), ids: new Set() };
+    const live = document.createElement("div");
+    live.className = "live";
+    entry = { root, feed: root.querySelector(".lane-feed"), head: root.querySelector(".lane-head"), live, ids: new Set() };
+    root.appendChild(live);
     root.addEventListener("click", (event) => {
       if (event.target.closest(".lane-feed")) return // let text selection work
       root.classList.toggle("collapsed")
@@ -343,12 +407,20 @@ function ensureLane(a) {
   return entry;
 }
 
-function appendPinned(container, html, id) {
+function appendPinned(container, html, id, full) {
   const pinned = container.scrollTop + container.clientHeight >= container.scrollHeight - 4;
   const div = document.createElement("div");
   div.innerHTML = html;
   const node = div.firstChild;
   if (id !== undefined) node.dataset.id = id;
+  if (full !== undefined && full !== "") {
+    node.classList.add("has-full");
+    const detail = document.createElement("div");
+    detail.className = "evfull";
+    detail.textContent = full;
+    node.appendChild(detail);
+    node.addEventListener("click", () => node.classList.toggle("open"));
+  }
   container.appendChild(node);
   if (pinned) container.scrollTop = container.scrollHeight;
 }
@@ -429,15 +501,19 @@ async function tick() {
       for (const edge of chip.edges) if (edge.getAttribute("stroke") !== edgeStroke) edge.setAttribute("stroke", edgeStroke);
     }
 
-    for (const a of s.agents.slice(0, 8)) {
+    for (const a of s.agents) { // all lanes — no display cap; finished ones stay compact and collapsible
       const entry = ensureLane(a);
       for (const e of a.feed) {
+        if (e.partial === true) continue // rendered as the live line below
         const id = (e.ts || "") + ":" + (e.summary || "").slice(0, 24);
         if (entry.ids.has(id)) continue;
         entry.ids.add(id);
-        appendPinned(entry.feed, evLine(e), id);
+        appendPinned(entry.feed, evLine(e), id, typeof e.full === "string" ? e.full : undefined);
       }
-      while (entry.feed.children.length > 18) { entry.feed.removeChild(entry.feed.firstChild); entry.ids.delete(entry.feed.firstChild?.dataset.id || ""); }
+      const liveEvent = a.live ?? null;
+      const liveText = liveEvent === null ? "" : "[" + (liveEvent.activity === "thinking" ? "思考中" : "生成中") + "] " + String(liveEvent.summary || "").slice(-160);
+      if (entry.live.textContent !== liveText) { entry.live.textContent = liveText; entry.live.title = liveText; }
+      entry.live.style.display = liveEvent === null ? "none" : "";
     }
     const hint = selectedTask !== null ? "· 仅显示 " + selectedTask : "· 点击左图节点筛选";
     const hintEl = document.getElementById("laneHint");

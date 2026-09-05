@@ -42,7 +42,9 @@ describe("spec monitor", () => {
     const venueLane = state.agents.find((lane) => lane.task === "router:Venue")
     const bookingLane = state.agents.find((lane) => lane.task === "router:Booking")
     expect(venueLane?.feed).toHaveLength(1)
-    expect(bookingLane?.feed[0]).toMatchObject({ activity: "thinking" })
+    // Booking is still running: its lone thinking event IS the live line.
+    expect(bookingLane?.feed).toHaveLength(0)
+    expect(bookingLane?.live).toMatchObject({ activity: "thinking" })
     // Venue's agent.result (emitted later in the fixture) closed its lane;
     // Booking's agent is still running.
     expect(venueLane?.alive).toBe(false)
@@ -84,5 +86,29 @@ describe("spec monitor DAG levels", () => {
       ["router-A", "router-B"],
       ["conformance"],
     ])
+  })
+})
+
+describe("spec monitor live-line folding (pre-partial generators)", () => {
+  it("folds every consecutive unmarked thinking/text run into ONE entry", () => {
+    const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), "spec-monitor-"))
+    const log = openEventLog(runRoot, { run: "smoke-z", shot: "shot-1" })
+    log.emit({ kind: "agent.spawned", task: "t", round: 1, role: "implementation", command: "claude" })
+    // one thinking block streamed as 1.5s flushes (old protocol, no partial flag)
+    for (const chunk of ["第一段", "第二段", "第三段"]) {
+      log.emit({ kind: "agent.activity", task: "t", round: 1, role: "implementation", activity: "thinking", summary: chunk })
+    }
+    log.emit({ kind: "agent.activity", task: "t", round: 1, role: "implementation", activity: "tool", tool: "Edit", summary: "a.py" })
+    // a second thinking run later in the lane
+    for (const chunk of ["后1", "后2"]) {
+      log.emit({ kind: "agent.activity", task: "t", round: 1, role: "implementation", activity: "thinking", summary: chunk })
+    }
+    const lane = buildMonitorState(runRoot).agents.find((a) => a.task === "t")!
+    // folded: one thinking entry per RUN + the Edit; the trailing run is the live line
+    expect(lane.feed.map((e) => [e.activity, e.tool])).toEqual([["thinking", undefined], ["tool", "Edit"]])
+    expect(String(lane.feed[0]!.summary)).toContain("第一段")
+    expect(String(lane.feed[0]!.summary)).toContain("第三段")
+    expect(lane.live).toMatchObject({ activity: "thinking" })
+    expect(String(lane.live!.summary)).toContain("后2")
   })
 })

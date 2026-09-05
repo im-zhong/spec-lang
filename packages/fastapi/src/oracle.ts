@@ -1746,7 +1746,12 @@ def _check_app(contract):
     registry = _import("app.router_registry")
     present = []
     for name in contract["registryCandidates"]:
-        if importlib.util.find_spec(name) is not None:
+        try:
+            found = importlib.util.find_spec(name)
+        except ModuleNotFoundError:
+            # Skeleton time: the app.routers package does not exist yet.
+            found = None
+        if found is not None:
             present.append(getattr(importlib.import_module(name), "router"))
     assert list(registry.ROUTERS) == present, (
         [getattr(r, "prefix", "") for r in registry.ROUTERS],
