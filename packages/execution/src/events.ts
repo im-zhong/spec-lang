@@ -26,7 +26,7 @@ export type GenerationEvent =
   | { kind: "round.started"; task: string; round: number }
   | { kind: "round.finished"; task: string; round: number; approved: boolean }
   | { kind: "agent.spawned"; task: string; round: number; role: "implementation" | "reviewer"; command: string }
-  | { kind: "agent.activity"; task: string; round: number; role: "implementation" | "reviewer"; activity: "thinking" | "tool" | "text"; tool?: string; summary: string; /** true = throttled delta flush, rendered as ONE live-updating line */ partial?: true; /** Untruncated block text for expand-on-click; bounded at 64 KiB — the only cap, protecting NDJSON line sanity. */ full?: string }
+  | { kind: "agent.activity"; task: string; round: number; role: "implementation" | "reviewer"; activity: "thinking" | "tool" | "text"; tool?: string; summary: string; /** true = throttled delta flush, rendered as ONE live-updating line */ partial?: true; startedAt?: string; durationMs?: number; /** Untruncated block text for expand-on-click; bounded at 64 KiB — the only cap, protecting NDJSON line sanity. */ full?: string }
   | { kind: "agent.result"; task: string; round: number; role: "implementation" | "reviewer"; ok: boolean; turns?: number; costUsd?: number; durationMs?: number; usage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number } }
   | { kind: "challenge"; task: string; clause?: string }
   | { kind: "conformance.result"; ok: boolean; output?: string }

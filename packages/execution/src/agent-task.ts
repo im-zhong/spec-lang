@@ -250,6 +250,7 @@ export async function executeAgentTask(
     let deltaKind: "thinking" | "text" = "thinking"
     let lastFlush = 0
     let lastUsageFlush = 0
+    let blockStart = 0
     const flushDelta = (reset: boolean) => {
       const now = Date.now()
       if (deltaBuffer.trim() === "") return
@@ -301,11 +302,12 @@ export async function executeAgentTask(
       }
       const partial = parsePartialDelta(line)
       if (partial !== undefined) {
-        // Flush-and-reset when the block kind switches (thinking → text).
         if (deltaKind !== partial.kind) {
           flushDelta(true)
           deltaKind = partial.kind
+          blockStart = Date.now()
         }
+        if (blockStart === 0) blockStart = Date.now()
         deltaBuffer += partial.text
         flushDelta(false)
         return
@@ -313,7 +315,12 @@ export async function executeAgentTask(
       const distilled = parseAgentStreamLine(line)
       if (distilled?.kind === "agent.activity") {
         flushDelta(true)
-        events?.emit({ ...distilled, task: task.id, round, role })
+        const startedAt = blockStart > 0 ? new Date(blockStart).toISOString() : undefined
+        const durationMs = blockStart > 0 ? Date.now() - blockStart : undefined
+        blockStart = 0
+        events?.emit({ ...distilled, task: task.id, round, role,
+          ...(startedAt !== undefined ? { startedAt } : {}),
+          ...(durationMs !== undefined ? { durationMs } : {}) })
       }
     })
     return { ...result, stdout: distillStreamedStdout(result.stdout) }

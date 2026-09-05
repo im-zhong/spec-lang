@@ -429,6 +429,8 @@ const DASHBOARD = `<!doctype html>
 <script>
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // Event timestamps are ISO-UTC; always render LOCAL time.
+const evTime = (e) => loc(e.startedAt || e.ts);
+const fmtDur = (ms) => ms >= 60000 ? Math.round(ms/60000) + "m" + Math.round(ms%60000/1000) + "s" : ms >= 1000 ? (ms/1000).toFixed(1) + "s" : ms + "ms";
 const loc = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString("en-GB", { hour12: false }); };
 const app = document.getElementById("app");
 // Static skeleton built once; every tick only MUTATES text or APPENDS nodes,
@@ -454,8 +456,8 @@ function applyLaneFilter() {
 
 const fmtTok = (n) => n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
 const evLine = (e) => {
-  const t = loc(e.ts);
-  if (e.kind === "agent.activity") return "<div class='ev'><span class='muted'>" + t + "</span> <span class='" + e.activity + "'>[" + (e.tool || e.activity) + "]</span> <span class='evtext'>" + esc(e.summary || "") + "</span></div>";
+  const t = evTime(e);
+  if (e.kind === "agent.activity") return "<div class='ev'><span class='muted'>" + t + "</span> <span class='" + e.activity + "'>[" + (e.tool || e.activity) + "]</span> <span class='evtext'>" + esc(e.summary || "") + (e.durationMs ? " <span class='muted'>[" + fmtDur(e.durationMs) + "]</span>" : "") + "</span></div>";
   if (e.kind === "node.started") return "<div class='ev'><span class='muted'>" + t + "</span> ⟳ <b>" + esc(e.task) + "</b> 启动</div>";
   if (e.kind === "node.finished") return "<div class='ev'><span class='muted'>" + t + "</span> <span class='" + (e.ok ? "done" : "failed") + "'>" + (e.ok ? "✓" : "✗") + " " + esc(e.task) + "</span> " + esc((e.headSha || "").slice(0, 8)) + "</div>";
   if (e.kind === "round.started") return "<div class='ev'><span class='muted'>" + t + "</span> " + esc(e.task) + " 第 " + e.round + " 轮</div>";
