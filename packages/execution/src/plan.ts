@@ -108,7 +108,7 @@ export function createAgentExecutionPlan(input: AgentExecutionPlanInput): AgentE
 }
 
 export function agentExecutionPlanFingerprint(plan: AgentExecutionPlan): string {
-  const { fingerprint: _fingerprint, ...definition } = plan
+  const { fingerprint: _fingerprint, rootBaseSha: _rootBaseSha, ...definition } = plan
   return `sha256:${createHash("sha256").update(stableStringify(definition)).digest("hex")}`
 }
 
