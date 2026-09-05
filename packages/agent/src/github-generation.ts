@@ -222,7 +222,12 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
       } : {}),
       acceptance: {
         requiredChecks: input.requiredChecks,
-        commands: task.acceptanceCommands?.length ? [...task.acceptanceCommands] : ["git diff --check"],
+        // Retry pass-throughs (materialize with only .spec-landed marker) run
+        // no commands — the default git-diff-check would create verification
+        // worktrees that cause concurrent same-SHA lock conflicts.
+        commands: task.executor === "materialize" && task.acceptanceCommands?.length === 0
+          ? []
+          : task.acceptanceCommands?.length ? [...task.acceptanceCommands] : ["git diff --check"],
       },
     })
   }
