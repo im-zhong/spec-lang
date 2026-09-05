@@ -127,10 +127,11 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
     activeTasks = input.shot.tasks.map((task) => {
       const normalized = safeTaskId(task.id)
       if (!descendants.has(normalized)) {
-        // Already landed: convert to a no-op pass-through (no files, no
-        // agent, no oracle — just a DAG placeholder so children's
-        // integration bases resolve against main HEAD).
-        return { ...task, loop: undefined, acceptanceCommands: [], executor: "materialize" as const, materializedFiles: {}, scope: [] }
+        // Already landed: convert to a no-op materialize pass-through —
+        // writes a marker file (satisfies the plan validator's non-empty
+        // constraints), runs no agent, no oracle; the DAG placeholder lets
+        // children's integration bases resolve against main HEAD.
+        return { ...task, loop: undefined, acceptanceCommands: [], executor: "materialize" as const, materializedFiles: { ".spec-landed": "reused from v1\n" }, scope: [".spec-landed"] }
       }
       return task
     })
