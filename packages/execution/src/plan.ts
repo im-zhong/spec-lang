@@ -123,11 +123,13 @@ export function agentExecutionSemanticInputDigest(
 }
 
 export function taskBranch(plan: AgentExecutionPlan, taskId: string): string {
-  return `${plan.branchPrefix}/${plan.runId}/${taskId}`
+  const v = plan.planVersion !== undefined && plan.planVersion > 1 ? `.v${plan.planVersion}` : ""
+  return `${plan.branchPrefix}/${plan.runId}/${taskId}${v}`
 }
 
 export function taskBaseRef(plan: AgentExecutionPlan, taskId: string): string {
-  return `${plan.branchPrefix}/${plan.runId}/bases/${taskId}`
+  const v = plan.planVersion !== undefined && plan.planVersion > 1 ? `.v${plan.planVersion}` : ""
+  return `${plan.branchPrefix}/${plan.runId}/bases/${taskId}${v}`
 }
 
 /** Immutable GitHub control-plane ref containing only canonical plan.json. */
