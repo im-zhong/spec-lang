@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import type { SpecNode, ValidationContext } from "@spec/core"
 import {
   count,
   crud,
@@ -13,6 +14,7 @@ import {
   transition,
   webPackage,
 } from "../src"
+import { validateEntities } from "../src/validators"
 
 describe("@spec/web entity/field", () => {
   it("field builders produce chainable immutable specs", () => {
@@ -276,5 +278,49 @@ describe("@spec/web guards and effects (Phase 3)", () => {
       { __effect: "set", field: "cancelledAt", value: { __expr: "requestTime" } },
       { __effect: "emit", event: "booking.confirmed", fields: ["id", "venue"] },
     ])
+  })
+})
+
+describe("@spec/web field bounds", () => {
+  it("min/max/maxLength chain immutably and serialize to plain IR attributes", () => {
+    const capacity = field.int().min(1).max(10)
+    expect(capacity.minValue).toBe(1)
+    expect(capacity.maxValue).toBe(10)
+    expect(capacity.max(9).maxValue).toBe(9)
+    expect(capacity.maxValue).toBe(10) // chaining never mutates
+    const name = field.string().maxLength(8).unique()
+    expect(name.maxLengthValue).toBe(8)
+    expect(name.uniqueFlag).toBe(true)
+    const Venue = entity("Venue", { name, capacity })
+    expect(Venue.attributes.fields).toEqual({
+      name: { type: "string", unique: true, maxLength: 8 },
+      capacity: { type: "int", min: 1, max: 10 },
+    })
+  })
+
+  it("accepts bounds only within their closed vocabulary", () => {
+    const run = (fields: Record<string, unknown>) =>
+      validateEntities.run({
+        findNodes: (kind: string) =>
+          kind === "entity"
+            ? [{ id: "entity:T", kind: "entity", name: "T", attributes: { fields } } as SpecNode]
+            : [],
+      } as ValidationContext)
+    expect(run({ seats: { type: "int", min: 0, max: 2 } })).toEqual([])
+    expect(run({ label: { type: "string", maxLength: 12 } })).toEqual([])
+    expect(run({ free: { type: "string" } })).toEqual([])
+    const rejections: Array<[Record<string, unknown>, string]> = [
+      [{ name: { type: "string", min: 1 } }, "only to int"],
+      [{ seats: { type: "int", min: 5, max: 2 } }, "must not exceed"],
+      [{ seats: { type: "int", maxLength: 3 } }, "only to string"],
+      [{ label: { type: "string", maxLength: 0 } }, "positive integer"],
+      [{ seats: { type: "int", min: 1.5 } }, "expects an integer"],
+    ]
+    for (const [fields, fragment] of rejections) {
+      const diagnostics = run(fields) ?? []
+      expect(diagnostics, JSON.stringify(fields)).toHaveLength(1)
+      expect(diagnostics[0].code).toBe("FIELD_BOUNDS_INVALID")
+      expect(diagnostics[0].message).toContain(fragment)
+    }
   })
 })

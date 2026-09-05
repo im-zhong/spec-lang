@@ -40,9 +40,18 @@ export interface FieldSpec {
   readonly refTarget?: string
   /** For `enum` fields: the closed set of states. */
   readonly states?: readonly string[]
+  /** For `int` fields: inclusive lower bound (validation, 422). */
+  readonly minValue?: number
+  /** For `int` fields: inclusive upper bound (validation, 422). */
+  readonly maxValue?: number
+  /** For `string` fields: inclusive maximum length (validation, 422). */
+  readonly maxLengthValue?: number
   unique(): FieldSpec
   optional(): FieldSpec
   default(value: unknown): FieldSpec
+  min(value: number): FieldSpec
+  max(value: number): FieldSpec
+  maxLength(value: number): FieldSpec
 }
 
 interface FieldData {
@@ -53,6 +62,9 @@ interface FieldData {
   defaultValue?: unknown
   refTarget?: string
   states?: readonly string[]
+  minValue?: number
+  maxValue?: number
+  maxLengthValue?: number
 }
 
 export function isFieldSpec(value: unknown): value is FieldSpec {
@@ -64,7 +76,7 @@ export function isFieldSpec(value: unknown): value is FieldSpec {
 }
 
 function makeField(data: FieldData): FieldSpec {
-  const base: Omit<Required<FieldData>, "refTarget" | "states"> & {
+  const base: Omit<Required<FieldData>, "refTarget" | "states" | "minValue" | "maxValue" | "maxLengthValue"> & {
     refTarget?: string
     states?: readonly string[]
   } = {
@@ -79,9 +91,15 @@ function makeField(data: FieldData): FieldSpec {
     ...base,
     ...(data.refTarget === undefined ? {} : { refTarget: data.refTarget }),
     ...(data.states === undefined ? {} : { states: [...data.states] }),
+    ...(data.minValue === undefined ? {} : { minValue: data.minValue }),
+    ...(data.maxValue === undefined ? {} : { maxValue: data.maxValue }),
+    ...(data.maxLengthValue === undefined ? {} : { maxLengthValue: data.maxLengthValue }),
     unique: () => makeField({ ...data, ...base, uniqueFlag: true }),
     optional: () => makeField({ ...data, ...base, optionalFlag: true }),
     default: (value: unknown) => makeField({ ...data, ...base, hasDefault: true, defaultValue: value }),
+    min: (value: number) => makeField({ ...data, ...base, minValue: value }),
+    max: (value: number) => makeField({ ...data, ...base, maxValue: value }),
+    maxLength: (value: number) => makeField({ ...data, ...base, maxLengthValue: value }),
   }
 }
 

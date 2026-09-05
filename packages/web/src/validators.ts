@@ -109,6 +109,46 @@ function validateFields(node: SpecNode, allEntities: SpecNode[]): Diagnostic[] {
         )
       }
     }
+    // Validation bounds are a closed vocabulary: min/max on int fields,
+    // maxLength on string fields. They are VALIDATION (422) — semantic
+    // limits belong to invariants (409), and the two must stay separable.
+    const boundErrors: string[] = []
+    const hasMin = def.min !== undefined
+    const hasMax = def.max !== undefined
+    const hasMaxLength = def.maxLength !== undefined
+    if (def.type !== "int" && (hasMin || hasMax)) {
+      boundErrors.push("min()/max() apply only to int fields (semantic limits belong to invariant(), which answers 409)")
+    }
+    if (def.type === "int") {
+      for (const [key, value] of [["min", def.min], ["max", def.max]] as const) {
+        if (value !== undefined && (typeof value !== "number" || !Number.isInteger(value))) {
+          boundErrors.push(`${key}() expects an integer`)
+        }
+      }
+      if (
+        hasMin && hasMax &&
+        typeof def.min === "number" && typeof def.max === "number" && def.min > def.max
+      ) {
+        boundErrors.push(`min (${def.min}) must not exceed max (${def.max})`)
+      }
+    }
+    if (hasMaxLength) {
+      if (def.type !== "string") {
+        boundErrors.push("maxLength() applies only to string fields")
+      } else if (typeof def.maxLength !== "number" || !Number.isInteger(def.maxLength) || def.maxLength < 1) {
+        boundErrors.push("maxLength() expects a positive integer")
+      }
+    }
+    if (boundErrors.length > 0) {
+      diagnostics.push(
+        diag(
+          "FIELD_BOUNDS_INVALID",
+          "error",
+          `Field "${node.name}.${fieldName}" declares invalid bounds: ${boundErrors.join("; ")}.`,
+          { nodeId: node.id, details: { entity: node.name, field: fieldName } },
+        ),
+      )
+    }
   }
   return diagnostics
 }

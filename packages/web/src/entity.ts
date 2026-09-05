@@ -40,6 +40,9 @@ export function entity(name: string, fieldsInput: Record<string, unknown>): Enti
       if (value.hasDefault) plain.default = value.defaultValue
       if (value.refTarget !== undefined) plain.target = value.refTarget
       if (value.states !== undefined) plain.states = [...value.states]
+      if (value.minValue !== undefined) plain.min = value.minValue
+      if (value.maxValue !== undefined) plain.max = value.maxValue
+      if (value.maxLengthValue !== undefined) plain.maxLength = value.maxLengthValue
       fieldsAttr[fieldName] = plain
       fieldRefs[fieldName] = fieldRef(name, fieldName, ownerNodeId, value.uniqueFlag === true)
     } else {
