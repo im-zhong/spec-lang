@@ -361,7 +361,11 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
       // A materialize task with no diff is IDEMPOTENT SUCCESS — the
       // files are already correct on the base (e.g. retry after a
       // compiler fix that didn't change THIS task's seed bytes).
-      if (task.executor === "materialize") return { headSha: base, checks: [] }
+      if (task.executor === "materialize") {
+        // The base commit IS the result — the files are already correct.
+        const head = await this.git(["rev-parse", "HEAD"], workspace)
+        return { headSha: head.stdout.trim(), changedPaths: [] }
+      }
       throw new Error(`task "${task.id}" produced no repository changes`)
     }
     const violations = changedPaths.filter((file) => !task.scope.includes(file))
