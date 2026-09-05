@@ -357,7 +357,13 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     options: { allowEmpty?: boolean } = {},
   ): Promise<CommitResult> {
     const changedPaths = await this.changedPaths(workspace)
-    if (changedPaths.length === 0 && !options.allowEmpty) throw new Error(`task "${task.id}" produced no repository changes`)
+    if (changedPaths.length === 0 && !options.allowEmpty) {
+      // A materialize task with no diff is IDEMPOTENT SUCCESS — the
+      // files are already correct on the base (e.g. retry after a
+      // compiler fix that didn't change THIS task's seed bytes).
+      if (task.executor === "materialize") return { headSha: base, checks: [] }
+      throw new Error(`task "${task.id}" produced no repository changes`)
+    }
     const violations = changedPaths.filter((file) => !task.scope.includes(file))
     if (violations.length > 0) {
       const shown = violations.slice(0, 20)

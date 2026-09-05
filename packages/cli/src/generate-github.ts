@@ -491,13 +491,25 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
     const repository = repositories[index]
     const target = shotTarget(options)
     assertTargetIsTracked(repository.localRoot, target)
+    // On resume, the ORIGINAL rootBaseSha lives in the published plan ref —
+    // the current main HEAD is NOT the root (nodes have landed since bootstrap).
+    let rootBaseSha = repository.headSha
+    if (options.resume) {
+      const bare = `${repository.localRoot}.git`
+      const planRef = `spec/generate/${runId}/plan`
+      try {
+        const stored = execFileSync("git", ["--git-dir", bare, "show", `${planRef}:plan.json`], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+        const original = JSON.parse(stored) as { rootBaseSha?: string }
+        if (typeof original.rootBaseSha === "string") rootBaseSha = original.rootBaseSha
+      } catch { /* plan ref absent — fresh bootstrap */ }
+    }
     const plan = createGitHubGenerationPlan({
       shot: options.shotSpec,
       ...(options.retryFrom !== undefined ? { retryFrom: options.retryFrom } : {}),
       ...(options.retryFrom !== undefined ? { planVersion: 2 } : {}),
       runId,
       repository: repository.repository,
-      rootBaseSha: repository.headSha,
+      rootBaseSha,
       defaultBranch: repository.defaultBranch,
       targetDirectory: target,
       environment: environment(options.repoRoot, options.image, options.runtime, options.execution, {
