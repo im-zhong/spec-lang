@@ -89,6 +89,7 @@ interface CliArgs {
   port: number
   portSet: boolean
   retryFrom: string | undefined
+  reviewerModel: string | undefined
 }
 
 function shellQuote(value: string): string {
@@ -119,6 +120,7 @@ function parseArgs(argv: string[]): CliArgs {
     port: 8788,
     portSet: false,
     retryFrom: undefined,
+    reviewerModel: undefined,
   }
   const positional: string[] = []
   for (let i = 0; i < argv.length; i++) {
@@ -139,6 +141,7 @@ function parseArgs(argv: string[]): CliArgs {
     else if (arg === "--check") args.requiredCheck = argv[++i]
     else if (arg === "--resume") args.resume = true
     else if (arg === "--retry-from") args.retryFrom = argv[++i]
+    else if (arg === "--reviewer-model") args.reviewerModel = argv[++i]
     else if (arg === "--execution") args.execution = argv[++i] as CliArgs["execution"]
     else if (arg === "--runtime") args.runtime = argv[++i] as CliArgs["runtime"]
     else if (arg === "--merge-policy") args.mergePolicy = argv[++i] as CliArgs["mergePolicy"]
@@ -196,6 +199,7 @@ Options:
                             deterministic code merge after each node's own
                             tests pass), pull-request, or merge-queue
   --resume                  Resume the same immutable run from GitHub refs
+  --reviewer-model <id>     Separate model for the read-only reviewer role
   --retry-from <task>       After a compiler fix: reuse landed heads, re-run
                             from the failed node and its descendants only
   --debug                   Show internal stack traces
@@ -388,7 +392,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         repoRoot: projectRoot, runId: args.runId!, image: args.image!, repository: args.repository,
         targetDirectory: args.targetDir, appName: result.ir.app.name, target: "workspace",
         shots: args.shots, concurrency: args.concurrency, requiredCheck: args.requiredCheck,
-        resume: args.resume, retryFrom: args.retryFrom, model: args.model, effort: args.effort!, maxTurns: args.maxTurns!,
+        resume: args.resume, retryFrom: args.retryFrom, model: args.model, reviewerModel: args.reviewerModel, effort: args.effort!, maxTurns: args.maxTurns!,
         execution: args.execution, runtime: args.runtime, mergePolicy: args.mergePolicy, shotSpec, ir: result.ir,
       })
       return ok ? 0 : 1
@@ -451,7 +455,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         repoRoot: projectRoot, runId: args.runId!, image: args.image!, repository: args.repository,
         targetDirectory: args.targetDir, appName: plan.blueprint.app.name, target: "frontend",
         shots: args.shots, concurrency: args.concurrency, requiredCheck: args.requiredCheck,
-        resume: args.resume, retryFrom: args.retryFrom, model: args.model, effort: args.effort!, maxTurns: args.maxTurns!,
+        resume: args.resume, retryFrom: args.retryFrom, model: args.model, reviewerModel: args.reviewerModel, effort: args.effort!, maxTurns: args.maxTurns!,
         execution: args.execution, runtime: args.runtime, mergePolicy: args.mergePolicy, shotSpec, ir: result.ir,
       })
       return ok ? 0 : 1
@@ -535,7 +539,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       repoRoot: projectRoot, runId: args.runId!, image: args.image!, repository: args.repository,
       targetDirectory: args.targetDir, appName: plan.blueprint.app.name, target: "backend",
       shots: args.shots, concurrency: args.concurrency, requiredCheck: args.requiredCheck,
-      resume: args.resume, retryFrom: args.retryFrom, model: args.model, effort: args.effort!, maxTurns: args.maxTurns!,
+      resume: args.resume, retryFrom: args.retryFrom, model: args.model, reviewerModel: args.reviewerModel, effort: args.effort!, maxTurns: args.maxTurns!,
         execution: args.execution, runtime: args.runtime, mergePolicy: args.mergePolicy, shotSpec, ir: result.ir,
     })
     return ok ? 0 : 1

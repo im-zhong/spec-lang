@@ -76,6 +76,8 @@ export interface GitHubGenerationRunOptions {
   retryFrom?: string
   /** Plan version for immutable-ref versioning (≥2 on retry). */
   planVersion?: number
+  /** Separate model for the reviewer role (defaults to --model). */
+  reviewerModel?: string
 }
 
 function safeTaskId(id: string): string {
@@ -345,7 +347,7 @@ export async function runGitHubGeneration(
   const reviewerCommand = [
     "claude",
     ...buildClaudeArgs({
-      model: options.model,
+      model: options.reviewerModel ?? options.model,
       effort: options.effort,
       maxTurns: options.maxTurns,
       permissionMode: "plan",

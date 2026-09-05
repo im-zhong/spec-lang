@@ -37,6 +37,8 @@ export interface GitHubGenerateOptions {
   ir: SpecIR
   /** Retry from a failed node after a compiler fix (requires resume). */
   retryFrom?: string
+  /** Separate model for the reviewer role (defaults to --model). */
+  reviewerModel?: string
 }
 
 export interface GitHubCheckout {
