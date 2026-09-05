@@ -170,17 +170,13 @@ function gitSnapshot(runRoot: string): Array<{ sha: string; subject: string }> {
 
 /** Aggregate the event log into a dashboard snapshot. */
 export function buildMonitorState(runRoot: string): MonitorState {
-  const allEvents = readEvents(runRoot)
-  // Only consider events from the CURRENT attempt (after the last
-  // run.started) — old failed-run markers must not leak into the display.
-  const lastStart = allEvents.map((e) => e.kind === "run.started").lastIndexOf(true)
-  const events = lastStart >= 0 ? allEvents.slice(lastStart) : allEvents
+  const events = readEvents(runRoot)  // ALL events — the monitor is decoupled
   const nodes = new Map<string, MonitorNode>()
   const lanes = new Map<string, AgentLane>()
   const usageSamples = new Map<string, Array<{ ts: string; out: number }>>()
   const feed: Array<Record<string, unknown>> = []
   let startedAt: string | undefined
-  let finished: { ts: string; ok: boolean; costUsd?: number } | undefined
+  let finished: { ts: string; ok: boolean; costUsd?: number } | undefined | undefined
 
   for (const event of events) {
     const ts = typeof event.ts === "string" ? event.ts : ""
