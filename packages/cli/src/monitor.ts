@@ -489,7 +489,10 @@ function ensureLane(a) {
   entry.head.innerHTML =
     (a.alive ? '<span class="pulse">●</span> ' : '<span class="muted">○</span> ') +
     "<b>" + esc(a.task) + "</b> · " + esc(a.role) + " · R" + a.round + usageText;
-  entry.root.className = "lane " + (a.alive ? "lane-on" : "lane-off");
+  // Toggle status classes WITHOUT overwriting className — the "collapsed"
+  // state set by the user's click must survive every 2s re-render.
+  entry.root.classList.toggle("lane-on", a.alive)
+  entry.root.classList.toggle("lane-off", !a.alive);
   return entry;
 }
 
