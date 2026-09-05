@@ -254,7 +254,7 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
 
   it("generated conformance python is syntactically valid", async () => {
     if (!hasPython) return
-    for (const name of ["cblog", "inventory", "booking", "media-platform", "tiny-fastapi", "bounds"]) {
+    for (const name of ["cblog", "inventory", "booking", "media-platform", "tiny-fastapi", "bounds", "smoke"]) {
       const result = await compileExample(name)
       const plan = planGeneration(result.ir)
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `spec-conf-`))
@@ -321,8 +321,11 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
     expect(authRoutes.every((route) => !userTask.prompt.includes(`- ${route.id}`))).toBe(true)
     expect(plan.dag.tasks.find((task) => task.id === "router:auth")?.specNodeIds).toEqual(["auth:MainAuth"])
     const registry = plan.seedFiles["app/router_registry.py"]
-    expect(registry.match(/from app\.routers\.auth import router/g)).toHaveLength(1)
-    expect(registry).toContain("ROUTERS = (")
+    // Detection-based registry: pinned candidate order, import-on-existence.
+    expect(registry).toContain("CANDIDATES = (")
+    expect(registry).toContain('"app.routers.auth"')
+    expect(registry).toContain("importlib.util.find_spec")
+    expect(registry).not.toContain("from app.routers.auth import")
     expect(plan.dag.tasks.find((task) => task.id === "app")?.prompt).toContain("app.router_registry")
   })
 
@@ -332,6 +335,7 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
     const ids = plan.dag.tasks.map((t) => t.id)
     expect(ids).toEqual([
       "project",
+      "app",
       "database",
       "models",
       "schemas",
@@ -340,7 +344,6 @@ describe("@spec/fastapi blueprint + conformance (examples)", () => {
       "router:User",
       "router:Venue",
       "router:auth",
-      "app",
     ])
     // public router has no security dependency
     const venue = plan.dag.tasks.find((t) => t.id === "router:Venue")!

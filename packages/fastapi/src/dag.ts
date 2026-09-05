@@ -226,19 +226,15 @@ export function buildTaskDag(bp: BackendBlueprint, ir: SpecIR): GenerationDag {
     })
   }
 
-  /* ---- application wiring (sink) ---- */
-  const infrastructureDeps = ["cache", "messaging", "blob"].filter((id) =>
-    tasks.some((task) => task.id === id),
-  )
-  const appDeps = [
-    ...tasks.filter((t) => t.id.startsWith("router:")).map((t) => t.id),
-    "database",
-    ...infrastructureDeps,
-  ]
+  /* ---- application skeleton (walking skeleton: boot FIRST, grow later).
+   * Depends ONLY on project: every integration point (registry, database
+   * session wiring, create_all, infra adapters) is detection-based, so the
+   * app boots as step two and every later landing grows the live app. ---- */
+  const appDeps = ["project"]
   tasks.push({
     id: "app",
     kind: "app",
-    label: "application wiring",
+    label: "application skeleton",
     dependsOn: appDeps,
     scope: ["app/main.py"],
     prompt: appPrompt(bp, ctx(["app/main.py"], contextFor(appDeps), "app", appDeps)),

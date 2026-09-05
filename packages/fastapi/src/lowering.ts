@@ -19,6 +19,7 @@ import { stableStringify } from "@spec/core"
 import { buildBlueprint, type BackendBlueprint } from "./blueprint"
 import { buildConformanceSuite, type ConformanceFiles } from "./conformance"
 import { buildTaskDag, dagFingerprint, type GenerationDag } from "./dag"
+import { deriveTestManifest, type TestManifest } from "./manifest"
 import { buildNodeOracles } from "./oracle"
 import { fastApiVerification, type VerificationPlan } from "./verify"
 
@@ -34,6 +35,8 @@ export interface FastApiGenerationPlan {
   verification: VerificationPlan
   /** Compiler-owned mechanical files available before any agent task. */
   seedFiles: Record<string, string>
+  /** Per-clause coverage map (in-loop vs terminal) for the compile gate. */
+  coverage: TestManifest
   /** Deterministic byte-stable form (DAG + prompts included). */
   stable: string
 }
@@ -44,18 +47,27 @@ export function planGeneration(ir: SpecIR): FastApiGenerationPlan {
   const conformance = buildConformanceSuite(blueprint)
   const verification = fastApiVerification()
   const routerTasks = [...new Set(blueprint.routes.map((route) => route.owner.taskId))].sort()
-  const imports = routerTasks.map((taskId) => {
-    const suffix = taskId.slice("router:".length).toLowerCase()
-    const alias = `router_${suffix.replace(/[^a-z0-9_]/g, "_")}`
-    return { line: `from app.routers.${suffix} import router as ${alias}`, alias }
-  })
+  const candidates = routerTasks
+    .map((taskId) => `app.routers.${taskId.slice("router:".length).toLowerCase()}`)
+    .sort()
   const seedFiles: Record<string, string> = {
+    // Detection-based inclusion: the pinned candidate ORDER is the contract,
+    // but a candidate is only imported once its module exists. This keeps
+    // the application bootable from the app-skeleton node onward — every
+    // router landing grows the live route set — while the final state (and
+    // every frozen judgment) is still exactly the pinned tuple, verified by
+    // strict OpenAPI equality at terminal conformance.
     "app/router_registry.py": [
       '"""Compiler-owned router registry — DO NOT EDIT."""',
       "",
-      ...imports.map((item) => item.line),
+      "import importlib",
+      "import importlib.util",
       "",
-      `ROUTERS = (${imports.map((item) => item.alias).join(", ")}${imports.length === 1 ? "," : ""})`,
+      `CANDIDATES = (${candidates.map((name) => JSON.stringify(name)).join(", ")}${candidates.length === 1 ? "," : ""})`,
+      "ROUTERS = []",
+      "for _name in CANDIDATES:",
+      "    if importlib.util.find_spec(_name) is not None:",
+      "        ROUTERS.append(importlib.import_module(_name).router)",
       "",
     ].join("\n"),
   }
@@ -104,6 +116,7 @@ export function planGeneration(ir: SpecIR): FastApiGenerationPlan {
     conformance,
     verification,
     seedFiles,
+    coverage: deriveTestManifest(blueprint, dag.tasks),
     stable: stableStringify({
       blueprint,
       dag: JSON.parse(dagFingerprint(dag)),

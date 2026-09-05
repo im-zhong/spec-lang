@@ -47,3 +47,4 @@ export {
 } from "./prompt"
 export { fastApiVerification, type VerificationPlan, type VerificationCommand } from "./verify"
 export { default as fastApiPackage } from "./spec-package"
+export { deriveTestManifest, coverageDiagnostics, type TestManifest, type CoverageEntry } from "./manifest"

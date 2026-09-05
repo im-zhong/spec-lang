@@ -79,7 +79,7 @@ describe("compiler-generated node oracles", () => {
 
   it("generates py_compile-clean oracle files for every example", async () => {
     if (!hasPython) return
-    for (const name of ["cblog", "inventory", "booking", "media-platform", "store-platform"]) {
+    for (const name of ["cblog", "inventory", "booking", "media-platform", "store-platform", "bounds", "smoke"]) {
       const plan = await planFor(name)
       const files = buildNodeOracles(plan.blueprint, plan.dag.tasks).files
       expect(Object.keys(files)).toEqual(Object.keys(plan.seedFiles).filter((file) => file.startsWith("tests/spec_oracle/")))

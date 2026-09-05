@@ -346,17 +346,14 @@ export function deriveClauses(bp: BackendBlueprint): ContractClause[] {
     )
   }
 
-  /* ---- app ---- */
-  const routeInterface = bp.routes
-    .filter((r) => r.entity !== undefined || r.operation === "login" || r.operation === "register" || r.operation === "me")
-    .map((r) => `${r.method} ${r.path}`)
+  /* ---- app skeleton (walking skeleton: boots before routers exist) ---- */
   clauses.push(
     clause("app", "abi", "abi:app:main:exports", "app/main.py exports create_app(database_url: str | None = None) -> FastAPI AND a module-level app = create_app()."),
     clause("app", "app", "app:title-version", `The application title is ${quote(bp.app.title)} and the version ${quote(bp.app.version)}.`),
-    clause("app", "app", "app:routes-complete", `The application exposes EXACTLY the declared route interface {${routeInterface.join("; ")}} — strict OpenAPI equality (FastAPI's automatic /openapi.json and /docs are fine).`),
-    clause("app", "app", "app:router-registry", "ROUTERS is imported from the compiler-owned app.router_registry and each entry is included exactly once in tuple order; routers are imported/registered by no other path."),
-    clause("app", "app", "app:engine-isolation", "Each create_app call creates one engine via create_engine_from_url(database_url) and one session factory, stores them on app.state, overrides get_db with session_dependency(factory), creates tables on startup against that engine, and disposes it on shutdown — this is what makes separate create_app(database_url=...) calls isolated.", "oracle", "function"),
-    clause("app", "app", "app:state-adapters", "Deterministic in-memory cache, messaging, and blob adapters are constructed by default and exposed as app.state.cache, app.state.messaging, and app.state.blob when their corresponding contracts exist.", "oracle", "function"),
+    clause("app", "app", "app:routes-grow", "The skeleton registers no routes of its own: ROUTERS is imported from the compiler-owned app.router_registry and each existing entry is included exactly once in tuple order — every router that lands on main grows the live route set, and the COMPLETE declared interface is asserted once by terminal conformance (strict OpenAPI equality)."),
+    clause("app", "app", "app:router-registry", "The registry is detection-based: CANDIDATES are the pinned router modules in pinned order and a candidate is imported only when its module exists — importing app.router_registry never raises, including with zero routers present.", "oracle", "function"),
+    clause("app", "app", "app:engine-isolation", "When app.database exists, each create_app call creates one engine via create_engine_from_url(database_url) and one session factory, stores them on app.state, overrides get_db with session_dependency(factory), creates tables on startup against that engine, and disposes it on shutdown; with no database module yet the skeleton accepts database_url and wires nothing — create_app never raises because a dependency module is absent.", "oracle", "function"),
+    clause("app", "app", "app:state-adapters", "Deterministic in-memory cache, messaging, and blob adapters are constructed and exposed as app.state.cache, app.state.messaging, and app.state.blob exactly when the corresponding app module exists (detection wiring, never a hard import).", "oracle", "function"),
   )
 
   return clauses

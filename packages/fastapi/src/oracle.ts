@@ -188,6 +188,18 @@ function violatingValue(field: BlueprintField, constraints: FieldConstraint[]): 
       if (field.max !== undefined && v > field.max) return undefined
       return v
     }
+    if (c.kind === "const" && field.type === "string" && typeof c.value === "string") {
+      // The violating value must stay creatable: a value that would 422 on
+      // maxLength never reaches the invariant, so it is not a probe.
+      if (c.op === "neq" && (field.maxLength === undefined || c.value.length <= field.maxLength)) {
+        return c.value
+      }
+      const eqViolating = c.value === "" ? undefined : `${c.value}-violating`
+      if (c.op === "eq" && eqViolating !== undefined &&
+          (field.maxLength === undefined || eqViolating.length <= field.maxLength)) {
+        return eqViolating
+      }
+    }
   }
   return undefined
 }
@@ -287,6 +299,9 @@ interface BehaviorTriple {
     unknownPathId?: boolean
     body?: Record<string, unknown>
     auth?: boolean
+    /** Seed the auth principal (known password) even without a token —
+     * login/register probes address it directly. */
+    needsPrincipal?: boolean
   }
   expect: {
     status: number
@@ -302,9 +317,126 @@ interface BehaviorTriple {
   label?: string
 }
 
+/** Behavior triples for the auth node: register/login/me with the pinned
+ * no-enumeration contract (wrong password and unknown identity answer the
+ * IDENTICAL 401 body — both triples assert the same literal). */
+function authRouterBehavior(bp: BackendBlueprint): Record<string, unknown> | undefined {
+  const auth = bp.auth!
+  const principal = bp.entities.find((e) => e.name === auth.principal)
+  if (principal === undefined) return undefined
+  let uuidN = 0
+  let seqN = 0
+  const nextUuid = () => {
+    uuidN += 1
+    return `00000000-0000-4000-8000-${String(uuidN).padStart(12, "0")}`
+  }
+  const seq = () => {
+    seqN += 1
+    return seqN
+  }
+  const authGiven: BehaviorTriple["given"] = []
+  const principalView = seedRow(bp, principal, authGiven, nextUuid, seq, { as: "principal" })
+  const knownIdentity = String(principalView[auth.identityField])
+  const outKeys = principal.fields.map((f) => f.name).sort()
+  const triples: BehaviorTriple[] = []
+
+  const register = auth.routes.find((r) => r.operation === "register")
+  if (register !== undefined) {
+    const body: Record<string, unknown> = {}
+    for (const field of principal.fields) {
+      if (field.name === "id" || field.optional === true || field.default !== undefined) continue
+      body[field.name] = sampleData(field, seq)
+    }
+    body.password = "secret123"
+    triples.push({
+      label: `register:${register.id}`,
+      given: [],
+      request: { method: register.method, path: register.path, body },
+      expect: {
+        status: register.status,
+        exactKeys: outKeys,
+        body: { [auth.identityField]: body[auth.identityField] },
+      },
+    })
+    const duplicate = { ...body, [auth.identityField]: knownIdentity }
+    triples.push({
+      label: `register-duplicate:${register.id}`,
+      given: [],
+      request: { method: register.method, path: register.path, body: duplicate, needsPrincipal: true },
+      expect: { status: 409, body: bp.contract.errors.alreadyExists.body },
+    })
+  }
+  const login = auth.routes.find((r) => r.operation === "login")
+  if (login !== undefined) {
+    triples.push({
+      label: `login:${login.id}`,
+      given: [],
+      request: {
+        method: login.method,
+        path: login.path,
+        body: { [auth.identityField]: knownIdentity, password: "secret123" },
+        needsPrincipal: true,
+      },
+      expect: {
+        status: login.status,
+        body: { access_token: { __expect: "notNull" }, token_type: "bearer" },
+      },
+    })
+    triples.push({
+      label: `login-wrong-password:${login.id}`,
+      given: [],
+      request: {
+        method: login.method,
+        path: login.path,
+        body: { [auth.identityField]: knownIdentity, password: "totally-wrong-secret" },
+        needsPrincipal: true,
+      },
+      expect: { status: 401, body: bp.contract.errors.invalidCredentials.body },
+    })
+    triples.push({
+      label: `login-unknown-identity:${login.id}`,
+      given: [],
+      request: {
+        method: login.method,
+        path: login.path,
+        body: { [auth.identityField]: "nobody-here@example.com", password: "secret123" },
+      },
+      expect: { status: 401, body: bp.contract.errors.invalidCredentials.body },
+    })
+  }
+  const me = auth.routes.find((r) => r.operation === "me")
+  if (me !== undefined) {
+    triples.push({
+      label: `me:${me.id}`,
+      given: [],
+      request: { method: me.method, path: me.path, auth: true },
+      expect: { status: me.status, exactKeys: outKeys, body: { [auth.identityField]: knownIdentity } },
+    })
+    triples.push({
+      label: `me-unauthenticated:${me.id}`,
+      given: [],
+      request: { method: me.method, path: me.path },
+      expect: { status: 401, body: bp.contract.errors.unauthenticated.body },
+    })
+  }
+  if (triples.length === 0) return undefined
+  return {
+    triples,
+    auth: {
+      table: principal.table,
+      row: authGiven[0].row,
+      passwordColumn: auth.passwordColumn,
+      subject: String(principalView.id),
+    },
+  }
+}
+
 /** Compile the behavior block for one router node: rule-derived probes for
  * every route it owns plus the author examples targeting those routes. */
 function routerBehavior(bp: BackendBlueprint, taskId: string): Record<string, unknown> | undefined {
+  if (taskId === "router:auth" && bp.auth !== undefined) {
+    return authRouterBehavior(bp)
+  }
   const routes = bp.routes.filter((r) => r.owner.taskId === taskId && r.entity !== undefined)
   if (routes.length === 0) return undefined
   const entity = bp.entities.find((e) => e.name === routes[0].entity)
@@ -619,6 +751,106 @@ function routerBehavior(bp: BackendBlueprint, taskId: string): Record<string, un
     })
   }
 
+  /* ---- invariant probes: direct-seeded minimally violating worlds ---- */
+  const invariantIds = [...new Set(routes.flatMap((r) => r.invariantIds ?? []))].sort()
+  for (const invariantId of invariantIds) {
+    const inv = bp.invariants.find((i) => i.id === invariantId)
+    if (inv === undefined) continue
+    if (inv.shape === "rowCheck") {
+      // Single-row check tree: create with a derivable violating value.
+      const constraints = guardConstraints(inv.check)
+      const create = routes.find((r) => r.operation === "create")
+      if (create === undefined) continue
+      for (const [fieldName, list] of [...constraints.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+        const field = entity.fields.find((f) => f.name === fieldName)
+        if (field === undefined || field.optional === true) continue
+        const bad = violatingValue(field, list)
+        if (bad === undefined) continue
+        const given: BehaviorTriple["given"] = []
+        const body = createBody(given)
+        body[fieldName] = bad
+        triples.push({
+          label: `invariant:${inv.name}`,
+          given,
+          request: { method: create.method, path: create.path, body, auth: create.auth && hasAuth },
+          expect: {
+            status: 409,
+            body: errors.invariantViolated.body,
+            state: { counts: [{ table: entity.table, expected: expectedCount(given, entity.table, 0, create.auth && hasAuth) }] },
+          },
+        })
+        break
+      }
+    }
+    if (inv.shape === "crossRowCount" && inv.count !== undefined) {
+      const count = inv.count
+      const parent = bp.entities.find((e) => e.name === inv.entity)
+      const counted = bp.entities.find((e) => e.name === count.entity)
+      if (parent === undefined || counted === undefined) continue
+      const boundField =
+        count.bound.kind === "field"
+          ? parent.fields.find((f) => f.name === (count.bound as { name: string }).name)
+          : undefined
+      const baseBound =
+        count.bound.kind === "const" ? Number(count.bound.value) : Math.max(boundField?.min ?? 0, 0)
+      if (!Number.isInteger(baseBound) || baseBound < 0) continue
+      if (entity.name === count.entity) {
+        // Counted router: fill the parent to its bound with direct inserts,
+        // then one more API create must answer 409.
+        const create = routes.find((r) => r.operation === "create")
+        if (create === undefined) continue
+        const given: BehaviorTriple["given"] = []
+        const parentRow = seedRow(bp, parent, given, nextUuid, seq, {
+          as: "parent",
+          ...(boundField !== undefined ? { overrides: { [boundField.name]: baseBound } } : {}),
+        })
+        for (let i = 0; i < baseBound; i += 1) {
+          seedRow(bp, entity, given, nextUuid, seq, {
+            as: `fill${i}`,
+            overrides: { [count.refField]: parentRow.id },
+          })
+        }
+        const body = createBody(given)
+        body[count.refField] = parentRow.id
+        triples.push({
+          label: `invariant:${inv.name}`,
+          given,
+          request: { method: create.method, path: create.path, body, auth: create.auth && hasAuth },
+          expect: { status: 409, body: errors.invariantViolated.body },
+        })
+      } else if (entity.name === inv.entity && boundField !== undefined) {
+        // Bound router: tightening the bound below the live child count
+        // answers 409 (skipped when the tightened value would 422 first).
+        const update = routes.find((r) => r.operation === "update")
+        const tightened = baseBound - 1
+        if (update === undefined || tightened < (boundField.min ?? 0)) continue
+        const given: BehaviorTriple["given"] = []
+        const parentRow = seedRow(bp, parent, given, nextUuid, seq, {
+          as: "self",
+          overrides: { [boundField.name]: baseBound },
+        })
+        for (let i = 0; i < baseBound; i += 1) {
+          seedRow(bp, counted, given, nextUuid, seq, {
+            as: `fill${i}`,
+            overrides: { [count.refField]: parentRow.id },
+          })
+        }
+        triples.push({
+          label: `invariant-tighten:${inv.name}`,
+          given,
+          request: {
+            method: update.method,
+            path: update.path,
+            pathAs: "self",
+            body: { [boundField.name]: tightened },
+            auth: update.auth && hasAuth,
+          },
+          expect: { status: 409, body: errors.invariantViolated.body },
+        })
+      }
+    }
+  }
+
   /* ---- auth probe: a protected GET without a token answers 401 ---- */
   const protectedGet = routes.find((r) => r.auth && (r.operation === "list" || r.operation === "get" || r.operation === "count"))
   if (protectedGet !== undefined && hasAuth) {
@@ -785,21 +1017,72 @@ function oracleContractFor(bp: BackendBlueprint, task: DagTask): Record<string, 
       }
     }
     case "cache":
-      return { ...base, exports: ["CacheUnavailable", "CachePolicy", "CACHE_POLICIES", "InMemoryCacheBackend", "RedisCacheBackend"], policies: bp.caches.map((c) => c.name).sort(), unknownPolicy: `${bp.caches[0]?.name ?? "cache"}-unknown` }
+      return {
+        ...base,
+        exports: ["CacheUnavailable", "CachePolicy", "CACHE_POLICIES", "InMemoryCacheBackend", "RedisCacheBackend"],
+        policies: bp.caches.map((c) => c.name).sort(),
+        unknownPolicy: `${bp.caches[0]?.name ?? "cache"}-unknown`,
+        behavior: {
+          declarations: bp.caches.map((c) => ({
+            name: c.name,
+            providerKind: c.provider.kind,
+            keyPrefix: c.keyPrefix,
+            ttlSeconds: c.ttlSeconds,
+            failureMode: c.failureMode,
+            stampedeProtection: c.stampedeProtection,
+          })),
+        },
+      }
     case "messaging":
-      return { ...base, exports: ["MessageValidationError", "MESSAGE_DEFINITIONS", "QUEUE_POLICIES", "validate_payload", "build_envelope", "InMemoryMessageBroker"], definitions: bp.messages.map((m) => m.name).sort(), queues: bp.queues.map((q) => q.name).sort() }
+      return {
+        ...base,
+        exports: ["MessageValidationError", "MESSAGE_DEFINITIONS", "QUEUE_POLICIES", "validate_payload", "build_envelope", "InMemoryMessageBroker"],
+        definitions: bp.messages.map((m) => m.name).sort(),
+        queues: bp.queues.map((q) => q.name).sort(),
+        behavior: {
+          messages: bp.messages.map((m) => ({ name: m.name, fields: m.fields })),
+          declarations: bp.queues.map((q) => ({
+            name: q.name,
+            providerKind: q.provider.kind,
+            messages: q.messages,
+            delivery: q.delivery,
+            ...(q.orderingKey !== undefined ? { orderingKey: q.orderingKey } : {}),
+          })),
+        },
+      }
     case "blob":
-      return { ...base, exports: ["BlobValidationError", "BlobPolicy", "BLOB_POLICIES", "normalize_blob_key", "InMemoryBlobStore", "S3BlobStore"], policies: bp.blobs.map((b) => b.name).sort() }
-    case "app":
+      return {
+        ...base,
+        exports: ["BlobValidationError", "BlobPolicy", "BLOB_POLICIES", "normalize_blob_key", "InMemoryBlobStore", "S3BlobStore"],
+        policies: bp.blobs.map((b) => b.name).sort(),
+        behavior: {
+          declarations: bp.blobs.map((b) => ({
+            name: b.name,
+            providerKind: b.provider.kind,
+            bucket: b.bucket,
+            keyPrefix: b.keyPrefix,
+            maxBytes: b.maxBytes,
+            contentTypes: b.contentTypes,
+            signedUrlTtlSeconds: b.signedUrlTtlSeconds,
+          })),
+        },
+      }
+    case "app": {
+      // Snapshot-invariant skeleton contract: the assertions hold with zero
+      // routers present (app-node time) AND on the finished repository
+      // (CI re-runs) — the registry includes exactly the existing pinned
+      // candidates and the exposed interface is exactly their union.
+      const candidates = [...new Set(bp.routes.filter((r) => r.entity !== undefined || r.operation === "login" || r.operation === "register" || r.operation === "me").map((r) => r.owner.taskId))]
+        .map((taskId) => `app.routers.${taskId.slice("router:".length).toLowerCase()}`)
+        .sort()
       return {
         ...base,
         title: bp.app.title,
         version: bp.app.version,
-        routes: bp.routes
-          .filter((r) => r.entity !== undefined || r.operation === "login" || r.operation === "register" || r.operation === "me")
-          .map((r) => `${r.method} ${r.path}`)
-          .sort(),
+        routes: [] as string[],
+        registryCandidates: candidates,
       }
+    }
     default:
       return base
   }
@@ -1000,7 +1283,7 @@ def _check_router_behavior(module, router, behavior):
         token = None
         request = triple["request"]
         wants_auth = bool(request.get("auth"))
-        if behavior.get("auth") is not None and wants_auth:
+        if behavior.get("auth") is not None and (wants_auth or request.get("needsPrincipal")):
             from app import security as security_module
 
             auth = behavior["auth"]
@@ -1103,6 +1386,100 @@ def _check_cache(contract):
             return True
 
     assert _run(unknown_policy()), "unknown policy must raise KeyError"
+    if contract.get("behavior") is not None:
+        _check_cache_behavior(cache, contract["behavior"])
+
+
+def _check_cache_behavior(module, behavior):
+    """Oracle v2: the fake-client probes the terminal suite runs — in-memory
+    semantics (isolation from caller mutation, single-flight loader), the
+    exact redis call shapes, and the declared failure modes."""
+    import pytest
+
+    async def probe():
+        backend = module.InMemoryCacheBackend()
+        for policy in behavior["declarations"]:
+            name = policy["name"]
+            assert await backend.get(name, "asset:1") is None
+            original = {"nested": [1, 2]}
+            await backend.set(name, "asset:1", original)
+            original["nested"].append(3)
+            first = await backend.get(name, "asset:1")
+            assert first == {"nested": [1, 2]}
+            first["nested"].append(4)
+            assert await backend.get(name, "asset:1") == {"nested": [1, 2]}
+            await backend.delete(name, "asset:1")
+            assert await backend.get(name, "asset:1") is None
+            calls = 0
+
+            async def loader():
+                nonlocal calls
+                calls += 1
+                return {"loaded": True}
+
+            assert await backend.get_or_set(name, "asset:2", loader) == {"loaded": True}
+            assert await backend.get_or_set(name, "asset:2", loader) == {"loaded": True}
+            assert calls == 1
+
+    _run(probe())
+
+    class FakeRedisClient:
+        def __init__(self, *, fail=False):
+            self.fail = fail
+            self.values = {}
+            self.calls = []
+
+        def _check(self):
+            if self.fail:
+                raise OSError("provider unavailable")
+
+        async def get(self, key):
+            self.calls.append(("get", key))
+            self._check()
+            value = self.values.get(key)
+            return value.encode("utf-8") if value is not None else None
+
+        async def set(self, key, value, *, ex):
+            self.calls.append(("set", key, value, ex))
+            self._check()
+            self.values[key] = value
+            return True
+
+        async def delete(self, key):
+            self.calls.append(("delete", key))
+            self._check()
+            return 1 if self.values.pop(key, None) is not None else 0
+
+    async def probe_redis():
+        for policy in behavior["declarations"]:
+            name = policy["name"]
+            full_key = f'{policy["keyPrefix"]}:provider'
+            client = FakeRedisClient()
+            backend = module.RedisCacheBackend(client)
+            value = {"nested": [1, 2]}
+            await backend.set(name, "provider", value)
+            assert client.calls[-1][0:2] == ("set", full_key)
+            assert client.calls[-1][3] == policy["ttlSeconds"]
+            assert json.loads(client.calls[-1][2]) == value
+            assert await backend.get(name, "provider") == value
+            await backend.delete(name, "provider")
+            assert client.calls[-1] == ("delete", full_key)
+
+        bypass = next((item for item in behavior["declarations"] if item["failureMode"] == "bypass"), None)
+        if bypass is not None:
+            bypass_backend = module.RedisCacheBackend(FakeRedisClient(fail=True))
+            assert await bypass_backend.get(bypass["name"], "provider") is None
+            await bypass_backend.set(bypass["name"], "provider", {"ok": True})
+            await bypass_backend.delete(bypass["name"], "provider")
+
+        closed = next((item for item in behavior["declarations"] if item["failureMode"] == "fail-closed"), None)
+        if closed is not None:
+            closed_backend = module.RedisCacheBackend(FakeRedisClient(fail=True))
+            with pytest.raises(module.CacheUnavailable) as raised:
+                await closed_backend.get(closed["name"], "provider")
+            assert isinstance(raised.value.__cause__, OSError)
+
+    _run(probe_redis())
 
 
 def _check_messaging(contract):
@@ -1117,6 +1494,135 @@ def _check_messaging(contract):
         raise AssertionError("validate_payload must reject an empty payload")
     except messaging.MessageValidationError:
         pass
+    if contract.get("behavior") is not None:
+        _check_messaging_behavior(messaging, contract["behavior"])
+
+
+def _sample_message_payload(message):
+    by_kind = {
+        "string": "sample",
+        "int": 1,
+        "boolean": True,
+        "uuid": "00000000-0000-4000-8000-000000000030",
+        "datetime": "2026-01-01T00:00:00",
+    }
+    return {name: by_kind[kind] for name, kind in message["fields"].items()}
+
+
+def _check_messaging_behavior(module, behavior):
+    """Oracle v2: envelope building, in-memory broker semantics (allowlists,
+    dedup by delivery mode, drain order), and the exact provider call
+    shapes for every declared queue — same probes the terminal suite runs."""
+    from datetime import datetime
+
+    import pytest
+
+    messages = {item["name"]: item for item in behavior["messages"]}
+
+    async def probe():
+        broker = module.InMemoryMessageBroker()
+        for queue in behavior["declarations"]:
+            message = messages[queue["messages"][0]]
+            payload = _sample_message_payload(message)
+            module.validate_payload(message["name"], payload)
+            with pytest.raises(module.MessageValidationError):
+                module.validate_payload(message["name"], {})
+            envelope = module.build_envelope(
+                message["name"], payload,
+                message_id="00000000-0000-4000-8000-000000000010",
+                occurred_at=datetime(2026, 1, 1, 0, 0, 0),
+            )
+            assert envelope.message == message["name"]
+            assert envelope.version == 1
+            await broker.publish(queue["name"], envelope)
+            await broker.publish(queue["name"], envelope)
+            drained = await broker.drain(queue["name"])
+            expected = 1 if queue["delivery"] == "at-least-once" else 2
+            assert len(drained) == expected
+            assert [item.id for item in drained] == [envelope.id] * expected
+
+    _run(probe())
+
+    class FakeKafkaClient:
+        def __init__(self):
+            self.calls = []
+
+        async def send_and_wait(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    class FakeRabbitClient:
+        def __init__(self):
+            self.calls = []
+
+        async def publish(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    class FakeSQSClient:
+        def __init__(self):
+            self.calls = []
+
+        def send_message(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"MessageId": "provider-message-id"}
+
+    class_names = {"kafka": "KafkaBroker", "rabbitmq": "RabbitMQBroker", "sqs": "SQSBroker"}
+    fakes = {"kafka": FakeKafkaClient, "rabbitmq": FakeRabbitClient, "sqs": FakeSQSClient}
+
+    async def probe_providers():
+        for queue in behavior["declarations"]:
+            kind = queue["providerKind"]
+            broker_class = getattr(module, class_names[kind], None)
+            assert broker_class is not None, class_names[kind]
+            client = fakes[kind]()
+            broker = broker_class(client)
+            message = messages[queue["messages"][0]]
+            payload = _sample_message_payload(message)
+            envelope = module.build_envelope(
+                message["name"], payload,
+                message_id="00000000-0000-4000-8000-000000000020",
+                occurred_at=datetime(2026, 1, 1, 0, 0, 0),
+            )
+            expected_object = {
+                "message": message["name"],
+                "version": 1,
+                "id": "00000000-0000-4000-8000-000000000020",
+                "occurred_at": "2026-01-01T00:00:00",
+                "payload": payload,
+            }
+            expected_text = json.dumps(expected_object, sort_keys=True, separators=(",", ":"))
+            ordering = str(payload[queue["orderingKey"]]) if queue.get("orderingKey") else envelope.id
+            await broker.publish(queue["name"], envelope)
+            if kind == "kafka":
+                args, kwargs = client.calls[-1]
+                assert args == (queue["name"], expected_text.encode("utf-8"))
+                assert kwargs == {"key": ordering.encode("utf-8")}
+            elif kind == "rabbitmq":
+                args, kwargs = client.calls[-1]
+                assert args == (queue["name"], expected_text.encode("utf-8"))
+                assert kwargs == {"message_id": envelope.id}
+            else:
+                assert client.calls[-1] == {
+                    "QueueUrl": queue["name"],
+                    "MessageBody": expected_text,
+                    "MessageDeduplicationId": envelope.id,
+                    "MessageGroupId": ordering,
+                }
+            disallowed = next(
+                (item for item in behavior["messages"] if item["name"] not in queue["messages"]),
+                None,
+            )
+            if disallowed is not None:
+                bad = module.build_envelope(
+                    disallowed["name"], _sample_message_payload(disallowed),
+                    message_id="00000000-0000-4000-8000-000000000021",
+                    occurred_at=datetime(2026, 1, 1, 0, 0, 0),
+                )
+                before = len(client.calls)
+                with pytest.raises(module.MessageValidationError):
+                    await broker.publish(queue["name"], bad)
+                assert len(client.calls) == before
+
+    _run(probe_providers())
 
 
 def _check_blob(contract):
@@ -1129,24 +1635,144 @@ def _check_blob(contract):
         raise AssertionError("absolute keys must be rejected")
     except (ValueError, blob.BlobValidationError):
         pass
+    if contract.get("behavior") is not None:
+        _check_blob_behavior(blob, contract["behavior"])
+
+
+def _check_blob_behavior(module, behavior):
+    """Oracle v2: in-memory store lifecycle (byte limit, MIME allowlist,
+    exact memory:// signed URLs) and the exact S3 call sequence under a
+    fake client — same probes the terminal suite runs."""
+    import pytest
+
+    async def probe():
+        store = module.InMemoryBlobStore()
+        for policy in behavior["declarations"]:
+            name = policy["name"]
+            key = "tenant/object.bin"
+            normalized = module.normalize_blob_key(name, key)
+            prefix = policy["keyPrefix"].strip("/")
+            assert normalized == f"{prefix + '/' if prefix else ''}{key}"
+            content_type = policy["contentTypes"][0]
+            await store.put(name, key, b"payload", content_type)
+            assert await store.get(name, key) == b"payload"
+            assert await store.signed_url(name, key) == f"memory://{policy['bucket']}/{normalized}?expires={policy['signedUrlTtlSeconds']}"
+            await store.delete(name, key)
+            with pytest.raises(KeyError):
+                await store.get(name, key)
+            with pytest.raises(module.BlobValidationError):
+                await store.put(name, key, b"x" * (policy["maxBytes"] + 1), content_type)
+            with pytest.raises(module.BlobValidationError):
+                await store.put(name, key, b"x", "application/x-not-allowed")
+            with pytest.raises(module.BlobValidationError):
+                module.normalize_blob_key(name, "../secret")
+
+    _run(probe())
+
+    if not any(item["providerKind"] == "s3" for item in behavior["declarations"]):
+        return
+    assert hasattr(module, "S3BlobStore"), "S3BlobStore"
+
+    class FakeBody:
+        def __init__(self, value):
+            self.value = value
+
+        def read(self):
+            return self.value
+
+    class FakeS3Client:
+        def __init__(self):
+            self.objects = {}
+            self.calls = []
+
+        def put_object(self, **kwargs):
+            self.calls.append(("put", kwargs))
+            self.objects[(kwargs["Bucket"], kwargs["Key"])] = bytes(kwargs["Body"])
+
+        def get_object(self, **kwargs):
+            self.calls.append(("get", kwargs))
+            return {"Body": FakeBody(self.objects[(kwargs["Bucket"], kwargs["Key"])])}
+
+        def delete_object(self, **kwargs):
+            self.calls.append(("delete", kwargs))
+            self.objects.pop((kwargs["Bucket"], kwargs["Key"]), None)
+
+        def generate_presigned_url(self, operation, **kwargs):
+            self.calls.append(("presign", operation, kwargs))
+            return "https://signed.invalid/object"
+
+    async def probe_s3():
+        policy = behavior["declarations"][0]
+        name = policy["name"]
+        key = "tenant/provider.bin"
+        normalized = f'{policy["keyPrefix"].strip("/")}/{key}'
+        content_type = policy["contentTypes"][0]
+        client = FakeS3Client()
+        store = module.S3BlobStore(client)
+        await store.put(name, key, b"provider-payload", content_type)
+        assert client.calls[-1] == ("put", {
+            "Bucket": policy["bucket"], "Key": normalized,
+            "Body": b"provider-payload", "ContentType": content_type,
+        })
+        assert await store.get(name, key) == b"provider-payload"
+        assert await store.signed_url(name, key) == "https://signed.invalid/object"
+        assert client.calls[-1] == ("presign", "get_object", {
+            "Params": {"Bucket": policy["bucket"], "Key": normalized},
+            "ExpiresIn": policy["signedUrlTtlSeconds"],
+        })
+        await store.delete(name, key)
+        assert client.calls[-1] == ("delete", {
+            "Bucket": policy["bucket"], "Key": normalized,
+        })
+        before = list(client.calls)
+        with pytest.raises(module.BlobValidationError):
+            await store.put(name, key, b"x", "application/x-not-allowed")
+        assert client.calls == before
+
+    _run(probe_s3())
 
 
 def _check_app(contract):
-    import tempfile
+    import importlib
+    import importlib.util
     import os
+    import tempfile
 
     main = _import("app.main")
     assert callable(getattr(main, "create_app", None)), "create_app"
     assert getattr(main, "app", None) is not None, "module-level app"
+    # The registry is detection-based: importing it never raises, and it
+    # includes EXACTLY the pinned candidates whose modules exist right now.
+    registry = _import("app.router_registry")
+    present = []
+    for name in contract["registryCandidates"]:
+        if importlib.util.find_spec(name) is not None:
+            present.append(getattr(importlib.import_module(name), "router"))
+    assert list(registry.ROUTERS) == present, (
+        [getattr(r, "prefix", "") for r in registry.ROUTERS],
+        [getattr(r, "prefix", "") for r in present],
+    )
     database_path = os.path.join(tempfile.mkdtemp(prefix="spec-oracle-"), "app.sqlite")
     application = main.create_app(database_url=f"sqlite:///{database_path}")
+    # Detection wiring: the get_db override exists exactly once app.database
+    # does (skeleton time: nothing to override; later: always overridden).
+    if importlib.util.find_spec("app.database") is not None:
+        database = _import("app.database")
+        assert database.get_db in application.dependency_overrides, "get_db override missing"
     schema = application.openapi()
-    actual = sorted(
+    expected = set()
+    for router in present:
+        for route in router.routes:
+            if getattr(route, "methods", None):
+                for method in route.methods:
+                    if method != "HEAD":
+                        expected.add(f"{method.upper()} {route.path}")
+    actual = set(
         f"{method.upper()} {path}"
         for path, operations in schema["paths"].items()
         for method in operations
     )
-    assert actual == sorted(contract["routes"]), actual
+    assert actual == expected, (sorted(actual), sorted(expected))
     assert schema["info"]["title"] == contract["title"], schema["info"]["title"]
     assert schema["info"]["version"] == contract["version"], schema["info"]["version"]
 `
@@ -1182,6 +1808,15 @@ export interface NodeOracleFiles {
   files: Record<string, string>
   /** The command running one node's oracle file. */
   commandFor: (taskId: string) => string
+}
+
+/** The ACTUAL behavior-probe labels compiled for one node — the ground
+ * truth the test manifest's in-loop coverage claims are built from. */
+export function behaviorTripleLabels(bp: BackendBlueprint, taskId: string): string[] {
+  const behavior = routerBehavior(bp, taskId)
+  if (behavior === undefined) return []
+  const triples = behavior.triples as Array<{ label?: string }>
+  return triples.map((triple) => triple.label ?? "")
 }
 
 /** Build the compiler-owned oracle files for every task in the DAG. */

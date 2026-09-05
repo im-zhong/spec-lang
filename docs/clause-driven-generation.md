@@ -224,3 +224,35 @@ tests, ever):
   (computed from the blueprint, per dependency set) and forbids reading
   `conformance/`, `tests/spec_oracle/`, `.spec/`, `.spec-input/`, and
   sibling routers — the clause table is the complete contract.
+
+## 12. Addendum (2026-09-05, second batch): full in-loop coverage + the manifest gate
+
+Oracle v2 completed its coverage matrix — no clause class is terminal-only
+anymore:
+
+- **auth node behavior**: seven triples (register exact-key-set without the
+  hash, duplicate → 409, login token shape, wrong-password and
+  unknown-identity asserting the IDENTICAL literal 401 body, me ±token);
+  the runner seeds the principal via `needsPrincipal` without minting a
+  token.
+- **invariant probes**: rowCheck compiles a bounds-legal violating create
+  (→ 409 + rollback count); crossRowCount direct-seeds a parent at its
+  bound plus bound-many children and asserts the next API create 409s
+  (counted router) and that tightening the bound below the live count 409s
+  (bound router, skipped where bounds would 422 first). Guard/check trees
+  gained string-neq/eq violation derivation with maxLength guards.
+- **infra behavior**: cache/messaging/blob CONTRACTs embed their full
+  declarations and the runner ports the terminal fake-client probes
+  (in-memory isolation/single-flight, exact redis ex/prefix shapes, bypass
+  vs fail-closed, envelope/broker semantics, kafka/rabbit/sqs call shapes,
+  the full S3 sequence incl. presign Params/ExpiresIn). Verified green
+  against the smoke run's REAL generated cache/blob modules and
+  mutation-killed (redis TTL +1, presign TTL +1 both rejected).
+
+**Test manifest (planned #27, landed)**: `manifest.ts` maps every clause
+id to {inLoop, terminal} coverage derived from the ACTUAL compiled probe
+labels — never naming conventions. `spec check` gates it:
+`TEST_COVERAGE_MISSING` (error) for oracle clauses nothing covers,
+`TEST_COVERAGE_TERMINAL_ONLY` (info) for clauses judged only at the
+single-shot terminal. Dry-runs write `test-manifest.json`. All backend
+examples currently pass with zero terminal-only clauses.

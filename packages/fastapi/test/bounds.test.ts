@@ -45,8 +45,8 @@ describe("declared field bounds (validation → 422, never the invariant 409)", 
     expect(contract).toContain('"capacity": 11}')
     expect(contract).toContain('"seats": -1}')
     expect(contract).toContain('"seats": 3}')
-    expect(contract).toMatch(/"name": "x"\.repeat\(9\)/)
-    expect(contract).toMatch(/"label": "x"\.repeat\(11\)/)
+    expect(contract).toContain('"name": "x" * 9}')
+    expect(contract).toContain('"label": "x" * 11}')
     // Declared maxLength caps every emitted sample (uuid hex slice for unique).
     expect(helpers).toContain('f"{uuid.uuid4().hex[:8]}"')
     expect(helpers).toContain('"label": "sample-lab"')

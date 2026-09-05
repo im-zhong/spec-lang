@@ -9,26 +9,25 @@ ONE test primitive** — every future form compiles down to the same
 
 ## 1. Test vocabulary — execution coverage (oracle v2 leftovers)
 
-- [ ] **`router:auth` behavior probes.** The auth node still gets shape
-  checks only. Probes are principal-centric with a KNOWN password (the
-  `behavior.auth` runtime-hash machinery already exists): register → 201
-  (row, never the hash), duplicate identity → 409, login success → token
-  shape, wrong password vs unknown identity → **byte-identical 401** (no
-  user enumeration), `me` with/without token. ~80 lines of compiler code
-  reusing the triple interpreter.
-- [ ] **Invariant cross-row world probes in node oracles.** Invariants are
-  still judged only at terminal conformance. Node-level needs
-  direct-seeded minimally violating worlds derived from the check tree
-  (`conformance.ts` already derives them API-side; port to direct inserts):
-  `rowCheck` → create with violating field values → 409; `crossRowCount` →
-  seed a bound parent (capacity N), create N+1 children, the (N+1)th must
-  409. Handles the dual-node fan-in: violating create on the counted
-  router, bound-tightening update on the bound router.
-- [ ] **Infra adapter behavior probes in node oracles.** cache/messaging/
-  blob nodes get shape checks in-loop; the fake-client behavior probes
-  (FakeRedis/FakeKafka/FakeRabbit/FakeSQS/FakeS3) run only terminally.
-  Port those probes into the node CONTRACTs (function-level triples
-  against the module directly — no throwaway app needed).
+- [x] **`router:auth` behavior probes.** (2026-09-05) Seven triples:
+  register (exact key set, never the hash), duplicate identity → 409,
+  login success → token shape, wrong password and unknown identity → the
+  IDENTICAL literal 401 body (no enumeration), `me` with/without token.
+  Runner seeds the principal on `needsPrincipal` without a token.
+- [x] **Invariant cross-row world probes in node oracles.** (2026-09-05)
+  rowCheck: create with a bounds-legal violating value → 409 + rollback
+  count; crossRowCount: direct-seed a parent at its bound plus bound-many
+  children, the next API create → 409 (counted router), and tightening the
+  bound below the live count → 409 (bound router, skipped when bounds
+  would 422 first). Verified compiled for smoke (venue rowCheck + booking
+  no-overbooking); real-run pending the resumed smoke generation.
+- [x] **Infra adapter behavior probes in node oracles.** (2026-09-05)
+  cache/messaging/blob CONTRACTs embed full declarations; the runner
+  ports the terminal fake-client probes (in-memory semantics, exact redis
+  ex/prefix calls, failure modes, envelope/broker semantics, provider
+  call shapes, S3 sequence incl. presign Params/ExpiresIn). Verified
+  green against the smoke run's real generated cache/blob modules and
+  mutation-killed (redis TTL +1, presign TTL +1).
 
 ## 2. Test vocabulary — input-side language (sugar over the primitive)
 
@@ -50,14 +49,24 @@ ONE test primitive** — every future form compiles down to the same
 
 ## 3. Coverage as a compile gate
 
-- [ ] **Test manifest.** Compiler emits contract-element → covering-clause
-  ids; `spec check` rejects declared behavior with no decidable test
-  (golden-rule-results planned item #27). Grows naturally as §1/§2 land.
+- [x] **Test manifest.** (2026-09-05) `packages/fastapi/src/manifest.ts`
+  derives clause-id → {inLoop, terminal} from the ACTUAL compiled probe
+  labels (never naming conventions); `spec check` gates it
+  (TEST_COVERAGE_MISSING = error, TEST_COVERAGE_TERMINAL_ONLY = info) and
+  dry-runs write `test-manifest.json`. All backend examples pass with
+  zero terminal-only clauses after §1. This lands golden-rule-results
+  planned item #27.
 
 ## 4. Agent-surface shrink (static maximization)
 
+- [x] **Walking-skeleton topology** (2026-09-05): the app node moved from
+  sink to early skeleton (deps models+database only), the registry became
+  detection-based (pinned order, import-on-existence), and infra adapters
+  wire by detection. The app boots first and every router landing grows
+  the live route set (pairs with `spec preview`); strict equality stays
+  terminal and the app oracle is snapshot-invariant.
 - [ ] **Compiled nodes (`mode: "compiled" | "agent"` in the DAG).** project,
-  models, schemas, database, security, app are zero-freedom — their oracles
+  models, schemas, database, security, app-skeleton are zero-freedom — their oracles
   are byte pins — so lower them as seed materialization with no loop, no
   reviewer, no agent exec. Keep the materialization commit + PR for the
   evidence chain. Their per-shot oracles become monorepo lowering

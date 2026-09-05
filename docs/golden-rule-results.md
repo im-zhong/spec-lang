@@ -52,6 +52,11 @@ expose the same interface.
 | 26 | The blob prompt specified a `BlobPolicy`-object API while the compiler oracle called the same API with policy name strings | media-platform `media-platform-golden-20260903-v6` shot 1 conformance | Planned: represent the exact module ABI in the blueprint and derive prompt, static checks, oracle, and behavior snapshot from that one object |
 | 27 | Served caches, queues, messages, and blobs were declared but not bound to HTTP/lifecycle operations; several promised behaviors (retry/dead-letter, real stampede suppression, retention, production provider lifecycle) were not correctness-tested | media-platform `media-platform-golden-20260903-v6` spec/IR/oracle audit | Planned: typed operation bindings plus feature-to-assertion coverage; reject unresolved or untested served behavior at compile time |
 | 28 | Failure evidence kept only a bounded log tail and the remote plan ref kept only `plan.json`; local `.spec` artifacts could also mix IR/manifest from one example with blueprint/DAG from another | media-platform `media-platform-golden-20260903-v6` evidence audit | Planned: atomic run-addressed bundles containing source, manifest, IR, blueprint, DAG, prompts, oracle, toolchain and full hashed logs, plus a failure-evidence ref and cross-shot semantic-input digest |
+| 29 | The terminal infrastructure suite referenced `KafkaBroker`/`RabbitMQBroker`/`SQSBroker` unconditionally; a spec declaring only one provider (smoke: rabbitmq) AttributeError'd before any behavior was judged | smoke `smoke-20260905-v3` conformance (local, 1 shot) | Provider brokers resolve by declared kind via `getattr`; the node-oracle messaging probe already did this correctly |
+| 30 | The terminal cache suite required BOTH a bypass and a fail-closed policy (`next(...)` → StopIteration/None-subscript) | smoke `smoke-20260905-v3` conformance | Each failure-mode sub-probe runs only when a policy with that mode is declared |
+| 31 | Bounds probes emitted `"x".repeat(n)` — JS string method inside generated Python (`AttributeError: 'str' object has no attribute 'repeat'`) | smoke `smoke-20260905-v3` conformance | `"x" * n`; the bug passed py_compile (syntax-valid) and only detonated at runtime — mutation-test-style replay against the real app is what caught it |
+| 32 | The list test asserted strict `[me, first, second]` ordering, but same-second `created_at` ties make the order under-pinned | smoke `smoke-20260905-v3` conformance | Membership+count asserted exactly (`sorted(...) == sorted(...)`); ordering remains pinned by the clause, untestable under second-resolution ties |
+| 33 | The crossRowCount invariant world assumed a zero bound (`overrides={capacity: 0}`) — impossible under declared `min(1)` (422 before the invariant) | smoke `smoke-20260905-v3` conformance | Bounds-aware minimally-violating world mirroring the node-oracle derivation: base = max(min, 0), fill the parent to base, the next create 409s; relax/tighten legs skip when bounds would 422 first |
 
 ## Post-v6 design implementation (not a reroll)
 
@@ -181,3 +186,18 @@ py_compile-clean across all examples). The paused v7 run is permanently
 non-resumable across this boundary (prompt semantics changed) and is
 superseded. Next golden-rule attempt under the new loop: booking smoke,
 then store-platform.
+
+
+## smoke-20260905-v3 (local, 1 shot, 2026-09-05)
+
+First paid run under the clause-driven loop with the FULL in-loop oracle
+(auth 7 triples, invariant direct-seed worlds, infra fake-client probes).
+All 13 generation nodes passed on the FIRST attempt with zero repair
+rounds; replaying the FIXED terminal suite against the generated app
+passes 38/38. Verdict: the generated software is conformant — the run is
+`golden-rule-invalid` solely because five defects (29–33) lived in the
+compiler's TERMINAL conformance generator, all fixed in
+`packages/fastapi/src/conformance.ts` per fix-class 2 (compiler lowering).
+Every in-loop oracle probe was correct on first contact; all five defects
+were in the OLDER terminal generator paths. Regenerate fresh (v4) under
+the fixed compiler + walking-skeleton topology.

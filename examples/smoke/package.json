@@ -1,0 +1,19 @@
+{
+  "name": "@spec/example-smoke",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@spec/auth": "workspace:*",
+    "@spec/blob": "workspace:*",
+    "@spec/cache": "workspace:*",
+    "@spec/core": "workspace:*",
+    "@spec/fastapi": "workspace:*",
+    "@spec/messaging": "workspace:*",
+    "@spec/postgres": "workspace:*",
+    "@spec/rabbitmq": "workspace:*",
+    "@spec/redis": "workspace:*",
+    "@spec/s3": "workspace:*",
+    "@spec/test": "workspace:*",
+    "@spec/web": "workspace:*"
+  }
+}

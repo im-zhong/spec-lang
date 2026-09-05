@@ -356,12 +356,15 @@ export function authRouterPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): st
 
 export function appPrompt(bp: BackendBlueprint, ctx: TaskPromptInput): string {
   return compose(
-    { task: "application wiring", scope: ctx.scope, context: ctx.context, deps: ctx.deps, clauses: ctx.clauses, blueprint: bp },
+    { task: "application skeleton", scope: ctx.scope, context: ctx.context, deps: ctx.deps, clauses: ctx.clauses, blueprint: bp },
     {
       blueprint: bp,
       taskKind: "app",
       dataBlocks: [{ title: "Application", json: bp.app }],
-      notes: ["Count routes must be reachable after inclusion (registration order comes from the compiler-owned registry tuple)."],
+      notes: [
+        "Walking skeleton: the app must BOOT now, with zero routes of its own — sibling routers and infra modules do not exist yet and must never be imported unconditionally.",
+        "Include ROUTERS from the compiler-owned `app.router_registry` in tuple order (detection handles absent modules), and wire cache/messaging/blob adapters onto app.state only when their modules exist.",
+      ],
     },
   )
 }

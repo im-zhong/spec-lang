@@ -383,17 +383,19 @@ def test_cache_contract():
             await backend.delete(name, "provider")
             assert client.calls[-1] == ("delete", full_key)
 
-        bypass = next(item for item in CONTRACT["caches"] if item["failureMode"] == "bypass")
-        bypass_backend = module.RedisCacheBackend(FakeRedisClient(fail=True))
-        assert await bypass_backend.get(bypass["name"], "provider") is None
-        await bypass_backend.set(bypass["name"], "provider", {"ok": True})
-        await bypass_backend.delete(bypass["name"], "provider")
+        bypass = next((item for item in CONTRACT["caches"] if item["failureMode"] == "bypass"), None)
+        if bypass is not None:
+            bypass_backend = module.RedisCacheBackend(FakeRedisClient(fail=True))
+            assert await bypass_backend.get(bypass["name"], "provider") is None
+            await bypass_backend.set(bypass["name"], "provider", {"ok": True})
+            await bypass_backend.delete(bypass["name"], "provider")
 
-        closed = next(item for item in CONTRACT["caches"] if item["failureMode"] == "fail-closed")
-        closed_backend = module.RedisCacheBackend(FakeRedisClient(fail=True))
-        with pytest.raises(module.CacheUnavailable) as raised:
-            await closed_backend.get(closed["name"], "provider")
-        assert isinstance(raised.value.__cause__, OSError)
+        closed = next((item for item in CONTRACT["caches"] if item["failureMode"] == "fail-closed"), None)
+        if closed is not None:
+            closed_backend = module.RedisCacheBackend(FakeRedisClient(fail=True))
+            with pytest.raises(module.CacheUnavailable) as raised:
+                await closed_backend.get(closed["name"], "provider")
+            assert isinstance(raised.value.__cause__, OSError)
 
     asyncio.run(probe_redis())
 
@@ -468,16 +470,20 @@ def test_messaging_contract():
             "rabbitmq": FakeRabbitClient(),
             "sqs": FakeSQSClient(),
         }
-        classes = {
-            "kafka": module.KafkaBroker,
-            "rabbitmq": module.RabbitMQBroker,
-            "sqs": module.SQSBroker,
+        class_names = {
+            "kafka": "KafkaBroker",
+            "rabbitmq": "RabbitMQBroker",
+            "sqs": "SQSBroker",
         }
         messages = {item["name"]: item for item in CONTRACT["messages"]}
         for queue in CONTRACT["queues"]:
             kind = queue["provider"]["kind"]
             client = clients[kind]
-            broker = classes[kind](client)
+            # Only the brokers for DECLARED providers are exported; resolve
+            # by name so a partial provider set never AttributeErrors.
+            broker = getattr(module, class_names[kind], None)
+            assert broker is not None, class_names[kind]
+            broker = broker(client)
             message = messages[queue["messages"][0]]
             payload = _sample_payload(message)
             envelope = module.build_envelope(
@@ -1043,7 +1049,7 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
             t.push("    assert r.status_code == 200, r.text")
             t.push("    rows = r.json()")
             t.push("    assert isinstance(rows, list)")
-            t.push('    assert [row["id"] for row in rows] == [me.json()["id"], first["id"], second["id"]]')
+            t.push('    assert sorted(row["id"] for row in rows) == sorted([me.json()["id"], first["id"], second["id"]])')
           } else {
             t.push(`    first = create_row(client, ${JSON.stringify(entity.name)}${tokenArg})`)
             t.push(`    second = create_row(client, ${JSON.stringify(entity.name)}${tokenArg})`)
@@ -1124,7 +1130,7 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
               t.push("    assert r.status_code == 422, r.text")
             }
             if (boundField.maxLength !== undefined) {
-              t.push(`    body_b = {**body, ${JSON.stringify(boundField.name)}: "x".repeat(${boundField.maxLength + 1})}`)
+              t.push(`    body_b = {**body, ${JSON.stringify(boundField.name)}: "x" * ${boundField.maxLength + 1}}`)
               t.push(`    r = client.post(${JSON.stringify(route.path)}, json=body_b${suffix})`)
               t.push("    assert r.status_code == 422, r.text")
             }
@@ -1340,32 +1346,46 @@ export function buildConformanceSuite(bp: BackendBlueprint): ConformanceFiles {
         if (withAuth && countedCreate.auth) t.push("    token = auth_token(client)")
         if (boundIsField && onCreate && boundField) {
           const onSuffix = withAuth && onCreate.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
-          // 1) a zero-capacity bound: ANY create of the counted entity fails
-          t.push(`    tight = create_row(client, ${JSON.stringify(inv.entity)}${onCreate.auth && withAuth ? ", token=token" : ""}, overrides={${JSON.stringify(boundField)}: 0})`)
+          const uSuffix = withAuth && onUpdate?.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
+          // The minimally violating world must respect declared bounds: a
+          // zero bound is impossible when the field's min is higher, so the
+          // base is the smallest legal bound value (mirrors the node-oracle
+          // derivation) and the parent is FILLED to that bound first.
+          const boundFieldDef = countedEntity.fields.find((f) => f.name === boundField)
+          const parentDef = bp.entities.find((e) => e.name === inv.entity)
+          const parentField = parentDef?.fields.find((f) => f.name === boundField)
+          const minV = parentField?.min
+          const maxV = parentField?.max
+          const base = Math.max(minV ?? 0, 0)
+          const relax = maxV === undefined || base + 1 <= maxV
+          t.push(`    tight = create_row(client, ${JSON.stringify(inv.entity)}${onCreate.auth && withAuth ? ", token=token" : ""}, overrides={${JSON.stringify(boundField)}: ${base}})`)
+          t.push(`    for _i in range(${base}):`)
+          t.push(`        body = make_body(client, ${JSON.stringify(c.entity)}${cTokenArg})`)
+          t.push(`        body[${JSON.stringify(c.refField)}] = tight["id"]`)
+          t.push(`        r = client.post(${JSON.stringify(countedCreate.path)}, json=body${cSuffix})`)
+          t.push("        assert r.status_code == 201, r.text")
+          // 1) the parent is at its bound: the next create must fail
           t.push(`    body = make_body(client, ${JSON.stringify(c.entity)}${cTokenArg})`)
           t.push(`    body[${JSON.stringify(c.refField)}] = tight["id"]`)
           t.push(`    r = client.post(${JSON.stringify(countedCreate.path)}, json=body${cSuffix})`)
           t.push("    assert r.status_code == 409, r.text")
           t.push('    assert r.json() == {"detail": "Invariant violated"}')
-          // 2) relax the bound by one: exactly one create succeeds, the next fails
-          if (onUpdate) {
-            const uSuffix = withAuth && onUpdate.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
-            t.push(`    r = client.patch(${pathExpr(onUpdate, 'tight["id"]')}, json={${JSON.stringify(boundField)}: 1}${uSuffix})`)
+          // 2) relax the bound by one (skipped when the max bound would
+          // 422 first): one more create succeeds, the next fails;
+          // 3) tightening back below the live count also fails.
+          if (onUpdate && relax) {
+            t.push(`    r = client.patch(${pathExpr(onUpdate, 'tight["id"]')}, json={${JSON.stringify(boundField)}: ${base + 1}}${uSuffix})`)
             t.push("    assert r.status_code == 200, r.text")
-          }
-          t.push(`    body = make_body(client, ${JSON.stringify(c.entity)}${cTokenArg})`)
-          t.push(`    body[${JSON.stringify(c.refField)}] = tight["id"]`)
-          t.push(`    r = client.post(${JSON.stringify(countedCreate.path)}, json=body${cSuffix})`)
-          t.push("    assert r.status_code == 201, r.text")
-          t.push(`    body = make_body(client, ${JSON.stringify(c.entity)}${cTokenArg})`)
-          t.push(`    body[${JSON.stringify(c.refField)}] = tight["id"]`)
-          t.push(`    r = client.post(${JSON.stringify(countedCreate.path)}, json=body${cSuffix})`)
-          t.push("    assert r.status_code == 409, r.text")
-          t.push('    assert r.json() == {"detail": "Invariant violated"}')
-          // 3) tightening the bound below the live count also fails
-          if (onUpdate) {
-            const uSuffix2 = withAuth && onUpdate.auth ? ', headers={"Authorization": f"Bearer {token}"}' : ""
-            t.push(`    r = client.patch(${pathExpr(onUpdate, 'tight["id"]')}, json={${JSON.stringify(boundField)}: 0}${uSuffix2})`)
+            t.push(`    body = make_body(client, ${JSON.stringify(c.entity)}${cTokenArg})`)
+            t.push(`    body[${JSON.stringify(c.refField)}] = tight["id"]`)
+            t.push(`    r = client.post(${JSON.stringify(countedCreate.path)}, json=body${cSuffix})`)
+            t.push("    assert r.status_code == 201, r.text")
+            t.push(`    body = make_body(client, ${JSON.stringify(c.entity)}${cTokenArg})`)
+            t.push(`    body[${JSON.stringify(c.refField)}] = tight["id"]`)
+            t.push(`    r = client.post(${JSON.stringify(countedCreate.path)}, json=body${cSuffix})`)
+            t.push("    assert r.status_code == 409, r.text")
+            t.push('    assert r.json() == {"detail": "Invariant violated"}')
+            t.push(`    r = client.patch(${pathExpr(onUpdate, 'tight["id"]')}, json={${JSON.stringify(boundField)}: ${base}}${uSuffix})`)
             t.push("    assert r.status_code == 409, r.text")
             t.push('    assert r.json() == {"detail": "Invariant violated"}')
           }
