@@ -13,6 +13,8 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 
 export interface AgentRunnerOptions {
+  /** Resume a previous session by id (implementer R2+ only). */
+  resumeSessionId?: string
   /** Claude CLI binary; default "claude". */
   cli?: string
   model?: string
@@ -81,7 +83,7 @@ export function buildClaudeArgs(options: AgentRunnerOptions = {}): string[] {
     // minutes, starving whole-message streams).
     "--include-partial-messages",
     "--safe-mode",
-    "--no-session-persistence",
+    ...(options.resumeSessionId ? ["--resume", options.resumeSessionId] : ["--no-session-persistence"]),
     "--permission-mode",
     permissionMode,
   ]

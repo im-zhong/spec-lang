@@ -416,6 +416,10 @@ const DASHBOARD = `<!doctype html>
   .chip .nm{font-weight:bold;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .chip .dt{color:#8b949e;font-size:10px;max-width:106px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .chip-selected{border-color:#58a6ff;box-shadow:0 0 0 1px #58a6ff}
+  .chip-dimmed{opacity:.2}
+  .edge-in{stroke:#58a6ff !important;stroke-width:2;stroke-dasharray:8 4;animation:dash 0.8s linear infinite}
+  .edge-out{stroke:#d29922 !important;stroke-width:2;stroke-dasharray:8 4;animation:dash 0.8s linear infinite}
+  @keyframes dash{to{stroke-dashoffset:-12}}
   .chip-done{border-color:#238636}.chip-done .nm{color:#3fb950}
   .chip-running{border-color:#d29922}.chip-running .nm{color:#d29922}
   .chip-failed{border-color:#f85149}.chip-failed .nm{color:#f85149}
@@ -448,6 +452,33 @@ const nodeEls = new Map();   // task -> {root, nm, dt, lvl}
 const gitIds = new Set();
 let dagLaid = false;
 let selectedTask = null;
+function highlightDag() {
+  if (selectedTask === null) {
+    for (const [, chip] of nodeEls) {
+      chip.root.classList.remove("chip-selected", "chip-dimmed");
+      for (const edge of chip.edges) edge.classList.remove("edge-in", "edge-out");
+    }
+    return;
+  }
+  const deps = new Set(), dependents = new Set();
+  for (const [t, chip] of nodeEls) {
+    const depsOn = chip.root.dataset.deps ? chip.root.dataset.deps.split(",") : [];
+    if (t === selectedTask) depsOn.forEach(d => deps.add(d));
+    if (depsOn.includes(selectedTask)) dependents.add(t);
+  }
+  for (const [t, chip] of nodeEls) {
+    chip.root.classList.toggle("chip-selected", t === selectedTask);
+    chip.root.classList.toggle("chip-dimmed", !deps.has(t) && !dependents.has(t) && t !== selectedTask);
+  }
+  // Precise edge highlighting: only edges where from or to IS the selected node
+  const allEdges = document.querySelectorAll("#dag svg path");
+  for (const edge of allEdges) {
+    edge.classList.remove("edge-in", "edge-out");
+    if (edge.dataset.to === selectedTask) edge.classList.add("edge-in");
+    else if (edge.dataset.from === selectedTask) edge.classList.add("edge-out");
+  }
+}
+
 function applyLaneFilter() {
   for (const [key, entry] of laneEls) {
     entry.root.style.display = selectedTask !== null && key.split("·")[0] !== selectedTask ? "none" : "";
@@ -523,7 +554,8 @@ async function tick() {
     const dagAll = s.dag.length > 0 ? s.dag.flat() : s.nodes;
     const dagDone = dagAll.filter(n => n.status === "done").length;
     const head = esc(s.run || s.runRoot) + " · " + (s.processAlive ? "运行中" : "已结束") + " · " + mins + " min · $" + (s.costUsd || 0).toFixed(2) +
-      " · 节点 " + dagDone + "/" + dagAll.length + " · " + s.agents.filter(a => a.alive).length + " 个 Claude 并行";
+      " · 节点 " + dagDone + "/" + dagAll.length + " · " + s.agents.filter(a => a.alive).length + " 个 Claude 并行" +
+      " · ↑" + fmtTok(s.usage.inputTokens + s.usage.cacheReadTokens) + " ↓" + fmtTok(s.usage.outputTokens) + " ⚡" + fmtTok(s.usage.cacheReadTokens);
     const headEl = document.getElementById("head");
     if (headEl.textContent !== head) headEl.textContent = head;
     const subEl = document.getElementById("sub");
@@ -558,6 +590,8 @@ async function tick() {
           path.setAttribute("d", "M" + x1 + "," + y1 + " C" + x1 + "," + mid + " " + x2 + "," + mid + " " + x2 + "," + y2);
           path.setAttribute("fill", "none"); path.setAttribute("stroke", "#30363d");
           path.setAttribute("marker-end", "url(#arr)");
+          path.dataset.from = dep;   // source task (for precise highlighting)
+          path.dataset.to = n.task; // target task
           svg.appendChild(path);
           edgeByTarget.set(n.task, [...(edgeByTarget.get(n.task) ?? []), path]);
         }
@@ -571,10 +605,11 @@ async function tick() {
         root.innerHTML = "<div class='nm'></div><div class='dt'></div>";
         root.style.left = pt.x + "px"; root.style.top = pt.y + "px";
         root.addEventListener("click", () => {
-          selectedTask = selectedTask === task ? null : task;
-          for (const [t, chip] of nodeEls) chip.root.classList.toggle("chip-selected", t === selectedTask);
+          selectedTask = task;
+          highlightDag();
           applyLaneFilter();
         });
+        root.dataset.deps = (s.dag.flat().find(n => n.task === task)?.dependsOn ?? []).join(",");
         nodeEls.set(task, { root, nm: root.querySelector(".nm"), dt: root.querySelector(".dt"), edges: edgeByTarget.get(task) ?? [] });
         dagEl.appendChild(root);
       }
@@ -589,7 +624,10 @@ async function tick() {
       const cls = "chip chip-" + n.status;
       if (chip.root.className !== cls) chip.root.className = cls;
       const edgeStroke = n.status === "running" ? "#d29922" : n.status === "done" ? "#238636" : "#30363d";
-      for (const edge of chip.edges) if (edge.getAttribute("stroke") !== edgeStroke) edge.setAttribute("stroke", edgeStroke);
+      for (const edge of chip.edges) {
+        if (edge.classList.contains("edge-in") || edge.classList.contains("edge-out")) continue;
+        if (edge.getAttribute("stroke") !== edgeStroke) edge.setAttribute("stroke", edgeStroke);
+      }
     }
 
     for (const a of s.agents) { // all lanes — no display cap; finished ones stay compact and collapsible
@@ -606,9 +644,9 @@ async function tick() {
       if (entry.live.textContent !== liveText) { entry.live.textContent = liveText; entry.live.title = liveText; }
       entry.live.style.display = liveEvent === null ? "none" : "";
     }
-    const hint = selectedTask !== null ? "· 仅显示 " + selectedTask : "· 点击左图节点筛选";
+    const hint = selectedTask !== null ? "· 仅显示 " + selectedTask + " <span id='clearFilter' style='color:#58a6ff;cursor:pointer;text-decoration:underline'>✕ 显示全部</span>" : "· 点击左图节点筛选";
     const hintEl = document.getElementById("laneHint");
-    if (hintEl.textContent !== hint) hintEl.textContent = hint;
+    if (hintEl.innerHTML !== hint) hintEl.innerHTML = hint;
     applyLaneFilter();
 
     const gitEl = document.getElementById("git");

@@ -342,22 +342,40 @@ export async function executeAgentTask(
     // Loop v0.2: one implementation agent per round working directly in
     // the task workdir; compiler-generated oracles are the frozen
     // reviewer evidence; a contract challenge aborts as a spec defect.
+    // From round 2 the implementer RESUMES its previous session — the
+    // agent already has full context and just needs the feedback.
     let feedback = ""
     let approved = false
     costUsd = 0
+    let writerSessionId: string | undefined
     for (let round = 1; round <= task.loop.maxRounds; round++) {
       const shared = `\n\n# Frozen node context\nTask: ${task.id}\nRound: ${round}/${task.loop.maxRounds}\n` +
         (feedback ? `Reviewer feedback from the prior round:\n${feedback}\n` : "This is the first round.\n")
-      const writerPrompt = `${task.loop.implementation.instruction}${shared}\nYou own only: ${task.loop.implementation.scope.join(", ")}.`
+      // R1: full prompt (clause table + context). R2+: feedback only —
+      // the resumed session already has the clause table and code context.
+      const writerPrompt = round === 1
+        ? `${task.loop.implementation.instruction}${shared}\nYou own only: ${task.loop.implementation.scope.join(", ")}.`
+        : `${shared}Fix the reviewer's findings and ensure ALL clauses pass.\nYou own only: ${task.loop.implementation.scope.join(", ")}.`
+      // R2+: resume the previous implementer session for speed
+      const roundCommand = round > 1 && writerSessionId !== undefined
+        ? options.agentCommand.map((arg, i) =>
+            arg === "--no-session-persistence" ? "--resume" :
+            arg === "--no-session-persistence" || (options.agentCommand[i - 1] === "--no-session-persistence") ? writerSessionId : arg)
+        : options.agentCommand
       const before = snapshot(taskDirectory)
       events?.emit({ kind: "round.started", task: task.id, round })
-      const writer = await runAgent("implementation", round, options.agentCommand, writerPrompt)
+      const writer = await runAgent("implementation", round, roundCommand, writerPrompt)
       checks.push({ name: `generation/loop/${round}/implementation`, status: writer.ok ? "success" : "failure" })
       costUsd += agentCost(writer.stdout)
       if (!writer.ok) {
         error = commandFailure(writer).message
         break
       }
+      // Capture session id for R2+ resume
+      try {
+        const envelope = JSON.parse(writer.stdout) as { session_id?: string }
+        if (typeof envelope.session_id === "string") writerSessionId = envelope.session_id
+      } catch { /* fresh session if unparseable */ }
       const challenge = contractChallenge(writer.stdout)
       if (challenge) {
         events?.emit({ kind: "challenge", task: task.id, ...(challenge.clause !== undefined ? { clause: challenge.clause } : {}) })
