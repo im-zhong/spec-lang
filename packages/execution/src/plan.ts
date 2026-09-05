@@ -66,6 +66,8 @@ export function createAgentExecutionPlan(input: AgentExecutionPlanInput): AgentE
     tasks,
   }
   const semanticInputDigest = `sha256:${createHash("sha256").update(stableStringify(semanticDefinition)).digest("hex")}`
+  // rootBaseSha is execution metadata (where to start), not contract
+  // content (what to build). Changing it must not change the fingerprint.
   const definition = {
     schemaVersion: "spec-agent-execution-plan/0.1" as const,
     graphKind: "generation-execution" as const,
@@ -96,9 +98,12 @@ export function createAgentExecutionPlan(input: AgentExecutionPlanInput): AgentE
     tasks,
     semanticInputDigest,
   }
+  // Fingerprint covers the CONTRACT (tasks, prompts, oracle, environment)
+  // but NOT rootBaseSha — it's where execution starts, not what is built.
+  const { rootBaseSha: _rootBaseSha, ...fingerprintInput } = definition
   return {
     ...definition,
-    fingerprint: `sha256:${createHash("sha256").update(stableStringify(definition)).digest("hex")}`,
+    fingerprint: `sha256:${createHash("sha256").update(stableStringify(fingerprintInput)).digest("hex")}`,
   }
 }
 
