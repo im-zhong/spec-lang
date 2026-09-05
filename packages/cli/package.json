@@ -12,10 +12,11 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@spec/agent": "workspace:*",
     "@spec/compiler": "workspace:*",
     "@spec/container": "workspace:*",
     "@spec/core": "workspace:*",
-    "@spec/agent": "workspace:*",
+    "@spec/execution": "workspace:*",
     "@spec/fastapi": "workspace:*",
     "@spec/react": "workspace:*"
   },

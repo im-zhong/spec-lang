@@ -1,0 +1,73 @@
+import { describe, expect, it } from "vitest"
+import * as fs from "node:fs"
+import * as os from "node:os"
+import * as path from "node:path"
+import {
+  openEventLog,
+  parseAgentResultLine,
+  parseAgentStreamLine,
+  readEvents,
+} from "../src/events"
+
+const SAMPLE_LINES = [
+  JSON.stringify({ type: "system", subtype: "init", session_id: "s1", model: "claude-sonnet-4-5" }),
+  JSON.stringify({ type: "assistant", message: { content: [
+    { type: "thinking", thinking: "  先查 router_registry 的形状\n再决定装配顺序  " },
+  ] } }),
+  JSON.stringify({ type: "assistant", message: { content: [
+    { type: "tool_use", name: "Edit", input: { file_path: "app/main.py", new_string: "..." } },
+  ] } }),
+  JSON.stringify({ type: "assistant", message: { content: [
+    { type: "text", text: "骨架完成" },
+  ] } }),
+  JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "ok" }] } }),
+  JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: "s1", total_cost_usd: 0.42, num_turns: 18, duration_ms: 61000, result: "done" }),
+]
+
+describe("agent stream telemetry", () => {
+  it("distills thinking, tool calls, and text from stream-json lines", () => {
+    const thinking = parseAgentStreamLine(SAMPLE_LINES[1]!)
+    expect(thinking?.kind).toBe("agent.activity")
+    if (thinking?.kind === "agent.activity") {
+      expect(thinking.activity).toBe("thinking")
+      expect(thinking.summary).toContain("router_registry")
+    }
+    const tool = parseAgentStreamLine(SAMPLE_LINES[2]!)
+    if (tool?.kind === "agent.activity") {
+      expect(tool.activity).toBe("tool")
+      expect(tool.tool).toBe("Edit")
+      expect(tool.summary).toContain("app/main.py")
+    }
+    const text = parseAgentStreamLine(SAMPLE_LINES[3]!)
+    if (text?.kind === "agent.activity") expect(text.summary).toBe("骨架完成")
+    // system/user-result lines carry nothing interesting
+    expect(parseAgentStreamLine(SAMPLE_LINES[0]!)).toBeUndefined()
+    expect(parseAgentStreamLine(SAMPLE_LINES[4]!)).toBeUndefined()
+    expect(parseAgentStreamLine("not json")).toBeUndefined()
+  })
+
+  it("extracts the final result envelope and truncates long snippets", () => {
+    const envelope = parseAgentResultLine(SAMPLE_LINES[5]!)
+    expect(envelope?.type).toBe("result")
+    expect(envelope?.total_cost_usd).toBe(0.42)
+    expect(parseAgentResultLine(SAMPLE_LINES[1]!)).toBeUndefined()
+    const long = parseAgentStreamLine(JSON.stringify({ type: "assistant", message: { content: [
+      { type: "text", text: "x".repeat(1000) },
+    ] } }))
+    if (long?.kind === "agent.activity") expect(long.summary.length).toBeLessThanOrEqual(402)
+  })
+
+  it("round-trips events through the NDJSON log (and never throws)", () => {
+    const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), "spec-events-"))
+    const log = openEventLog(runRoot, { run: "run-x", shot: "shot-1" })
+    log.emit({ kind: "run.started", run: "run-x", shots: ["shot-1"] })
+    log.emit({ kind: "node.started", task: "project" })
+    log.emit({ kind: "agent.activity", task: "project", round: 1, role: "implementation", activity: "tool", tool: "Write", summary: "Write pyproject.toml" })
+    const events = readEvents(runRoot)
+    expect(events.map((event) => event.kind)).toEqual(["run.started", "node.started", "agent.activity"])
+    expect(events[2]).toMatchObject({ run: "run-x", shot: "shot-1", task: "project" })
+    // disabled log (no run root) is a no-op sink
+    const off = openEventLog(undefined, { run: "r" })
+    expect(() => off.emit({ kind: "log", message: "x" })).not.toThrow()
+  })
+})

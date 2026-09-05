@@ -14,6 +14,7 @@ import type {
   AgentExecutionPlan,
   AgentExecutionTask,
 } from "@spec/core"
+import { openEventLog } from "@spec/execution"
 import {
   createAgentExecutionPlan,
   DockerAgentExecutor,
@@ -62,6 +63,11 @@ export interface GitHubGenerationRunOptions {
   execution?: "github" | "local"
   onTaskStart?: (taskId: string) => void
   onTaskEnd?: (taskId: string, ok: boolean, headSha?: string) => void
+  /** Run root for the telemetry event log (`<runRoot>/events/`); omit to disable. */
+  eventsRoot?: string
+  /** Telemetry identity: the run id and shot label stamped onto every event. */
+  runId?: string
+  shot?: string
 }
 
 function safeTaskId(id: string): string {
@@ -147,6 +153,16 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
             ...task.loop.reviewer,
             ...(task.loop.reviewer.oracleFiles ? {
               oracleFiles: task.loop.reviewer.oracleFiles.map((file) => inTarget(directory, file)).sort(),
+            } : {}),
+            // Clause nodes are named after generation tasks, whose ids are
+            // normalized for Git refs ("router:Booking" → "router-Booking").
+            // Remap the node so loop validation sees the task it belongs to;
+            // a node that names no task keeps its value and is rejected.
+            ...(task.loop.reviewer.clauses ? {
+              clauses: task.loop.reviewer.clauses.map((clause) => ({
+                ...clause,
+                node: ids.get(clause.node) ?? clause.node,
+              })),
             } : {}),
           },
         },
@@ -271,8 +287,12 @@ export async function runGitHubGeneration(
   // The two environment axes are assembled independently: the runtime picks
   // where the agent and acceptance commands execute, the control plane picks
   // which durable-branch implementation verifies and lands task heads.
+  const events = openEventLog(options.eventsRoot, {
+    run: options.runId ?? "unknown-run",
+    ...(options.shot !== undefined ? { shot: options.shot } : {}),
+  })
   const containers = options.runtime === "host"
-    ? new HostAgentExecutor({ agentCommand, reviewerAgentCommand: reviewerCommand })
+    ? new HostAgentExecutor({ agentCommand, reviewerAgentCommand: reviewerCommand, events })
     : new DockerAgentExecutor({
         mounts,
         environmentVariables,
@@ -280,6 +300,7 @@ export async function runGitHubGeneration(
         initializationCommand: ["/bin/sh", "-lc", bootstrap],
         agentCommand,
         reviewerAgentCommand: reviewerCommand,
+        events,
       })
   const controlPlane = options.execution === "local"
     ? new LocalGitControlPlane({

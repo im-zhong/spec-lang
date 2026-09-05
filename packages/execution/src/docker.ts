@@ -2,6 +2,7 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import type { AgentExecutionCheckResult, ResolvedAgentExecutionTask } from "@spec/core"
 import { commandFailure, runProcess } from "./process"
+import type { EventLog } from "./events"
 import { DEFAULT_AGENT_COMMAND, DEFAULT_REVIEWER_COMMAND, executeAgentTask, type AgentTaskRunner } from "./agent-task"
 import type { ContainerExecutionResult, AgentExecutionContainerPort } from "./ports"
 
@@ -20,6 +21,8 @@ export interface DockerAgentExecutorOptions {
   agentCommand?: string[]
   /** Read-only Claude command used for the reviewer role. */
   reviewerAgentCommand?: string[]
+  /** Telemetry sink for agent activity events. */
+  events?: EventLog
   /** Environment variable names forwarded from the invoking process. */
   environmentVariables?: string[]
   /** Literal environment variables set verbatim in every agent container. */
@@ -117,10 +120,10 @@ export class DockerAgentExecutor implements AgentExecutionContainerPort {
       }
       if (!error) {
         const runner: AgentTaskRunner = {
-          agent: (command, prompt, agentTimeoutMs) => runProcess(
+          agent: (command, prompt, agentTimeoutMs, onLine) => runProcess(
             docker,
             ["exec", "-w", containerWorkdir, "-i", name, ...command],
-            { input: prompt, timeoutMs: agentTimeoutMs },
+            { input: prompt, timeoutMs: agentTimeoutMs, onLine },
           ),
           shell: (command, shellTimeoutMs) => runProcess(
             docker,
@@ -132,6 +135,7 @@ export class DockerAgentExecutor implements AgentExecutionContainerPort {
           agentCommand: this.options.agentCommand ?? DEFAULT_AGENT_COMMAND,
           reviewerAgentCommand: this.options.reviewerAgentCommand ?? DEFAULT_REVIEWER_COMMAND,
           timeoutMs,
+          events: this.options.events,
         })
         checks.push(...outcome.checks)
         costUsd = outcome.costUsd

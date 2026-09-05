@@ -23,7 +23,9 @@ import * as fs from "node:fs"
 import { createHash } from "node:crypto"
 import { compile, renderSpecTree, stableStringify, writeArtifacts, COMPILER_VERSION } from "@spec/compiler"
 import { InternalCompilerError, createLogger, type Diagnostic } from "@spec/core"
-import { planGeneration } from "@spec/fastapi"
+import { coverageDiagnostics, planGeneration } from "@spec/fastapi"
+import { runPreview } from "./preview"
+import { buildMonitorState, discoverLatestRun, startMonitorServer } from "./monitor"
 import { planFrontendGeneration } from "@spec/react"
 import { OPENAPI_SNIPPET, type ShotSpec } from "@spec/agent"
 import { runGitHubGenerate } from "./generate-github"
@@ -84,6 +86,8 @@ interface CliArgs {
   execution: "github" | "local"
   runtime: "docker" | "host"
   mergePolicy: "pull-request" | "merge-queue" | "merge-to-main"
+  port: number
+  portSet: boolean
 }
 
 function shellQuote(value: string): string {
@@ -111,6 +115,8 @@ function parseArgs(argv: string[]): CliArgs {
     execution: "github",
     runtime: "docker",
     mergePolicy: "merge-to-main",
+    port: 8788,
+    portSet: false,
   }
   const positional: string[] = []
   for (let i = 0; i < argv.length; i++) {
@@ -127,6 +133,7 @@ function parseArgs(argv: string[]): CliArgs {
     else if (arg === "--repository") args.repository = argv[++i]
     else if (arg === "--target-dir") args.targetDir = argv[++i]
     else if (arg === "--concurrency") args.concurrency = Number(argv[++i])
+    else if (arg === "--port") { args.port = Number(argv[++i]); args.portSet = true }
     else if (arg === "--check") args.requiredCheck = argv[++i]
     else if (arg === "--resume") args.resume = true
     else if (arg === "--execution") args.execution = argv[++i] as CliArgs["execution"]
@@ -142,6 +149,12 @@ function parseArgs(argv: string[]): CliArgs {
 const USAGE = `spec ${COMPILER_VERSION} — specification compiler
 
 Usage:
+  spec preview <shot-dir>         Follow a local shot: pull each landing on the
+                                  remote main and (re)start the generated app
+                                  in parallel (--port, default 8788)
+  spec monitor [run-dir]          Web dashboard for a running generation: DAG
+                                  node states, live agent thinking/tool activity,
+                                  git landings, and costs (--port, default 8790)
   spec check <file.spec.ts>       Statically check a specification
   spec build <file.spec.ts>       Compile and write artifacts to <outputDir> (default .spec/)
   spec inspect <file.spec.ts>     Print the specification tree
@@ -198,9 +211,28 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stdout.write(USAGE)
     return args.command === undefined && !args.help ? 2 : 0
   }
-  if (!["check", "build", "inspect", "generate", "generate-frontend"].includes(args.command!)) {
+  if (!["check", "build", "inspect", "generate", "generate-frontend", "preview", "monitor"].includes(args.command!)) {
     process.stderr.write(`Unknown command "${args.command}".\n\n${USAGE}`)
     return 2
+  }
+  if (args.command === "monitor") {
+    const runRoot = args.file !== undefined ? path.resolve(args.file) : discoverLatestRun()
+    if (runRoot === undefined || !fs.existsSync(runRoot)) {
+      process.stderr.write("no run directory found; pass one: spec monitor <run-dir>\n")
+      return 2
+    }
+    startMonitorServer({ runRoot, port: args.portSet ? args.port : 8790 })
+    const state = buildMonitorState(runRoot)
+    process.stdout.write(`monitor: ${state.run ?? runRoot} → http://127.0.0.1:${args.port} (Ctrl-C 停止)\n`)
+    await new Promise(() => {})
+  }
+  if (args.command === "preview") {
+    if (!args.file) {
+      process.stderr.write(`Usage: spec preview <shot-dir> [--port 8788]\n\n`)
+      return 2
+    }
+    await runPreview({ shotDir: args.file, port: args.port, intervalMs: 2000 })
+    return 0
   }
   if (!args.file) {
     process.stderr.write(`Missing <file> argument for "${args.command}".\n\n${USAGE}`)
@@ -245,6 +277,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       if (result.ok) {
         const warnings = result.diagnostics.filter((d) => d.level === "warning")
         process.stdout.write("✓ Specification valid\n")
+        // Coverage gate: every oracle-verified clause must have a machine
+        // test somewhere; terminal-only coverage is surfaced as info.
+        if (result.ir.nodes.some((node) => node.kind === "fastapi")) {
+          const plan = planGeneration(result.ir)
+          const gate = coverageDiagnostics(plan.coverage, plan.dag.tasks.flatMap((task) => task.clauses))
+          const failures = gate.filter((d) => d.level === "error")
+          const notes = gate.filter((d) => d.level !== "error")
+          if (notes.length > 0) printDiagnostics(notes)
+          if (failures.length > 0) {
+            printDiagnostics(failures)
+            process.stderr.write("✗ Test coverage incomplete\n")
+            return 1
+          }
+          process.stdout.write(`✓ Test coverage complete (${Object.keys(plan.coverage.coverage).length} clauses mapped)\n`)
+        }
         if (warnings.length > 0) printDiagnostics(warnings)
         return 0
       }
@@ -414,6 +461,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     fs.writeFileSync(
       path.join(specDir, "blueprint.json"),
       stableStringify(plan.blueprint) + "\n",
+      "utf8",
+    )
+    fs.writeFileSync(
+      path.join(specDir, "test-manifest.json"),
+      stableStringify(plan.coverage) + "\n",
       "utf8",
     )
     fs.writeFileSync(

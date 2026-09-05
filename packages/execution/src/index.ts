@@ -1,3 +1,5 @@
+export { distillStreamedStdout } from "./agent-task"
+export { openEventLog, readEvents, parseAgentStreamLine, parseAgentResultLine, type EventLog, type GenerationEvent } from "./events"
 export {
   createAgentExecutionPlan,
   agentExecutionPlanFingerprint,

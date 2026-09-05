@@ -231,6 +231,45 @@ importers:
         specifier: workspace:*
         version: link:../../packages/web
 
+  examples/smoke:
+    dependencies:
+      '@spec/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@spec/blob':
+        specifier: workspace:*
+        version: link:../../packages/blob
+      '@spec/cache':
+        specifier: workspace:*
+        version: link:../../packages/cache
+      '@spec/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@spec/fastapi':
+        specifier: workspace:*
+        version: link:../../packages/fastapi
+      '@spec/messaging':
+        specifier: workspace:*
+        version: link:../../packages/messaging
+      '@spec/postgres':
+        specifier: workspace:*
+        version: link:../../packages/postgres
+      '@spec/rabbitmq':
+        specifier: workspace:*
+        version: link:../../packages/rabbitmq
+      '@spec/redis':
+        specifier: workspace:*
+        version: link:../../packages/redis
+      '@spec/s3':
+        specifier: workspace:*
+        version: link:../../packages/s3
+      '@spec/test':
+        specifier: workspace:*
+        version: link:../../packages/test
+      '@spec/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+
   examples/store-platform:
     dependencies:
       '@spec/core':
@@ -324,6 +363,9 @@ importers:
       '@spec/core':
         specifier: workspace:*
         version: link:../core
+      '@spec/execution':
+        specifier: workspace:*
+        version: link:../execution
       '@spec/fastapi':
         specifier: workspace:*
         version: link:../fastapi
@@ -596,6 +638,9 @@ importers:
       '@spec/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@spec/execution':
+        specifier: workspace:*
+        version: link:../packages/execution
       '@spec/fastapi':
         specifier: workspace:*
         version: link:../packages/fastapi

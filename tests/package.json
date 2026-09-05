@@ -3,24 +3,25 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
-    "@spec/core": "workspace:*",
-    "@spec/package-sdk": "workspace:*",
-    "@spec/web": "workspace:*",
+    "@spec/agent": "workspace:*",
     "@spec/auth": "workspace:*",
-    "@spec/postgres": "workspace:*",
-    "@spec/compiler": "workspace:*",
+    "@spec/blob": "workspace:*",
+    "@spec/cache": "workspace:*",
     "@spec/cli": "workspace:*",
+    "@spec/compiler": "workspace:*",
+    "@spec/container": "workspace:*",
+    "@spec/core": "workspace:*",
+    "@spec/execution": "workspace:*",
     "@spec/fastapi": "workspace:*",
-    "@spec/agent": "workspace:*"
-    ,"@spec/container": "workspace:*"
-    ,"@spec/cache": "workspace:*"
-    ,"@spec/redis": "workspace:*"
-    ,"@spec/messaging": "workspace:*"
-    ,"@spec/rabbitmq": "workspace:*"
-    ,"@spec/kafka": "workspace:*"
-    ,"@spec/sqs": "workspace:*"
-    ,"@spec/blob": "workspace:*"
-    ,"@spec/s3": "workspace:*"
+    "@spec/kafka": "workspace:*",
+    "@spec/messaging": "workspace:*",
+    "@spec/package-sdk": "workspace:*",
+    "@spec/postgres": "workspace:*",
+    "@spec/rabbitmq": "workspace:*",
+    "@spec/redis": "workspace:*",
+    "@spec/s3": "workspace:*",
+    "@spec/sqs": "workspace:*",
+    "@spec/web": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^2.1.8"

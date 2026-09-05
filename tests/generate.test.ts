@@ -8,6 +8,7 @@ import { compile } from "@spec/compiler"
 import { planGeneration } from "@spec/fastapi"
 import { lowerContainers } from "@spec/container"
 import { createGitHubGenerationPlan, type ShotSpec } from "@spec/agent"
+import { findBackendDir } from "../packages/cli/src/preview"
 import { planCompositeGeneration } from "@spec/cli"
 
 const projectRoot = path.resolve(__dirname, "..")
@@ -154,6 +155,7 @@ describe("spec generate (dry-run planning)", () => {
     expect(frontendRoot?.workingDirectory).toBe("products/interface-workspace/workspace/frontend")
     expect(execution.tasks.find((task) => task.id === "conformance")?.dependsOn).toEqual([
       "backend-app",
+      "backend-router-Media",
       "frontend-frontend",
     ])
 
@@ -211,7 +213,13 @@ describe("spec generate (dry-run planning)", () => {
       "products/media-platform/backend/tests/spec_oracle/runner.py",
       "products/media-platform/backend/tests/spec_oracle/test_models.py",
     ])
-    expect(plan.tasks.find((task) => task.id === "conformance")?.dependsOn).toEqual(["app"])
+    // app is now an early skeleton: conformance waits on every DAG sink
+    // (routers + infra), not on the app node alone.
+    const agentTasks = plan.tasks.filter((task) => task.executor === "agent")
+    const dependedOn = new Set(agentTasks.flatMap((task) => task.dependsOn))
+    expect(plan.tasks.find((task) => task.id === "conformance")?.dependsOn).toEqual(
+      agentTasks.filter((task) => !dependedOn.has(task.id)).map((task) => task.id).sort(),
+    )
     expect(plan.tasks.find((task) => task.id === "containers")?.dependsOn).toEqual(["conformance"])
   })
 
@@ -230,6 +238,7 @@ describe("spec generate (dry-run planning)", () => {
     const tasks = JSON.parse(fs.readFileSync(tasksPath, "utf8"))
     expect(tasks.dag.tasks.map((t: { id: string }) => t.id)).toEqual([
       "project",
+      "app",
       "database",
       "models",
       "schemas",
@@ -238,7 +247,6 @@ describe("spec generate (dry-run planning)", () => {
       "router:User",
       "router:Venue",
       "router:auth",
-      "app",
     ])
     for (const task of tasks.dag.tasks) {
       expect(task.promptSha256).toMatch(/^[0-9a-f]{64}$/)
@@ -312,5 +320,17 @@ export default defineApp({ name: "Broken", entities: [] })
     expect(result.status).toBe(2)
     expect(result.stderr).toContain("--effort, and --max-turns")
     expect(result.stderr).not.toContain("--model")
+  })
+})
+
+describe("spec preview backend discovery", () => {
+  it("finds the generated backend under the products layout and at the root", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "spec-preview-"))
+    const nested = path.join(tmp, "products", "demoapi", "backend")
+    fs.mkdirSync(path.join(nested, "app"), { recursive: true })
+    fs.writeFileSync(path.join(nested, "app", "main.py"), "")
+    expect(findBackendDir(tmp)).toBe(nested)
+    expect(findBackendDir(nested)).toBe(nested)
+    expect(findBackendDir(path.join(tmp, "products"))).toBe(null)
   })
 })

@@ -52,7 +52,15 @@ class TailBuffer {
 export function runProcess(
   command: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string; timeoutMs?: number; maxOutputBytes?: number } = {},
+  options: {
+    cwd?: string
+    env?: NodeJS.ProcessEnv
+    input?: string
+    timeoutMs?: number
+    maxOutputBytes?: number
+    /** Live stdout line tap (telemetry); errors here never fail the run. */
+    onLine?: (line: string) => void
+  } = {},
 ): Promise<ProcessResult> {
   return new Promise((resolve) => {
     const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
@@ -87,7 +95,22 @@ export function runProcess(
       child.kill("SIGKILL")
       finish(null, `\nTimed out after ${options.timeoutMs ?? 45 * 60_000}ms.`)
     }, options.timeoutMs ?? 45 * 60_000)
-    child.stdout.on("data", (chunk: Buffer) => stdout.append(chunk))
+    let stdoutPending = ""
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout.append(chunk)
+      if (options.onLine !== undefined) {
+        try {
+          stdoutPending += chunk.toString()
+          const lines = stdoutPending.split("\n")
+          stdoutPending = lines.pop() ?? ""
+          for (const line of lines) {
+            if (line.trim() !== "") options.onLine(line)
+          }
+        } catch {
+          // telemetry only
+        }
+      }
+    })
     child.stderr.on("data", (chunk: Buffer) => stderr.append(chunk))
     child.on("error", (error) => finish(null, `\n${error.message}`))
     child.on("close", (code) => finish(code))

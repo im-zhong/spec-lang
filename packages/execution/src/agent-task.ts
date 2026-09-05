@@ -3,9 +3,14 @@ import * as path from "node:path"
 import { createHash } from "node:crypto"
 import type { AgentExecutionCheckResult, ResolvedAgentExecutionTask } from "@spec/core"
 import { commandFailure, type ProcessResult } from "./process"
+import {
+  parseAgentResultLine,
+  parseAgentStreamLine,
+  type EventLog,
+} from "./events"
 
 export const DEFAULT_AGENT_COMMAND = [
-  "claude", "-p", "--output-format", "json", "--safe-mode", "--no-session-persistence",
+  "claude", "-p", "--output-format", "stream-json", "--verbose", "--safe-mode", "--no-session-persistence",
   "--permission-mode", "acceptEdits",
   "--allowedTools",
   "Read", "Glob", "Grep", "LS", "Edit", "Write",
@@ -15,7 +20,7 @@ export const DEFAULT_AGENT_COMMAND = [
 ]
 
 export const DEFAULT_REVIEWER_COMMAND = [
-  "claude", "-p", "--output-format", "json", "--safe-mode", "--no-session-persistence",
+  "claude", "-p", "--output-format", "stream-json", "--verbose", "--safe-mode", "--no-session-persistence",
   "--permission-mode", "plan", "--allowedTools",
   "Read", "Glob", "Grep", "LS", "Bash(uv:*)", "Bash(python:*)", "Bash(python3:*)",
   "Bash(.venv/bin/python:*)", "Bash(pytest:*)", "Bash(ls:*)", "Bash(cat:*)",
@@ -30,7 +35,7 @@ export const DEFAULT_REVIEWER_COMMAND = [
  * environment-independent and lives in executeAgentTask.
  */
 export interface AgentTaskRunner {
-  agent(command: string[], prompt: string, timeoutMs: number): Promise<ProcessResult>
+  agent(command: string[], prompt: string, timeoutMs: number, onLine?: (line: string) => void): Promise<ProcessResult>
   shell(command: string, timeoutMs: number): Promise<ProcessResult>
 }
 
@@ -38,6 +43,8 @@ export interface AgentTaskCoreOptions {
   agentCommand: string[]
   reviewerAgentCommand: string[]
   timeoutMs: number
+  /** Optional telemetry sink; failures here never affect the run. */
+  events?: EventLog
 }
 
 export interface AgentTaskCoreResult {
@@ -59,6 +66,22 @@ function parseAgentEnvelope(stdout: string): Record<string, unknown> | undefined
     }
   }
   return undefined
+}
+
+/**
+ * `--output-format stream-json` prints one JSON event per line; the FINAL
+ * `result` line carries the same envelope the single-blob json format
+ * printed. Distill the stream to that one envelope so cost/verdict/
+ * challenge parsing is unchanged. Streams without a result line (crashed
+ * CLI) pass through untouched for the failure path.
+ */
+export function distillStreamedStdout(stdout: string): string {
+  let result: Record<string, unknown> | undefined
+  for (const line of stdout.split("\n")) {
+    const parsed = parseAgentResultLine(line)
+    if (parsed !== undefined) result = parsed
+  }
+  return result === undefined ? stdout : JSON.stringify(result)
 }
 
 function agentCost(stdout: string): number {
@@ -208,6 +231,38 @@ export async function executeAgentTask(
   let costUsd: number | undefined
   let error: string | undefined
   fs.mkdirSync(taskDirectory, { recursive: true })
+  const events = options.events
+
+  /** Run one agent with live telemetry and a distilled single-envelope stdout. */
+  const runAgent = async (
+    role: "implementation" | "reviewer",
+    round: number,
+    command: string[],
+    prompt: string,
+  ): Promise<ProcessResult> => {
+    events?.emit({ kind: "agent.spawned", task: task.id, round, role, command: `${command.slice(0, 4).join(" ")} …` })
+    const result = await runner.agent(command, prompt, options.timeoutMs, (line) => {
+      const envelope = parseAgentResultLine(line)
+      if (envelope !== undefined) {
+        events?.emit({
+          kind: "agent.result",
+          task: task.id,
+          round,
+          role,
+          ok: envelope.is_error !== true,
+          ...(typeof envelope.num_turns === "number" ? { turns: envelope.num_turns } : {}),
+          ...(typeof envelope.total_cost_usd === "number" ? { costUsd: envelope.total_cost_usd } : {}),
+          ...(typeof envelope.duration_ms === "number" ? { durationMs: envelope.duration_ms } : {}),
+        })
+        return
+      }
+      const distilled = parseAgentStreamLine(line)
+      if (distilled?.kind === "agent.activity") {
+        events?.emit({ ...distilled, task: task.id, round, role })
+      }
+    })
+    return { ...result, stdout: distillStreamedStdout(result.stdout) }
+  }
 
   if (task.executor === "materialize") {
     for (const [relative, content] of Object.entries(task.materializedFiles ?? {})) {
@@ -233,7 +288,8 @@ export async function executeAgentTask(
         (feedback ? `Reviewer feedback from the prior round:\n${feedback}\n` : "This is the first round.\n")
       const writerPrompt = `${task.loop.implementation.instruction}${shared}\nYou own only: ${task.loop.implementation.scope.join(", ")}.`
       const before = snapshot(taskDirectory)
-      const writer = await runner.agent(options.agentCommand, writerPrompt, options.timeoutMs)
+      events?.emit({ kind: "round.started", task: task.id, round })
+      const writer = await runAgent("implementation", round, options.agentCommand, writerPrompt)
       checks.push({ name: `generation/loop/${round}/implementation`, status: writer.ok ? "success" : "failure" })
       costUsd += agentCost(writer.stdout)
       if (!writer.ok) {
@@ -242,6 +298,7 @@ export async function executeAgentTask(
       }
       const challenge = contractChallenge(writer.stdout)
       if (challenge) {
+        events?.emit({ kind: "challenge", task: task.id, ...(challenge.clause !== undefined ? { clause: challenge.clause } : {}) })
         checks.push({ name: `generation/loop/${round}/challenge`, status: "failure" })
         error = `SPEC_CONTRACT_CHALLENGED: task ${task.id} round ${round} rejected clause ${JSON.stringify(challenge.clause)}: ${challenge.reason} The specification is defective — fix the spec/blueprint and regenerate; do not retry.`
         break
@@ -263,7 +320,7 @@ Review the implementation against the frozen node contract and its clause table.
 ${testEvidence.join("\n\n")}
 Do not edit any file. Your result must be exactly one JSON object and nothing else — no markdown fences, no prose before or after: {"approved":boolean,"feedback":"specific changes keyed to clause ids where applicable"}. Approve only when the implementation conforms to every clause and the review-kind clauses hold by inspection.`
       const beforeReviewer = snapshot(taskDirectory)
-      const review = await runner.agent(options.reviewerAgentCommand, reviewPrompt, options.timeoutMs)
+      const review = await runAgent("reviewer", round, options.reviewerAgentCommand, reviewPrompt)
       checks.push({ name: `generation/loop/${round}/review`, status: review.ok ? "success" : "failure" })
       costUsd += agentCost(review.stdout)
       if (!review.ok) {
@@ -281,6 +338,7 @@ Do not edit any file. Your result must be exactly one JSON object and nothing el
         error = `reviewer for ${task.id} round ${round} returned no structured verdict; reviewer output: ${tail}`
         break
       }
+      events?.emit({ kind: "round.finished", task: task.id, round, approved: verdict.approved })
       if (verdict.approved) {
         approved = true
         break
@@ -289,7 +347,7 @@ Do not edit any file. Your result must be exactly one JSON object and nothing el
     }
     if (!error && !approved) error = `agent loop for ${task.id} exhausted ${task.loop.maxRounds} rounds without approval`
   } else {
-    const agent = await runner.agent(options.agentCommand, task.instruction, options.timeoutMs)
+    const agent = await runAgent("implementation", 1, options.agentCommand, task.instruction)
     checks.push({ name: "generation/agent", status: agent.ok ? "success" : "failure" })
     if (!agent.ok) error = commandFailure(agent).message
     if (agent.ok) costUsd = agentCost(agent.stdout)

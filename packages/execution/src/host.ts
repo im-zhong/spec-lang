@@ -2,6 +2,7 @@ import * as path from "node:path"
 import type { ResolvedAgentExecutionTask } from "@spec/core"
 import { runProcess } from "./process"
 import { DEFAULT_AGENT_COMMAND, DEFAULT_REVIEWER_COMMAND, executeAgentTask, type AgentTaskRunner } from "./agent-task"
+import type { EventLog } from "./events"
 import type { ContainerExecutionResult, AgentExecutionContainerPort } from "./ports"
 
 export interface HostAgentExecutorOptions {
@@ -9,6 +10,8 @@ export interface HostAgentExecutorOptions {
   /** Read-only Claude command used for the reviewer role. */
   reviewerAgentCommand?: string[]
   timeoutMs?: number
+  /** Telemetry sink for agent activity events. */
+  events?: EventLog
 }
 
 /**
@@ -32,10 +35,10 @@ export class HostAgentExecutor implements AgentExecutionContainerPort {
       ? path.join(path.resolve(workspace), task.workingDirectory)
       : path.resolve(workspace)
     const runner: AgentTaskRunner = {
-      agent: (command, prompt, timeoutMs) => runProcess(
+      agent: (command, prompt, timeoutMs, onLine) => runProcess(
         command[0],
         command.slice(1),
-        { cwd: taskDirectory, input: prompt, timeoutMs },
+        { cwd: taskDirectory, input: prompt, timeoutMs, onLine },
       ),
       shell: (command, timeoutMs) => runProcess(
         "/bin/sh",
@@ -47,6 +50,7 @@ export class HostAgentExecutor implements AgentExecutionContainerPort {
       agentCommand: this.options.agentCommand ?? DEFAULT_AGENT_COMMAND,
       reviewerAgentCommand: this.options.reviewerAgentCommand ?? DEFAULT_REVIEWER_COMMAND,
       timeoutMs: this.options.timeoutMs ?? 45 * 60_000,
+      events: this.options.events,
     })
     return {
       ok: outcome.error === undefined,

@@ -8,6 +8,7 @@ import { isCompilerWorkspace, MARKER_FILE, prepareWorkspace, scanArtifacts, sha2
 import { runCommand } from "../src/orchestrate"
 import { AgentHarness, schedule, type HarnessTask } from "../src/harness"
 import { createGitHubGenerationPlan } from "../src/github-generation"
+import { validateAgentExecutionPlan } from "@spec/execution"
 import type { AgentRunResult, ClaudeCodeAgentRunner } from "../src/runner"
 
 describe("parseResultJson", () => {
@@ -234,6 +235,64 @@ describe("agent harness", () => {
 })
 
 describe("GitHub generator DAG execution", () => {
+  it("remaps loop clause nodes to Git-ref-normalized task ids", () => {
+    const hash = "b".repeat(64)
+    const clause = {
+      id: "route:GET /posts",
+      statement: "GET /posts lists every row",
+      node: "router:posts",
+      kind: "route",
+      verification: "oracle",
+      level: "api",
+    } as const
+    const plan = createGitHubGenerationPlan({
+      shot: {
+        tasks: [
+          {
+            id: "router:posts",
+            label: "router",
+            dependsOn: [],
+            scope: ["app/router.py"],
+            prompt: "router",
+            loop: {
+              schemaVersion: "spec-agent-task-loop/0.2",
+              maxRounds: 3,
+              implementation: { instruction: "router", scope: ["app/router.py"] },
+              reviewer: {
+                commands: ["pytest -q tests/spec_oracle/test_router_posts.py"],
+                instruction: "review",
+                oracleFiles: ["tests/spec_oracle/test_router_posts.py"],
+                clauses: [clause, { ...clause, id: "foreign", node: "router:elsewhere" }],
+              },
+            },
+          },
+        ],
+        conformanceFiles: { "conformance/test_app.py": "def test_app(): pass\n" },
+        verification: { setup: [], check: [{ name: "pytest", command: "pytest -q", timeoutMs: 1000 }] },
+      },
+      runId: "smoke-v1",
+      repository: "owner/repo",
+      rootBaseSha: "a".repeat(40),
+      targetDirectory: "products/smoke/backend",
+      environment: {
+        image: `ghcr.io/owner/dev@sha256:${"c".repeat(64)}`,
+        devcontainerHash: hash,
+        toolchainLockHash: hash,
+        agent: { model: "test-model", effort: "high", maxTurns: 20, maxConcurrency: 2 },
+      },
+      requiredChecks: ["spec-generation"],
+    })
+    const router = plan.tasks.find((task) => task.id === "router-posts")!
+    const nodes = router.loop!.reviewer.clauses.map((clause) => clause.node)
+    // The owning clause follows its task into the normalized id space...
+    expect(nodes).toContain("router-posts")
+    // ...while a clause naming some other task keeps its value and is
+    // rejected by loop validation instead of being silently rewritten.
+    expect(nodes).toContain("router:elsewhere")
+    const diagnostics = validateAgentExecutionPlan(plan)
+    expect(diagnostics.filter((d) => d.code === "AGENT_EXECUTION_LOOP_CLAUSE_INVALID")).toHaveLength(1)
+  })
+
   it("preserves generator edges while assigning every node a branchable task", () => {
     const hash = "b".repeat(64)
     const plan = createGitHubGenerationPlan({

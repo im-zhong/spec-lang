@@ -5,6 +5,7 @@ import * as path from "node:path"
 import type { AgentExecutionEnvironment, AgentExecutionMergePolicy, SpecIR } from "@spec/core"
 import { stableStringify } from "@spec/compiler"
 import { lowerContainers } from "@spec/container"
+import { openEventLog } from "@spec/execution"
 import {
   createGitHubGenerationPlan,
   runGitHubGeneration,
@@ -508,6 +509,11 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
     const localPlan = path.join(options.repoRoot, ".spec", "generation", runId, "plan.json")
     fs.mkdirSync(path.dirname(localPlan), { recursive: true })
     fs.writeFileSync(localPlan, stableStringify(plan) + "\n", "utf8")
+    const events = openEventLog(
+      options.execution === "local" ? path.dirname(localShotLocalRoot(options.repoRoot, options.runId, shot)) : undefined,
+      { run: runId, shot },
+    )
+    events.emit({ kind: "run.started", run: runId, shots: [shot] })
     process.stdout.write(`⟳ ${shot}: ${repository.repository} @ ${repository.localRoot}\n`)
     process.stdout.write(`  ${plan.tasks.length} generator nodes → branches/containers/PRs\n`)
     const report = await runGitHubGeneration(plan, {
@@ -522,9 +528,23 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
       maxTurns: options.maxTurns,
       runtime: options.runtime,
       execution: options.execution,
-      onTaskStart: (taskId) => process.stdout.write(`  ⟳ ${shot}/${taskId}\n`),
-      onTaskEnd: (taskId, ok, sha) => process.stdout.write(`  ${ok ? "✓" : "✗"} ${shot}/${taskId}${sha ? ` ${sha.slice(0, 12)}` : ""}\n`),
+      eventsRoot: options.execution === "local"
+        ? path.dirname(localShotLocalRoot(options.repoRoot, options.runId, shot))
+        : undefined,
+      runId,
+      shot,
+      onTaskStart: (taskId) => {
+        process.stdout.write(`  ⟳ ${shot}/${taskId}\n`)
+        events.emit({ kind: "node.started", task: taskId })
+      },
+      onTaskEnd: (taskId, ok, sha) => {
+        process.stdout.write(`  ${ok ? "✓" : "✗"} ${shot}/${taskId}${sha ? ` ${sha.slice(0, 12)}` : ""}\n`)
+        events.emit({ kind: "node.finished", task: taskId, ok, ...(sha !== undefined ? { headSha: sha } : {}) })
+        if (taskId === "conformance") events.emit({ kind: "conformance.result", ok })
+      },
     })
+    const runCost = report.tasks.reduce((sum, task) => sum + (task.costUsd ?? 0), 0)
+    events.emit({ kind: "run.finished", run: runId, ok: report.ok, costUsd: Number(runCost.toFixed(4)) })
     const localResult = path.join(options.repoRoot, ".spec", "generation", runId, "result.json")
     fs.writeFileSync(localResult, stableStringify({
       repository: repository.repository,

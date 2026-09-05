@@ -66,11 +66,23 @@ is a structured failure, never an agent choice.
 
 ```text
 origin/main@base
-    ├─ project ─ commit/PR ─┬─ models ─ commit/PR ─┐
-    │                       └─ database ─ commit/PR ┤
-    │                                              ├─ app ─ conformance ─ final PR
-    └──────────────────────────────────────────────┘
+    ├─ project ─┬─ models ─┬─ app-skeleton ─ (boots; registry detection) ─┐
+    │           └─ database ┘                                              │
+    │           ├─ schemas ─ routers (each landing grows the live app) ────┤
+    │           └─ cache/messaging/blob ──────────────────────────────────┤
+    │                                                                      ├─ conformance
+    └──────────────────────────────────────────────────────────────────────┘
 ```
+
+The app node is a WALKING SKELETON, not the sink: it lands as step two
+(depending only on `project`) and must boot with zero routes of its own —
+database wiring, table creation, adapters, and routers are ALL detection-
+based, so the app is alive from the second node onward. The
+compiler-owned registry is detection-based (pinned candidate order,
+import-on-existence), so every router landing grows the live route set —
+`spec preview` shows the application accruing routes while the DAG runs.
+Strict OpenAPI equality is asserted terminally; the app node oracle is
+snapshot-invariant (holds with zero routers AND on the finished repo).
 
 ## Recovery and trust boundary
 
@@ -157,7 +169,21 @@ spec generate examples/media-platform/app.spec.ts \
 Local runs use the identical orchestration path — task branches, per-branch
 verification of the pushed head, and deterministic `merge-to-main` landings —
 but are not golden-rule evidence; that still requires GitHub repository
-isolation.
+isolation. `spec monitor [run-dir] [--port N]` is the generation monitoring platform:
+an independent read-only observer over the telemetry bus (`<runRoot>/events/
+events.ndjson`) that `spec generate` writes while running — every agent
+runs `claude -p --output-format stream-json --verbose`, so the dashboard
+shows live thinking/tool activity per node, loop rounds and verdicts,
+challenge events, DAG node states, per-node costs, the git main landing
+timeline, and the final conformance verdict. Telemetry is operational
+only: append failures are swallowed and it is never golden-rule evidence.
+
+`spec preview <shot-dir> [--port N]` is a live follower for local
+shots: an independent observer process that fast-forwards the shot clone to
+every landing on the remote main, syncs dependencies when the project files
+change, and (re)starts the generated app in parallel on a fixed port the
+moment `app/main.py` lands — the application is watchable while the DAG
+still runs. Preview is a viewer, never evidence.
 
 Multiple shots use independent temporary GitHub repositories, independent
 local checkout/worktree roots, and independent run ids. The generator creates
