@@ -206,7 +206,14 @@ function changedPaths(before: Map<string, string>, after: Map<string, string>): 
  * agent writing outside its scope. Everything else stays a violation.
  */
 function isToolArtifact(file: string): boolean {
-  return file.includes("__pycache__/") || file.endsWith(".pyc") || file.includes(".pytest_cache/")
+  return (
+    file.includes("__pycache__/") ||
+    file.endsWith(".pyc") ||
+    file.includes(".pytest_cache/") ||
+    file.includes(".ruff_cache/") ||
+    file.includes(".mypy_cache/") ||
+    file.includes(".tox/")
+  )
 }
 
 function roleScope(task: ResolvedAgentExecutionTask, files: string[]): string[] {
