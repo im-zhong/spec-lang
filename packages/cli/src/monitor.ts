@@ -111,6 +111,17 @@ function readPlanTasks(runRoot: string, run: string | undefined): Array<{ id: st
   if (run === undefined) return []
   for (const entry of fs.existsSync(runRoot) ? fs.readdirSync(runRoot) : []) {
     if (!entry.endsWith(".git")) continue
+    // Try versioned refs first (retry runs), then the original v1 ref.
+    for (const ref of [`spec/generate/${run}/plan.v3`, `spec/generate/${run}/plan.v2`, `spec/generate/${run}/plan`]) {
+      const probe = spawnSync("git", ["--git-dir", path.join(runRoot, entry), "rev-parse", "--verify", ref], { encoding: "utf8" })
+      if (probe.status !== 0) continue
+      const result = spawnSync("git", ["--git-dir", path.join(runRoot, entry), "show", `${ref}:plan.json`], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+      if (result.status !== 0) continue
+      try {
+        const plan = JSON.parse(result.stdout) as { tasks?: Array<{ id?: string; dependsOn?: string[] }> }
+        return (plan.tasks ?? []).flatMap((t) => (typeof t.id === "string" ? [{ id: t.id, dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn.map(String) : [] }] : []))
+      } catch { continue }
+    }
     const result = spawnSync("git", ["--git-dir", path.join(runRoot, entry), "show", `spec/generate/${run}/plan:plan.json`], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
     if (result.status !== 0) continue
     try {
@@ -159,7 +170,11 @@ function gitSnapshot(runRoot: string): Array<{ sha: string; subject: string }> {
 
 /** Aggregate the event log into a dashboard snapshot. */
 export function buildMonitorState(runRoot: string): MonitorState {
-  const events = readEvents(runRoot)
+  const allEvents = readEvents(runRoot)
+  // Only consider events from the CURRENT attempt (after the last
+  // run.started) — old failed-run markers must not leak into the display.
+  const lastStart = allEvents.map((e) => e.kind === "run.started").lastIndexOf(true)
+  const events = lastStart >= 0 ? allEvents.slice(lastStart) : allEvents
   const nodes = new Map<string, MonitorNode>()
   const lanes = new Map<string, AgentLane>()
   const usageSamples = new Map<string, Array<{ ts: string; out: number }>>()
