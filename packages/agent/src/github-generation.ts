@@ -118,28 +118,7 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
     // could not have completed before the retry target started failing).
     const retryId = safeTaskId(input.retryFrom)
     const descendants = new Set<string>([retryId])
-    // True siblings: share a direct dependency with the retry target BUT
-    // are NOT in its transitive dependency closure (schemas/security are
-    // dependencies of the routers, not siblings — they must pass through).
-    const retryDeps = input.shot.tasks
-        .find((t) => safeTaskId(t.id) === retryId)?.dependsOn.map(safeTaskId) ?? []
-    // Compute the retry target's full dependency closure
-    const depClosure = new Set<string>()
-    const growClosure = (id: string) => {
-      if (depClosure.has(id)) return
-      depClosure.add(id)
-      const deps = input.shot.tasks.find((t) => safeTaskId(t.id) === id)?.dependsOn.map(safeTaskId) ?? []
-      deps.forEach(growClosure)
-    }
-    growClosure(retryId)
-    for (const task of input.shot.tasks) {
-      const normalized = safeTaskId(task.id)
-      if (descendants.has(normalized)) continue
-      if (depClosure.has(normalized)) continue // it's a dependency, not a sibling
-      if (task.dependsOn.map(safeTaskId).some((dep) => retryDeps.includes(dep))) {
-        descendants.add(normalized)
-      }
-    }
+    // No automatic sibling inclusion — landed siblings stay as pass-throughs.
     // Transitive closure downward
     let grew = true
     while (grew) {
