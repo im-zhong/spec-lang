@@ -80,9 +80,11 @@ ONE test primitive** — every future form compiles down to the same
   reviewer, no agent exec. Keep the materialization commit + PR for the
   evidence chain. Their per-shot oracles become monorepo lowering
   self-tests. Expected effect: ~9 agent nodes → ~3 routers per booking shot.
-- [ ] **Routers stay agent** as the pilot of remaining agent surface
-  (guard/effects translation). Later: compile check-trees to SQL once the
-  vocabulary proves itself.
+- [x] **Routers stay agent** as the pilot of remaining agent surface
+  (guard/effects translation) — confirmed by four smoke runs (v3–v7):
+  every router node passed its behavior triple oracle on the first
+  attempt. The follow-up (compile check-trees to SQL) stays open under
+  "Compiled nodes" above once the vocabulary proves itself further.
 - [ ] **Frontend (react) treatment**: same triple primitive for the single
   frontend task + the oracle-v2 equivalent (behavior.json already exists;
   unify vocabulary). Currently clauses+oracle exist (pins/files/import/
@@ -126,11 +128,17 @@ ONE test primitive** — every future form compiles down to the same
 
 ## 5. Validation runs (spend money deliberately)
 
-- [ ] **First paid validation of the clause-driven loop**: booking
-  `--shots 2` smoke, then the anti-overfit trio, then a fresh store-platform
-  golden run under the new loop (the v7 paused run is permanently
-  non-resumable — fingerprint boundary — and its prompts.md archive is
-  superseded; regenerate the handbook via `scripts/export-agent-prompts.mjs`
-  when the new run is planned).
-- [ ] Re-run `examples/bounds` generation once §1 auth probes land so the
-  fixture's own node oracle exercises them.
+- [x] **First paid validation of the clause-driven loop (single shot)**:
+  smoke v3 (13/13 nodes first-try, zero repair rounds; terminal
+  conformance failures were compiler test-generator defects #29–33, all
+  fixed and replay-verified 38/38) and v7 (walking skeleton, registry
+  fix #34, live telemetry).
+- [ ] **Multi-shot golden-rule validation**: booking `--shots 2`, then the
+  anti-overfit trio (cblog/inventory/booking), then a fresh store-platform
+  golden run — cross-shot interface/behavior equality is the part
+  single-shot smokes cannot prove. The old v7 paused run is permanently
+  non-resumable (fingerprint boundary); regenerate the handbook via
+  `scripts/export-agent-prompts.mjs` when the new run is planned.
+- [x] Re-run `examples/bounds` generation — superseded: `examples/smoke`
+  (v3–v7) exercises every §1 probe (auth, invariant, infra) plus the
+  walking skeleton, examples vocabulary, and preview in real generation.
