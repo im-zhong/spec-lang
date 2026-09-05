@@ -177,7 +177,7 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
       id: ids.get(task.id)!,
       objective: task.label ?? task.id,
       instruction: task.prompt,
-      executor: "agent",
+      executor: task.executor ?? "agent",
       dependsOn: task.dependsOn.length > 0
         ? task.dependsOn.map((dependency) => ids.get(dependency)!).sort()
         : hasSeed ? ["compiler-seed"] : [],
