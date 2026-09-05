@@ -4,6 +4,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import {
   openEventLog,
+  parsePartialDelta,
   parseAgentResultLine,
   parseAgentStreamLine,
   readEvents,
@@ -40,10 +41,27 @@ describe("agent stream telemetry", () => {
     }
     const text = parseAgentStreamLine(SAMPLE_LINES[3]!)
     if (text?.kind === "agent.activity") expect(text.summary).toBe("骨架完成")
-    // system/user-result lines carry nothing interesting
+    // system lines carry nothing interesting
     expect(parseAgentStreamLine(SAMPLE_LINES[0]!)).toBeUndefined()
-    expect(parseAgentStreamLine(SAMPLE_LINES[4]!)).toBeUndefined()
+    // tool RESULTS surface as [result] activity (oracle output visibility)
+    const toolResult = parseAgentStreamLine(SAMPLE_LINES[4]!)
+    if (toolResult?.kind === "agent.activity") {
+      expect(toolResult.tool).toBe("result")
+      expect(toolResult.summary).toBe("ok")
+    }
     expect(parseAgentStreamLine("not json")).toBeUndefined()
+  })
+
+  it("parses partial-message deltas (thinking/text) and ignores the rest", () => {
+    // verified against the real CLI: delta is an object inside content_block_delta
+    const think = parsePartialDelta(JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "先看" } } }))
+    expect(think).toEqual({ kind: "thinking", text: "先看" })
+    const text = parsePartialDelta(JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "ok" } } }))
+    expect(text).toEqual({ kind: "text", text: "ok" })
+    expect(parsePartialDelta(JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "input_json_delta", partial_json: "x" } } }))).toBeUndefined()
+    expect(parsePartialDelta(JSON.stringify({ type: "stream_event", event: { type: "message_start" } }))).toBeUndefined()
+    expect(parsePartialDelta(SAMPLE_LINES[1]!)).toBeUndefined()
+    expect(parsePartialDelta("garbage")).toBeUndefined()
   })
 
   it("extracts the final result envelope and truncates long snippets", () => {

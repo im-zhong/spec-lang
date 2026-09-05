@@ -75,10 +75,14 @@ export async function runPreview(options: PreviewOptions): Promise<void> {
     if (app !== null && app.exitCode === null) app.kill("SIGTERM")
     app = null
   }
-  process.on("SIGINT", () => {
-    stopApp()
-    process.exit(0)
-  })
+  // pkill sends SIGTERM; without these handlers the spawned app outlives
+  // the follower and orphans its port.
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => {
+      stopApp()
+      process.exit(0)
+    })
+  }
 
   // uvicorn is the viewer's concern, not the generated project's contract;
   // it is injected at run time and never enters the pinned stack.

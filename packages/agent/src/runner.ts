@@ -70,8 +70,16 @@ export function buildClaudeArgs(options: AgentRunnerOptions = {}): string[] {
   const allowedTools = options.allowedTools ?? DEFAULT_ALLOWED_TOOLS
   const args = [
     "-p",
+    // Streamed events feed the telemetry bus (thinking/tool activity for
+    // `spec monitor`); the final `result` line carries the same envelope
+    // the single-blob json format printed, so result parsing is unchanged.
     "--output-format",
-    "json",
+    "stream-json",
+    "--verbose",
+    // Partial-message deltas let the monitor show live thinking between
+    // COMPLETE assistant messages (large prompts hold a turn open for many
+    // minutes, starving whole-message streams).
+    "--include-partial-messages",
     "--safe-mode",
     "--no-session-persistence",
     "--permission-mode",

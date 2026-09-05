@@ -39,7 +39,21 @@ export function parseAgentStreamLine(line: string): GenerationEvent | undefined 
   } catch {
     return undefined
   }
-  if (parsed.type === "assistant" || parsed.type === "user") {
+  if (parsed.type === "user") {
+    // Tool RESULTS: the most valuable live signal after the call itself —
+    // oracle/pytest output becomes visible while the loop runs.
+    const message = parsed.message as { content?: unknown } | undefined
+    const blocks = Array.isArray(message?.content) ? (message!.content as Array<Record<string, unknown>>) : []
+    let last: string | undefined
+    for (const block of blocks) {
+      if (block.type === "tool_result") {
+        const content = block.content
+        last = typeof content === "string" ? content : block.contentIsArray ? undefined : typeof (content as { text?: string })?.text === "string" ? (content as { text: string }).text : undefined
+      }
+    }
+    return last === undefined ? undefined : { kind: "agent.activity", task: "", round: 0, role: "implementation", activity: "tool", tool: "result", summary: truncate(last) }
+  }
+  if (parsed.type === "assistant") {
     const message = parsed.message as { content?: unknown } | undefined
     const blocks = Array.isArray(message?.content) ? (message!.content as Array<Record<string, unknown>>) : []
     // Prefer the LAST interesting block of the turn (thinking precedes tool
@@ -55,6 +69,29 @@ export function parseAgentStreamLine(line: string): GenerationEvent | undefined 
       }
     }
     return event
+  }
+  return undefined
+}
+
+/** A partial-message delta from --include-partial-messages streams. */
+export function parsePartialDelta(line: string): { kind: "thinking" | "text"; text: string } | undefined {
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(line) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+  if (parsed.type !== "stream_event") return undefined
+  // Real shape (verified against the CLI): the delta rides a
+  // content_block_delta event as an OBJECT — {type: text_delta, text} or
+  // {type: thinking_delta, thinking}.
+  const event = parsed.event as { type?: string; delta?: { type?: string; text?: string; thinking?: string } } | undefined
+  if (event?.type !== "content_block_delta" || event.delta === undefined) return undefined
+  if (event.delta.type === "text_delta" && typeof event.delta.text === "string") {
+    return { kind: "text", text: event.delta.text }
+  }
+  if (event.delta.type === "thinking_delta" && typeof event.delta.thinking === "string") {
+    return { kind: "thinking", text: event.delta.thinking }
   }
   return undefined
 }

@@ -45,8 +45,8 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     this.gitCli = options.gitCli ?? "git"
   }
 
-  private async git(args: string[], cwd = this.repoRoot, env?: NodeJS.ProcessEnv): Promise<ProcessResult> {
-    const result = await runProcess(this.gitCli, args, { cwd, env: { ...process.env, ...env }, timeoutMs: 180_000 })
+  private async git(args: string[], cwd = this.repoRoot, env?: NodeJS.ProcessEnv, maxOutputBytes?: number): Promise<ProcessResult> {
+    const result = await runProcess(this.gitCli, args, { cwd, env: { ...process.env, ...env }, timeoutMs: 180_000, ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}) })
     if (!result.ok) throw commandFailure(result)
     if (result.stdoutTruncated || result.stderrTruncated) throw new Error(`git ${args[0]} output exceeded the bounded execution log`)
     return result
@@ -111,7 +111,10 @@ export class GitAgentExecutionRepository implements AgentExecutionRepositoryPort
     if (existing) {
       const fetched = await this.fetchRemoteBranch(ref)
       if (fetched !== existing) throw new Error(`remote plan ref "${ref}" moved from ${existing} to ${fetched} while fetching`)
-      const stored = await this.git(["show", `${existing}:plan.json`])
+      // The plan embeds every seed file's bytes (oracle, conformance,
+      // registry), so it legitimately exceeds the generic 1 MiB process
+      // bound; the immutability comparison needs the full document.
+      const stored = await this.git(["show", `${existing}:plan.json`], undefined, undefined, 64 * 1024 * 1024)
       if (stored.stdout !== canonical) {
         throw new Error(`remote plan ref "${ref}" already contains a different immutable plan`)
       }

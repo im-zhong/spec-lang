@@ -14,9 +14,9 @@ import type { AgentRunResult, ClaudeCodeAgentRunner } from "../src/runner"
 describe("parseResultJson", () => {
   it("uses Claude Code defaults unless overrides are explicit", () => {
     const defaults = buildClaudeArgs()
-    expect(defaults.slice(0, 7)).toEqual([
-      "-p", "--output-format", "json", "--safe-mode", "--no-session-persistence",
-      "--permission-mode", "acceptEdits",
+    expect(defaults.slice(0, 9)).toEqual([
+      "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+      "--safe-mode", "--no-session-persistence", "--permission-mode", "acceptEdits",
     ])
     expect(defaults).not.toContain("--model")
     expect(defaults).not.toContain("--max-turns")

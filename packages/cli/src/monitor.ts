@@ -27,6 +27,41 @@ export interface MonitorNode {
   lastActivity?: { ts: string; activity: string; tool?: string; summary: string; role?: string }
 }
 
+export interface AgentLane {
+  key: string
+  task: string
+  role: string
+  round: number
+  alive: boolean
+  feed: Array<Record<string, unknown>>
+}
+
+export interface DagTaskInfo {
+  task: string
+  status: "running" | "done" | "failed" | "pending"
+  dependsOn: string[]
+  round?: number
+  costUsd?: number
+  activity?: string
+}
+
+/** Group plan tasks into dependency levels (roots first). Pure. */
+export function buildDagLevels(tasks: Array<{ id: string; dependsOn: string[] }>): string[][] {
+  const level = new Map<string, number>()
+  const depth = (id: string, seen: Set<string>): number => {
+    if (level.has(id)) return level.get(id)!
+    if (seen.has(id)) return 0 // cycle guard — never expected in a plan
+    const deps = tasks.find((t) => t.id === id)?.dependsOn ?? []
+    const value = deps.length === 0 ? 0 : 1 + Math.max(...deps.map((d) => depth(d, new Set([...seen, id]))))
+    level.set(id, value)
+    return value
+  }
+  for (const t of tasks) depth(t.id, new Set())
+  const byLevel = new Map<number, string[]>()
+  for (const [id, value] of level) byLevel.set(value, [...(byLevel.get(value) ?? []), id].sort())
+  return [...byLevel.keys()].sort((a, b) => a - b).map((k) => byLevel.get(k)!)
+}
+
 export interface MonitorState {
   runRoot: string
   run?: string
@@ -36,6 +71,10 @@ export interface MonitorState {
   costUsd: number
   processAlive: boolean
   nodes: MonitorNode[]
+  /** Dependency levels of the full plan (all nodes, colored by status). */
+  dag: Array<Array<DagTaskInfo>>
+  /** One lane per agent instance (task × role × round), newest first. */
+  agents: AgentLane[]
   /** Most recent events, newest last. */
   feed: Array<Record<string, unknown>>
   git: Array<{ sha: string; subject: string }>
@@ -59,6 +98,44 @@ function gitLines(gitDir: string, args: string[]): string[] {
   return result.stdout.split("\n").filter((line) => line.trim() !== "")
 }
 
+/** The plan's task graph from the bare repo's immutable plan ref. */
+function readPlanTasks(runRoot: string, run: string | undefined): Array<{ id: string; dependsOn: string[] }> {
+  if (run === undefined) return []
+  for (const entry of fs.existsSync(runRoot) ? fs.readdirSync(runRoot) : []) {
+    if (!entry.endsWith(".git")) continue
+    const result = spawnSync("git", ["--git-dir", path.join(runRoot, entry), "show", `spec/generate/${run}/plan:plan.json`], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+    if (result.status !== 0) continue
+    try {
+      const plan = JSON.parse(result.stdout) as { tasks?: Array<{ id?: string; dependsOn?: string[] }> }
+      return (plan.tasks ?? []).flatMap((t) => (typeof t.id === "string" ? [{ id: t.id, dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn.map(String) : [] }] : []))
+    } catch {
+      continue
+    }
+  }
+  return []
+}
+
+/** Full-plan view: every node, colored by status, grouped by dependency level. */
+function buildDagView(runRoot: string, run: string | undefined, nodes: Map<string, MonitorNode>): Array<Array<DagTaskInfo>> {
+  const tasks = readPlanTasks(runRoot, run)
+  if (tasks.length === 0) return []
+  return buildDagLevels(tasks).map((level) =>
+    level.map((id) => {
+      const node = nodes.get(id)
+      return {
+        task: id,
+        status: node?.status ?? "pending",
+        dependsOn: tasks.find((t) => t.id === id)?.dependsOn ?? [],
+        ...(node?.round !== undefined ? { round: node.round } : {}),
+        ...(node?.costUsd !== undefined ? { costUsd: node.costUsd } : {}),
+        ...(node?.lastActivity !== undefined
+          ? { activity: `[${node.lastActivity.tool ?? node.lastActivity.activity}] ${node.lastActivity.summary.slice(0, 60)}` }
+          : {}),
+      }
+    }),
+  )
+}
+
 function gitSnapshot(runRoot: string): Array<{ sha: string; subject: string }> {
   const out: Array<{ sha: string; subject: string }> = []
   for (const entry of fs.existsSync(runRoot) ? fs.readdirSync(runRoot) : []) {
@@ -76,6 +153,7 @@ function gitSnapshot(runRoot: string): Array<{ sha: string; subject: string }> {
 export function buildMonitorState(runRoot: string): MonitorState {
   const events = readEvents(runRoot)
   const nodes = new Map<string, MonitorNode>()
+  const lanes = new Map<string, AgentLane>()
   const feed: Array<Record<string, unknown>> = []
   let startedAt: string | undefined
   let finished: { ts: string; ok: boolean; costUsd?: number } | undefined
@@ -112,8 +190,18 @@ export function buildMonitorState(runRoot: string): MonitorState {
       const node = nodes.get(task)
       if (node && typeof event.costUsd === "number") node.costUsd = (node.costUsd ?? 0) + event.costUsd
     }
+    if (kind === "agent.spawned") {
+      const key = `${String(event.task)}·${String(event.role)}·R${String(event.round)}`
+      lanes.set(key, { key, task: String(event.task), role: String(event.role), round: Number(event.round ?? 1), alive: true, feed: [] })
+    }
+    if (kind === "agent.result") {
+      const key = `${String(event.task)}·${String(event.role)}·R${String(event.round)}`
+      lanes.get(key) && (lanes.get(key)!.alive = false)
+    }
     if (kind === "agent.activity") {
       const task = String(event.task)
+      const key = `${task}·${String(event.role)}·R${String(event.round)}`
+      lanes.get(key)?.feed.push(event)
       const node = nodes.get(task) ?? { task, status: "running" as const }
       node.lastActivity = {
         ts,
@@ -140,6 +228,10 @@ export function buildMonitorState(runRoot: string): MonitorState {
     costUsd: finished?.costUsd ?? [...nodes.values()].reduce((sum, node) => sum + (node.costUsd ?? 0), 0),
     processAlive: pgrep !== undefined && pgrep.status === 0,
     nodes: [...nodes.values()].sort((left, right) => left.task.localeCompare(right.task)),
+    dag: buildDagView(runRoot, typeof run === "string" ? run : undefined, nodes),
+    agents: [...lanes.values()]
+      .sort((left, right) => (right.alive ? 1 : 0) - (left.alive ? 1 : 0) || right.key.localeCompare(left.key))
+      .map((lane) => ({ ...lane, feed: lane.feed.slice(-18) })),
     feed: feed.slice(-250),
     git: gitSnapshot(runRoot),
   }
@@ -171,12 +263,96 @@ const DASHBOARD = `<!doctype html>
   .done{color:#3fb950}.running{color:#d29922}.failed{color:#f85149}
   .muted{color:#8b949e}.feed div{padding:1px 0;border-bottom:1px solid #21262d}
   .thinking{color:#a371f7}.tool{color:#58a6ff}.text{color:#c9d1d9}
+  .lane{border:1px solid #30363d;border-radius:6px;margin-bottom:10px;background:#0d1117}
+  .lane-on{border-color:#d29922}.lane-off{opacity:.55}
+  .lane-head{padding:4px 8px;border-bottom:1px solid #21262d;font-size:12px}
+  .lane-feed{padding:4px 8px;max-height:220px;overflow:auto}
+  .lane.collapsed .lane-feed{display:none}
+  .lane-head{cursor:pointer;user-select:none}
+  .lane-head::after{content:"▾";float:right;color:#8b949e}
+  .lane.collapsed .lane-head::after{content:"▸"}
+  #dag{position:relative;overflow:auto}
+  #dag svg{position:absolute;top:0;left:0;pointer-events:none}
+  .chip{position:absolute;border:1px solid #30363d;border-radius:5px;padding:2px 6px;width:118px;background:#0d1117;z-index:1;cursor:pointer}
+  .chip .nm{font-weight:bold;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip .dt{color:#8b949e;font-size:10px;max-width:106px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip-selected{border-color:#58a6ff;box-shadow:0 0 0 1px #58a6ff}
+  .chip-done{border-color:#238636}.chip-done .nm{color:#3fb950}
+  .chip-running{border-color:#d29922}.chip-running .nm{color:#d29922}
+  .chip-failed{border-color:#f85149}.chip-failed .nm{color:#f85149}
+  .chip-pending{opacity:.55}
+  .pulse{color:#d29922;animation:blink 1.2s infinite}
+  @keyframes blink{50%{opacity:.3}}
   .banner-ok{background:#12331b;color:#3fb950;padding:8px;border-radius:6px;margin-bottom:12px}
   .banner-bad{background:#3d1214;color:#f85149;padding:8px;border-radius:6px;margin-bottom:12px}
 </style></head><body>
 <div id="app">loading…</div>
 <script>
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const app = document.getElementById("app");
+// Static skeleton built once; every tick only MUTATES text or APPENDS nodes,
+// so selections, scroll, and hover survive re-renders.
+app.innerHTML =
+  '<div id="banner"></div><h1 id="head"></h1><div class="sub" id="sub"></div>' +
+  '<div class="grid">' +
+  '<div class="card"><h2>DAG（绿=完成 · 黄=进行中 · 灰=未开始）</h2><div id="dag"></div></div>' +
+  '<div class="card"><h2>Claude 实例 <span id="laneHint" class="muted" style="font-weight:normal"></span></h2><div id="lanes"></div></div>' +
+  '</div>' +
+  '<div class="card" style="margin-top:16px"><h2>git main（最新落地在上）</h2><div class="feed" id="git"></div></div>';
+
+const laneEls = new Map();   // key -> {root, feed, head, ids:Set}
+const nodeEls = new Map();   // task -> {root, nm, dt, lvl}
+const gitIds = new Set();
+let dagLaid = false;
+let selectedTask = null;
+function applyLaneFilter() {
+  for (const [key, entry] of laneEls) {
+    entry.root.style.display = selectedTask !== null && key.split("·")[0] !== selectedTask ? "none" : "";
+  }
+}
+
+const evLine = (e) => {
+  const t = (e.ts || "").slice(11, 19);
+  if (e.kind === "agent.activity") return "<div><span class='muted'>" + t + "</span> <span class='" + e.activity + "'>[" + (e.tool || e.activity) + "]</span> " + esc((e.summary || "").slice(0, 120)) + "</div>";
+  if (e.kind === "node.started") return "<div><span class='muted'>" + t + "</span> ⟳ <b>" + esc(e.task) + "</b> 启动</div>";
+  if (e.kind === "node.finished") return "<div><span class='muted'>" + t + "</span> <span class='" + (e.ok ? "done" : "failed") + "'>" + (e.ok ? "✓" : "✗") + " " + esc(e.task) + "</span> " + esc((e.headSha || "").slice(0, 8)) + "</div>";
+  if (e.kind === "round.started") return "<div><span class='muted'>" + t + "</span> " + esc(e.task) + " 第 " + e.round + " 轮</div>";
+  if (e.kind === "round.finished") return "<div><span class='muted'>" + t + "</span> " + esc(e.task) + " R" + e.round + " " + (e.approved ? "<span class='done'>通过</span>" : "<span class='failed'>驳回</span>") + "</div>";
+  if (e.kind === "challenge") return "<div><span class='muted'>" + t + "</span> <span class='failed'>挑战契约 " + esc(e.clause) + "</span></div>";
+  return "<div><span class='muted'>" + t + " " + esc(e.kind) + "</span></div>";
+};
+
+function ensureLane(a) {
+  let entry = laneEls.get(a.key);
+  if (entry === undefined) {
+    const root = document.createElement("div");
+    root.className = "lane";
+    root.innerHTML = '<div class="lane-head"></div><div class="lane-feed"></div>';
+    entry = { root, feed: root.querySelector(".lane-feed"), head: root.querySelector(".lane-head"), ids: new Set() };
+    root.addEventListener("click", (event) => {
+      if (event.target.closest(".lane-feed")) return // let text selection work
+      root.classList.toggle("collapsed")
+    })
+    laneEls.set(a.key, entry);
+    document.getElementById("lanes").prepend(root);
+  }
+  entry.head.innerHTML =
+    (a.alive ? '<span class="pulse">●</span> ' : '<span class="muted">○</span> ') +
+    "<b>" + esc(a.task) + "</b> · " + esc(a.role) + " · R" + a.round;
+  entry.root.className = "lane " + (a.alive ? "lane-on" : "lane-off");
+  return entry;
+}
+
+function appendPinned(container, html, id) {
+  const pinned = container.scrollTop + container.clientHeight >= container.scrollHeight - 4;
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  const node = div.firstChild;
+  if (id !== undefined) node.dataset.id = id;
+  container.appendChild(node);
+  if (pinned) container.scrollTop = container.scrollHeight;
+}
+
 async function tick() {
   try {
     const s = await (await fetch("/api/state")).json();
@@ -184,29 +360,100 @@ async function tick() {
     const banner = s.finishedAt
       ? '<div class="' + (s.ok ? "banner-ok" : "banner-bad") + '">' + (s.ok ? "✓ conformance passed" : "✗ run failed") + " · $" + (s.costUsd ?? 0).toFixed(2) + "</div>"
       : "";
-    const nodes = s.nodes.map(n =>
-      "<tr><td class='" + n.status + "'>" + (n.status === "done" ? "✓" : n.status === "running" ? "⟳" : "✗") + " " + esc(n.task) +
-      (n.round ? " <span class='muted'>R" + n.round + "</span>" : "") + "</td><td>" +
-      (n.lastActivity ? "<span class='" + n.lastActivity.activity + "'>" + (n.lastActivity.tool || n.lastActivity.activity) + "</span> " + esc(n.lastActivity.summary.slice(0, 90)) : "") +
-      "</td><td class='muted'>" + (n.costUsd ? "$" + n.costUsd.toFixed(2) : "") + "</td></tr>").join("");
-    const feed = s.feed.slice(-80).reverse().map(e => {
-      const t = (e.ts || "").slice(11, 19);
-      if (e.kind === "agent.activity") return "<div><span class='muted'>" + t + " " + esc(e.task) + " R" + e.round + "</span> <span class='" + e.activity + "'>[" + (e.tool || e.activity) + "]</span> " + esc((e.summary || "").slice(0, 110)) + "</div>";
-      if (e.kind === "node.started") return "<div><span class='muted'>" + t + "</span> ⟳ <b>" + esc(e.task) + "</b> 启动</div>";
-      if (e.kind === "node.finished") return "<div><span class='muted'>" + t + "</span> <span class='" + (e.ok ? "done" : "failed") + "'>" + (e.ok ? "✓" : "✗") + " " + esc(e.task) + "</span> " + esc((e.headSha || "").slice(0, 8)) + "</div>";
-      if (e.kind === "round.started") return "<div><span class='muted'>" + t + "</span> " + esc(e.task) + " 第 " + e.round + " 轮</div>";
-      if (e.kind === "round.finished") return "<div><span class='muted'>" + t + "</span> " + esc(e.task) + " R" + e.round + " " + (e.approved ? "<span class='done'>通过</span>" : "<span class='failed'>驳回</span>") + "</div>";
-      if (e.kind === "challenge") return "<div><span class='muted'>" + t + "</span> <span class='failed'>挑战契约 " + esc(e.clause) + "</span></div>";
-      return "<div><span class='muted'>" + t + " " + esc(e.kind) + "</span></div>";
-    }).join("");
-    const git = s.git.slice(-25).reverse().map(g => "<div><span class='muted'>" + esc(g.sha) + "</span> " + esc(g.subject) + "</div>").join("");
-    document.getElementById("app").innerHTML = banner +
-      "<h1>" + esc(s.run || s.runRoot) + " · " + (s.processAlive ? "运行中" : "已结束") + " · " + mins + " min · $" + (s.costUsd || 0).toFixed(2) + " · 节点 " + s.nodes.filter(n => n.status === "done").length + "/" + s.nodes.length + "</h1>" +
-      '<div class="sub">' + esc(s.runRoot) + "</div>" +
-      '<div class="grid"><div class="card"><h2>DAG 节点</h2><table>' + nodes + "</table></div>" +
-      '<div class="card"><h2>活动流</h2><div class="feed">' + (feed || "暂无事件") + "</div></div></div>" +
-      '<div class="card" style="margin-top:16px"><h2>git main（最新落地在上）</h2><div class="feed">' + (git || "暂无提交") + "</div></div>";
-  } catch (e) { document.getElementById("app").textContent = "monitor 不可达: " + e; }
+    const bannerEl = document.getElementById("banner");
+    if (bannerEl.innerHTML !== banner) bannerEl.innerHTML = banner;
+    const head = esc(s.run || s.runRoot) + " · " + (s.processAlive ? "运行中" : "已结束") + " · " + mins + " min · $" + (s.costUsd || 0).toFixed(2) +
+      " · 节点 " + s.nodes.filter(n => n.status === "done").length + "/" + s.nodes.length + " · " + s.agents.filter(a => a.alive).length + " 个 Claude 并行";
+    const headEl = document.getElementById("head");
+    if (headEl.textContent !== head) headEl.textContent = head;
+    const subEl = document.getElementById("sub");
+    if (subEl.textContent !== s.runRoot) subEl.textContent = s.runRoot;
+
+    const dagEl = document.getElementById("dag");
+    if (s.dag.length > 0 && !dagLaid) {
+      dagLaid = true;
+      const COL = 148, ROW = 58, W = 118, H = 44, PAD = 4;
+      const pos = new Map();
+      const rows = Math.max(...s.dag.map((l) => l.length));
+      s.dag.forEach((level, li) => level.forEach((n, ni) => {
+        pos.set(n.task, { x: PAD + li * COL, y: PAD + ni * ROW + (rows - level.length) * ROW / 2 });
+      }));
+      const width = PAD * 2 + s.dag.length * COL - (COL - W), height = PAD * 2 + rows * ROW - (ROW - H);
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("width", width); svg.setAttribute("height", height);
+      const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+      defs.innerHTML = '<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#30363d"/></marker>';
+      svg.appendChild(defs);
+      const edgeByTarget = new Map();
+      for (const level of s.dag) for (const n of level) {
+        for (const dep of n.dependsOn) {
+          const a = pos.get(dep), b = pos.get(n.task);
+          if (!a || !b) continue;
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x - 4, y2 = b.y + H / 2;
+          const mid = (x1 + x2) / 2;
+          path.setAttribute("d", "M" + x1 + "," + y1 + " C" + mid + "," + y1 + " " + mid + "," + y2 + " " + x2 + "," + y2);
+          path.setAttribute("fill", "none"); path.setAttribute("stroke", "#30363d");
+          path.setAttribute("marker-end", "url(#arr)");
+          svg.appendChild(path);
+          edgeByTarget.set(n.task, [...(edgeByTarget.get(n.task) ?? []), path]);
+        }
+      }
+      dagEl.style.minHeight = height + "px"; dagEl.style.minWidth = width + "px";
+      dagEl.appendChild(svg);
+      for (const [task, pt] of pos) {
+        const root = document.createElement("div");
+        root.dataset.task = task;
+        root.className = "chip chip-pending";
+        root.innerHTML = "<div class='nm'></div><div class='dt'></div>";
+        root.style.left = pt.x + "px"; root.style.top = pt.y + "px";
+        root.addEventListener("click", () => {
+          selectedTask = selectedTask === task ? null : task;
+          for (const [t, chip] of nodeEls) chip.root.classList.toggle("chip-selected", t === selectedTask);
+          applyLaneFilter();
+        });
+        nodeEls.set(task, { root, nm: root.querySelector(".nm"), dt: root.querySelector(".dt"), edges: edgeByTarget.get(task) ?? [] });
+        dagEl.appendChild(root);
+      }
+    }
+    for (const level of s.dag) for (const n of level) {
+      const chip = nodeEls.get(n.task);
+      if (chip === undefined) continue;
+      const nm = (n.status === "done" ? "✓ " : n.status === "running" ? "⟳ " : n.status === "failed" ? "✗ " : "") + n.task + (n.round ? " R" + n.round : "");
+      if (chip.nm.textContent !== nm) chip.nm.textContent = nm;
+      const dt = ((n.activity || "") + (n.costUsd ? " · $" + n.costUsd.toFixed(2) : "")).trim();
+      if (chip.dt.textContent !== dt) { chip.dt.textContent = dt; chip.dt.title = dt; }
+      const cls = "chip chip-" + n.status;
+      if (chip.root.className !== cls) chip.root.className = cls;
+      const edgeStroke = n.status === "running" ? "#d29922" : n.status === "done" ? "#238636" : "#30363d";
+      for (const edge of chip.edges) if (edge.getAttribute("stroke") !== edgeStroke) edge.setAttribute("stroke", edgeStroke);
+    }
+
+    for (const a of s.agents.slice(0, 8)) {
+      const entry = ensureLane(a);
+      for (const e of a.feed) {
+        const id = (e.ts || "") + ":" + (e.summary || "").slice(0, 24);
+        if (entry.ids.has(id)) continue;
+        entry.ids.add(id);
+        appendPinned(entry.feed, evLine(e), id);
+      }
+      while (entry.feed.children.length > 18) { entry.feed.removeChild(entry.feed.firstChild); entry.ids.delete(entry.feed.firstChild?.dataset.id || ""); }
+    }
+    const hint = selectedTask !== null ? "· 仅显示 " + selectedTask : "· 点击左图节点筛选";
+    const hintEl = document.getElementById("laneHint");
+    if (hintEl.textContent !== hint) hintEl.textContent = hint;
+    applyLaneFilter();
+
+    const gitEl = document.getElementById("git");
+    for (const g of s.git) {
+      if (gitIds.has(g.sha)) continue;
+      gitIds.add(g.sha);
+      const div = document.createElement("div");
+      div.innerHTML = "<span class='muted'>" + esc(g.sha) + "</span> " + esc(g.subject);
+      div.dataset.sha = g.sha;
+      gitEl.appendChild(div);
+    }
+  } catch (e) { document.getElementById("head").textContent = "monitor 不可达: " + e; }
 }
 tick(); setInterval(tick, 2000);
 </script></body></html>

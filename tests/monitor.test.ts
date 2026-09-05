@@ -4,7 +4,7 @@ import * as http from "node:http"
 import * as os from "node:os"
 import * as path from "node:path"
 import { openEventLog } from "@spec/execution"
-import { buildMonitorState, startMonitorServer } from "../packages/cli/src/monitor"
+import { buildDagLevels, buildMonitorState, startMonitorServer } from "../packages/cli/src/monitor"
 
 async function get(port: number, url: string): Promise<string> {
   return await new Promise((resolve, reject) => {
@@ -23,7 +23,10 @@ describe("spec monitor", () => {
     log.emit({ kind: "run.started", run: "smoke-x", shots: ["shot-1"] })
     log.emit({ kind: "node.started", task: "router:Venue" })
     log.emit({ kind: "round.started", task: "router:Venue", round: 1 })
+    log.emit({ kind: "agent.spawned", task: "router:Venue", round: 1, role: "implementation", command: "claude …" })
+    log.emit({ kind: "agent.spawned", task: "router:Booking", round: 1, role: "implementation", command: "claude …" })
     log.emit({ kind: "agent.activity", task: "router:Venue", round: 1, role: "implementation", activity: "tool", tool: "Edit", summary: "app/routers/venue.py" })
+    log.emit({ kind: "agent.activity", task: "router:Booking", round: 1, role: "implementation", activity: "thinking", summary: "先看 guard" })
     log.emit({ kind: "agent.result", task: "router:Venue", round: 1, role: "implementation", ok: true, costUsd: 0.3, turns: 12 })
     log.emit({ kind: "round.finished", task: "router:Venue", round: 1, approved: true })
     log.emit({ kind: "node.finished", task: "router:Venue", ok: true, headSha: "ab12cd34" })
@@ -35,6 +38,15 @@ describe("spec monitor", () => {
     expect(state.nodes.find((node) => node.task === "router:Booking")?.status).toBe("running")
     expect(state.run).toBe("smoke-x")
     expect(state.feed.length).toBeGreaterThanOrEqual(6)
+    // per-instance lanes: two parallel agents, one activity each
+    const venueLane = state.agents.find((lane) => lane.task === "router:Venue")
+    const bookingLane = state.agents.find((lane) => lane.task === "router:Booking")
+    expect(venueLane?.feed).toHaveLength(1)
+    expect(bookingLane?.feed[0]).toMatchObject({ activity: "thinking" })
+    // Venue's agent.result (emitted later in the fixture) closed its lane;
+    // Booking's agent is still running.
+    expect(venueLane?.alive).toBe(false)
+    expect(state.agents.filter((lane) => lane.alive)).toHaveLength(1)
   })
 
   it("serves the dashboard and the state API", async () => {
@@ -54,5 +66,23 @@ describe("spec monitor", () => {
     } finally {
       server.close()
     }
+  })
+})
+
+describe("spec monitor DAG levels", () => {
+  it("groups plan tasks into dependency levels, roots first", () => {
+    const levels = buildDagLevels([
+      { id: "conformance", dependsOn: ["router-A", "router-B"] },
+      { id: "project", dependsOn: [] },
+      { id: "models", dependsOn: ["project"] },
+      { id: "router-A", dependsOn: ["models"] },
+      { id: "router-B", dependsOn: ["models"] },
+    ])
+    expect(levels).toEqual([
+      ["project"],
+      ["models"],
+      ["router-A", "router-B"],
+      ["conformance"],
+    ])
   })
 })

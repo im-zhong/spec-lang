@@ -6,11 +6,12 @@ import { commandFailure, type ProcessResult } from "./process"
 import {
   parseAgentResultLine,
   parseAgentStreamLine,
+  parsePartialDelta,
   type EventLog,
 } from "./events"
 
 export const DEFAULT_AGENT_COMMAND = [
-  "claude", "-p", "--output-format", "stream-json", "--verbose", "--safe-mode", "--no-session-persistence",
+  "claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--safe-mode", "--no-session-persistence",
   "--permission-mode", "acceptEdits",
   "--allowedTools",
   "Read", "Glob", "Grep", "LS", "Edit", "Write",
@@ -20,7 +21,7 @@ export const DEFAULT_AGENT_COMMAND = [
 ]
 
 export const DEFAULT_REVIEWER_COMMAND = [
-  "claude", "-p", "--output-format", "stream-json", "--verbose", "--safe-mode", "--no-session-persistence",
+  "claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--safe-mode", "--no-session-persistence",
   "--permission-mode", "plan", "--allowedTools",
   "Read", "Glob", "Grep", "LS", "Bash(uv:*)", "Bash(python:*)", "Bash(python3:*)",
   "Bash(.venv/bin/python:*)", "Bash(pytest:*)", "Bash(ls:*)", "Bash(cat:*)",
@@ -241,6 +242,24 @@ export async function executeAgentTask(
     prompt: string,
   ): Promise<ProcessResult> => {
     events?.emit({ kind: "agent.spawned", task: task.id, round, role, command: `${command.slice(0, 4).join(" ")} …` })
+    let deltaBuffer = ""
+    let deltaKind: "thinking" | "text" = "thinking"
+    let lastFlush = 0
+    const flushDelta = (force: boolean) => {
+      const now = Date.now()
+      if (!force && (now - lastFlush < 1500 || deltaBuffer.trim() === "")) return
+      if (deltaBuffer.trim() === "") return
+      events?.emit({
+        kind: "agent.activity",
+        task: task.id,
+        round,
+        role,
+        activity: deltaKind,
+        summary: deltaBuffer.replace(/\s+/g, " ").slice(-400),
+      })
+      deltaBuffer = ""
+      lastFlush = now
+    }
     const result = await runner.agent(command, prompt, options.timeoutMs, (line) => {
       const envelope = parseAgentResultLine(line)
       if (envelope !== undefined) {
@@ -256,8 +275,21 @@ export async function executeAgentTask(
         })
         return
       }
+      const partial = parsePartialDelta(line)
+      if (partial !== undefined) {
+        // Reset the buffer when the block kind switches (thinking → text)
+        // or the deltas would concatenate across blocks.
+        if (deltaKind !== partial.kind) {
+          flushDelta(true)
+          deltaKind = partial.kind
+        }
+        deltaBuffer += partial.text
+        flushDelta(false)
+        return
+      }
       const distilled = parseAgentStreamLine(line)
       if (distilled?.kind === "agent.activity") {
+        flushDelta(true)
         events?.emit({ ...distilled, task: task.id, round, role })
       }
     })

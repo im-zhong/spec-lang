@@ -155,7 +155,7 @@ function computeWaves(tasks, byId) {
 
 function claudeCommand(permissionMode, allowedTools, agent) {
   const args = [
-    "-p", "--output-format", "json", "--safe-mode", "--no-session-persistence",
+    "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--safe-mode", "--no-session-persistence",
     "--permission-mode", permissionMode,
     "--model", agent.model, "--effort", agent.effort, "--max-turns", String(agent.maxTurns),
     "--allowedTools", ...allowedTools,

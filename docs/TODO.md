@@ -79,6 +79,13 @@ ONE test primitive** — every future form compiles down to the same
   unify vocabulary). Currently clauses+oracle exist (pins/files/import/
   screen-path), examples do not.
 
+## 0. Known open defects (control plane)
+
+- [ ] **Local `--resume` rebuilds a plan whose root base references the
+  advanced main** and correctly trips the immutable-plan check — local
+  resume needs the base pinned to the run's bootstrap root (the plan-read
+  64 MiB bound fix landed 2026-09-05; the base derivation did not).
+
 ## 5. Validation runs (spend money deliberately)
 
 - [ ] **First paid validation of the clause-driven loop**: booking
