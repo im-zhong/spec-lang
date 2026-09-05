@@ -254,6 +254,16 @@ function evaluateExpression(expr: ts.Expression, env: Env): unknown {
     return evaluateCall(expr, env)
   }
 
+  // Unary minus over a numeric literal is pure data (e.g. delta: -1),
+  // deterministic and side-effect free — the only unary form admitted.
+  if (
+    ts.isPrefixUnaryExpression(expr) &&
+    expr.operator === ts.SyntaxKind.MinusToken &&
+    ts.isNumericLiteral(expr.operand)
+  ) {
+    return -Number(expr.operand.text)
+  }
+
   fail(
     env,
     expr,
