@@ -7,6 +7,9 @@ export interface AgentExecutionPlanInput {
   defaultBranch?: string
   rootBaseSha: string
   branchPrefix?: string
+  /** ≥2 when retrying from a failed node after a compiler defect fix;
+   * each version publishes its own immutable plan ref. */
+  planVersion?: number
   environment: AgentExecutionPlan["environment"]
   acceptance: AgentExecutionPlan["acceptance"]
   mergePolicy?: AgentExecutionPlan["mergePolicy"]
@@ -127,6 +130,7 @@ export function taskBaseRef(plan: AgentExecutionPlan, taskId: string): string {
 }
 
 /** Immutable GitHub control-plane ref containing only canonical plan.json. */
-export function agentExecutionPlanRef(plan: Pick<AgentExecutionPlan, "branchPrefix" | "runId">): string {
-  return `${plan.branchPrefix}/${plan.runId}/plan`
+export function agentExecutionPlanRef(plan: Pick<AgentExecutionPlan, "branchPrefix" | "runId" | "planVersion">): string {
+  const version = plan.planVersion ?? 1
+  return `${plan.branchPrefix}/${plan.runId}/plan${version > 1 ? `.v${version}` : ""}`
 }

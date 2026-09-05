@@ -455,6 +455,8 @@ export interface AgentExecutionPlan {
   /** Immutable root Git commit from which the run is reproducible. */
   rootBaseSha: string
   branchPrefix: string
+  /** ≥2 when retrying from a failed node after a compiler defect fix. */
+  planVersion?: number
   environment: AgentExecutionEnvironment
   acceptance: AgentExecutionAcceptance
   mergePolicy: AgentExecutionMergePolicy

@@ -281,11 +281,21 @@ function seedRow(
     fields[field.name] = sampleData(field, seq, constraints.get(field.name) ?? [], options.invertGuard === true)
   }
   if (fields.id === undefined) fields.id = nextUuid()
+  // The auth principal's implicit password column is NOT NULL; direct
+  // table inserts must carry a placeholder (the runner replaces the
+  // auth block's hash at runtime; fixture rows need any legal string).
+  if (bp.auth?.principal === entity.name && !fields[bp.auth.passwordColumn]) {
+    fields[bp.auth.passwordColumn] = "placeholder-not-used"
+  }
   const row: Record<string, unknown> = {}
   for (const [name, value] of Object.entries(fields)) {
     const field = entity.fields.find((f) => f.name === name)
     row[field ? field.column : name] = value
   }
+  // Explicit created_at: wall-clock defaults would stamp the auth
+  // principal (seeded first) earlier than fixture rows, breaking list
+  // probes' firstId. Fixtures get 2020, the principal gets 2019.
+  if (row.created_at === undefined) row.created_at = "2020-01-01T00:00:00"
   given.push({ table: entity.table, as: options.as, row })
   return fields
 }
@@ -929,6 +939,9 @@ function routerBehavior(bp: BackendBlueprint, taskId: string): Record<string, un
     const principal = bp.entities.find((e) => e.name === bp.auth!.principal)!
     const authGiven: BehaviorTriple["given"] = []
     const view = seedRow(bp, principal, authGiven, nextUuid, seq, { as: "principal" })
+    if (authGiven[0] !== undefined && authGiven[0].row.created_at === undefined) {
+      authGiven[0].row.created_at = "2019-01-01T00:00:00"
+    }
     authBlock = {
       table: principalTable,
       row: authGiven[0].row,
@@ -1170,6 +1183,14 @@ def _check_database(contract):
         assert database.normalize_database_url(value) == expected, (value, expected)
     engine = database.create_engine_from_url("sqlite://")
     assert engine.dialect.name == "sqlite"
+    # session_dependency(factory) must RETURN a callable dependency — a
+    # generator function here silently breaks every get_db override.
+    factory = database.create_session_factory(engine)
+    dependency = database.session_dependency(factory)
+    assert callable(dependency), (
+        "session_dependency(factory) returned a non-callable (generator?): "
+        "it must RETURN a yielding dependency closure, not BE one"
+    )
     engine.dispose()
 
 

@@ -47,6 +47,10 @@ export interface GitHubGenerationPlanInput {
   requiredChecks: string[]
   mergePolicy?: AgentExecutionMergePolicy
   finalMaterializations?: CompilerMaterialization[]
+  /** Retry from a failed node: keep landed predecessors, re-run from here down. */
+  retryFrom?: string
+  /** Plan version for immutable-ref versioning (auto: retryFrom ⇒ ≥2). */
+  planVersion?: number
 }
 
 export interface GitHubGenerationRunOptions {
@@ -68,6 +72,10 @@ export interface GitHubGenerationRunOptions {
   /** Telemetry identity: the run id and shot label stamped onto every event. */
   runId?: string
   shot?: string
+  /** Retry from a failed node: reuse landed heads, re-run from here down. */
+  retryFrom?: string
+  /** Plan version for immutable-ref versioning (≥2 on retry). */
+  planVersion?: number
 }
 
 function safeTaskId(id: string): string {
@@ -95,7 +103,40 @@ function inTarget(root: string, relative: string): string {
 /** Convert one compiler-owned shot DAG without changing any of its edges. */
 export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): AgentExecutionPlan {
   const directory = targetDirectory(input.targetDirectory)
-  const ids = new Map(input.shot.tasks.map((task) => [task.id, safeTaskId(task.id)]))
+
+  // Retry-from: keep only the failed node and its transitive descendants.
+  // Landed predecessors are reused via their published task heads; their
+  // task entries stay in the plan (so dependency edges resolve) but carry
+  // no loop (they materialize nothing new and run no agent).
+  let activeTasks = input.shot.tasks
+  if (input.retryFrom !== undefined) {
+    const retryId = safeTaskId(input.retryFrom)
+    const descendants = new Set<string>([retryId])
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const task of input.shot.tasks) {
+        const normalized = safeTaskId(task.id)
+        if (descendants.has(normalized)) continue
+        if (task.dependsOn.some((dep) => descendants.has(safeTaskId(dep)))) {
+          descendants.add(normalized)
+          grew = true
+        }
+      }
+    }
+    activeTasks = input.shot.tasks.map((task) => {
+      const normalized = safeTaskId(task.id)
+      if (!descendants.has(normalized)) {
+        // Already landed: strip the loop so no agent runs, keep the task
+        // (and its scope) so children's integration bases resolve.
+        return { ...task, loop: undefined, acceptanceCommands: [] }
+      }
+      return task
+    })
+  }
+
+  const effectiveTasks = activeTasks
+  const ids = new Map(effectiveTasks.map((task) => [task.id, safeTaskId(task.id)]))
   if (new Set(ids.values()).size !== ids.size) throw new Error("generation task ids collide after Git ref normalization")
   const reserved = new Set(["compiler-seed", "conformance", ...(input.finalMaterializations ?? []).map((item) => safeTaskId(item.id))])
   const collision = [...ids.values()].find((id) => reserved.has(id))
@@ -127,7 +168,7 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
     })
   }
 
-  for (const task of input.shot.tasks) {
+  for (const task of effectiveTasks) {
     const taskDirectory = task.workingDirectory
       ? inTarget(directory, task.workingDirectory)
       : directory
@@ -174,8 +215,8 @@ export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): Ag
     })
   }
 
-  const generationSinks = input.shot.tasks
-    .filter((candidate) => !input.shot.tasks.some((task) => task.dependsOn.includes(candidate.id)))
+  const generationSinks = effectiveTasks
+    .filter((candidate) => !effectiveTasks.some((task) => task.dependsOn.includes(candidate.id)))
     .map((task) => ids.get(task.id)!)
     .sort()
   tasks.push({

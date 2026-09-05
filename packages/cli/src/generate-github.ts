@@ -35,6 +35,8 @@ export interface GitHubGenerateOptions {
   mergePolicy: AgentExecutionMergePolicy
   shotSpec: ShotSpec
   ir: SpecIR
+  /** Retry from a failed node after a compiler fix (requires resume). */
+  retryFrom?: string
 }
 
 export interface GitHubCheckout {
@@ -491,6 +493,8 @@ export async function runGitHubGenerate(options: GitHubGenerateOptions): Promise
     assertTargetIsTracked(repository.localRoot, target)
     const plan = createGitHubGenerationPlan({
       shot: options.shotSpec,
+      ...(options.retryFrom !== undefined ? { retryFrom: options.retryFrom } : {}),
+      ...(options.retryFrom !== undefined ? { planVersion: 2 } : {}),
       runId,
       repository: repository.repository,
       rootBaseSha: repository.headSha,
