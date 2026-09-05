@@ -29,6 +29,15 @@ ONE test primitive** — every future form compiles down to the same
   green against the smoke run's real generated cache/blob modules and
   mutation-killed (redis TTL +1, presign TTL +1).
 
+## 0.5 Prompt protocol hardening
+
+- [ ] **Challenge-trigger clarity.** v6's app node burned all 3 loop rounds
+  on a clause only satisfiable by editing a compiler-owned DO-NOT-EDIT file
+  outside its scope — the correct move was a round-1 `{"challenge":...}`.
+  The kernel should state explicitly: "a clause that can only be satisfied
+  by editing a DO-NOT-EDIT or out-of-scope file is a challenge, not a
+  workaround."
+
 ## 2. Test vocabulary — input-side language (sugar over the primitive)
 
 - [ ] **`sample(n, seed)` = fuzz/property.** Requires the runtime sampler
@@ -59,8 +68,8 @@ ONE test primitive** — every future form compiles down to the same
 
 ## 4. Agent-surface shrink (static maximization)
 
-- [x] **Walking-skeleton topology** (2026-09-05): the app node moved from
-  sink to early skeleton (deps models+database only), the registry became
+- [x] **Walking-skeleton topology** (2026-09-05): the app node lands as
+  STEP TWO (deps project only), the registry became
   detection-based (pinned order, import-on-existence), and infra adapters
   wire by detection. The app boots first and every router landing grows
   the live route set (pairs with `spec preview`); strict equality stays
@@ -78,6 +87,35 @@ ONE test primitive** — every future form compiles down to the same
   frontend task + the oracle-v2 equivalent (behavior.json already exists;
   unify vocabulary). Currently clauses+oracle exist (pins/files/import/
   screen-path), examples do not.
+
+## 6. Monitor & preview platform (found while dogfooding, 2026-09-05)
+
+- [ ] **App-oracle adapter-probe blind spot.** v7 app R1 passed the
+  skeleton-state oracle with WRONG adapter symbol names (probed
+  `InMemoryCache` vs pinned `InMemoryCacheBackend`) — the mismatch only
+  detonates after cache/messaging land; the REVIEWER caught it by
+  cross-checking dag.json. Fix: the app oracle should materialize minimal
+  fake `app.cache`/`app.messaging`/`app.blob` modules into a temp dir and
+  verify detection wiring actually constructs the pinned symbols.
+- [ ] **Process-protocol skew during live runs.** Every telemetry/emission
+  change (partial flag, full text, usage events) only applies to processes
+  spawned AFTER a rebuild — running generators keep old semantics for
+  hours. Options: agent command reads protocol version from env;
+  or accept skew and make the monitor version-aware (it already
+ heuristically folds unmarked runs; usage/rate simply absent for old runs).
+- [ ] **Generated frontend needs gates.** The dashboard was generated as
+  an inline template string and shipped five first-draft bugs (selector
+  never matching, `const` spliced into an expression chain, UTC rendered
+  raw, silent caps, scroll reset on re-render). Gates now: `node --check`
+  on the extracted script; missing: a real-DOM smoke test (jsdom) and a
+  "selector hits" assertion for every class the script queries.
+- [ ] **Monitor state should be incremental (`?since=`)** — today every
+  poll re-reads and re-sends the full event file (~1.5 MB at 90 min;
+  fine on loopback, wrong for remote/long runs).
+- [ ] **`--effort low` A/B.** Thinking is 68–85% of node time on big
+  infra nodes; one low-effort shot vs medium would measure repair-round
+  risk against wall-clock savings.
+- [ ] **SSE instead of 2s polling** for the activity feed (latency + load).
 
 ## 0. Known open defects (control plane)
 
