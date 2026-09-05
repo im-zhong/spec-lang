@@ -7,6 +7,7 @@ import {
   parseAgentResultLine,
   parseAgentStreamLine,
   parsePartialDelta,
+  parseTokenUpdate,
   type EventLog,
 } from "./events"
 
@@ -248,6 +249,7 @@ export async function executeAgentTask(
     let deltaBuffer = ""
     let deltaKind: "thinking" | "text" = "thinking"
     let lastFlush = 0
+    let lastUsageFlush = 0
     const flushDelta = (reset: boolean) => {
       const now = Date.now()
       if (deltaBuffer.trim() === "") return
@@ -267,6 +269,7 @@ export async function executeAgentTask(
     const result = await runner.agent(command, prompt, options.timeoutMs, (line) => {
       const envelope = parseAgentResultLine(line)
       if (envelope !== undefined) {
+        const usage = envelope.usage as Record<string, unknown> | undefined
         events?.emit({
           kind: "agent.result",
           task: task.id,
@@ -276,7 +279,24 @@ export async function executeAgentTask(
           ...(typeof envelope.num_turns === "number" ? { turns: envelope.num_turns } : {}),
           ...(typeof envelope.total_cost_usd === "number" ? { costUsd: envelope.total_cost_usd } : {}),
           ...(typeof envelope.duration_ms === "number" ? { durationMs: envelope.duration_ms } : {}),
+          ...(usage !== undefined && typeof usage.input_tokens === "number" ? {
+            usage: {
+              inputTokens: usage.input_tokens,
+              outputTokens: typeof usage.output_tokens === "number" ? usage.output_tokens : 0,
+              cacheReadTokens: typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : 0,
+              cacheCreationTokens: typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : 0,
+            },
+          } : {}),
         })
+        return
+      }
+      const usage = parseTokenUpdate(line)
+      if (usage !== undefined) {
+        const now = Date.now()
+        if (now - lastUsageFlush > 2000) {
+          lastUsageFlush = now
+          events?.emit({ kind: "agent.usage", task: task.id, round, role, ...usage })
+        }
         return
       }
       const partial = parsePartialDelta(line)

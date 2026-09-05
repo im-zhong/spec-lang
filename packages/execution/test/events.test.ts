@@ -5,6 +5,7 @@ import * as path from "node:path"
 import {
   openEventLog,
   parsePartialDelta,
+  parseTokenUpdate,
   parseAgentResultLine,
   parseAgentStreamLine,
   readEvents,
@@ -87,5 +88,14 @@ describe("agent stream telemetry", () => {
     // disabled log (no run root) is a no-op sink
     const off = openEventLog(undefined, { run: "r" })
     expect(() => off.emit({ kind: "log", message: "x" })).not.toThrow()
+  })
+})
+
+describe("token usage telemetry", () => {
+  it("parses message_delta usage (verified shape)", () => {
+    const line = JSON.stringify({ type: "stream_event", event: { type: "message_delta", usage: { input_tokens: 28978, output_tokens: 44, cache_read_input_tokens: 128 } } })
+    expect(parseTokenUpdate(line)).toEqual({ inputTokens: 28978, outputTokens: 44, cacheReadTokens: 128 })
+    expect(parseTokenUpdate(JSON.stringify({ type: "stream_event", event: { type: "message_start", usage: { input_tokens: 0, output_tokens: 0 } } }))).toBeUndefined()
+    expect(parseTokenUpdate("garbage")).toBeUndefined()
   })
 })

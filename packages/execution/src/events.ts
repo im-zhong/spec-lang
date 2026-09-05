@@ -27,9 +27,10 @@ export type GenerationEvent =
   | { kind: "round.finished"; task: string; round: number; approved: boolean }
   | { kind: "agent.spawned"; task: string; round: number; role: "implementation" | "reviewer"; command: string }
   | { kind: "agent.activity"; task: string; round: number; role: "implementation" | "reviewer"; activity: "thinking" | "tool" | "text"; tool?: string; summary: string; /** true = throttled delta flush, rendered as ONE live-updating line */ partial?: true; /** Untruncated block text for expand-on-click; bounded at 64 KiB — the only cap, protecting NDJSON line sanity. */ full?: string }
-  | { kind: "agent.result"; task: string; round: number; role: "implementation" | "reviewer"; ok: boolean; turns?: number; costUsd?: number; durationMs?: number }
+  | { kind: "agent.result"; task: string; round: number; role: "implementation" | "reviewer"; ok: boolean; turns?: number; costUsd?: number; durationMs?: number; usage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number } }
   | { kind: "challenge"; task: string; clause?: string }
   | { kind: "conformance.result"; ok: boolean; output?: string }
+  | { kind: "agent.usage"; task: string; round: number; role: "implementation" | "reviewer"; inputTokens: number; outputTokens: number; cacheReadTokens: number }
   | { kind: "log"; message: string }
 
 /** Distilled from one `stream-json` stdout line; `undefined` = not interesting. */
@@ -95,6 +96,26 @@ export function parsePartialDelta(line: string): { kind: "thinking" | "text"; te
     return { kind: "thinking", text: event.delta.thinking }
   }
   return undefined
+}
+
+/** Token usage from a message_delta event (verified shape: cumulative for
+ * the current message; input_tokens includes the whole conversation turn). */
+export function parseTokenUpdate(line: string): { inputTokens: number; outputTokens: number; cacheReadTokens: number } | undefined {
+  try {
+    const parsed = JSON.parse(line) as Record<string, unknown>
+    if (parsed.type !== "stream_event") return undefined
+    const event = parsed.event as { type?: string; usage?: Record<string, unknown> } | undefined
+    if (event?.type !== "message_delta" || event.usage === undefined) return undefined
+    const usage = event.usage
+    if (typeof usage.output_tokens !== "number") return undefined
+    return {
+      inputTokens: typeof usage.input_tokens === "number" ? usage.input_tokens : 0,
+      outputTokens: usage.output_tokens,
+      cacheReadTokens: typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : 0,
+    }
+  } catch {
+    return undefined
+  }
 }
 
 /** The final `result` payload of a stream (same shape as --output-format json). */

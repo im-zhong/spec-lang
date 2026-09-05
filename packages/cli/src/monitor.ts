@@ -35,6 +35,8 @@ export interface AgentLane {
   alive: boolean
   /** ISO ts of agent.spawned — the lane's position in launch order. */
   spawnedAt: string
+  /** Latest token usage and the measured output rate. */
+  usage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number; outputTokS: number }
   feed: Array<Record<string, unknown>>
   /** The currently-streaming activity, rendered as ONE refreshing line. */
   live?: Record<string, unknown>
@@ -73,6 +75,8 @@ export interface MonitorState {
   finishedAt?: string
   ok?: boolean
   costUsd: number
+  /** Aggregate token usage across all agents (from agent.result usage). */
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number }
   processAlive: boolean
   nodes: MonitorNode[]
   /** Dependency levels of the full plan (all nodes, colored by status). */
@@ -158,6 +162,7 @@ export function buildMonitorState(runRoot: string): MonitorState {
   const events = readEvents(runRoot)
   const nodes = new Map<string, MonitorNode>()
   const lanes = new Map<string, AgentLane>()
+  const usageSamples = new Map<string, Array<{ ts: string; out: number }>>()
   const feed: Array<Record<string, unknown>> = []
   let startedAt: string | undefined
   let finished: { ts: string; ok: boolean; costUsd?: number } | undefined
@@ -197,6 +202,36 @@ export function buildMonitorState(runRoot: string): MonitorState {
     if (kind === "agent.spawned") {
       const key = `${String(event.task)}·${String(event.role)}·R${String(event.round)}`
       lanes.set(key, { key, task: String(event.task), role: String(event.role), round: Number(event.round ?? 1), alive: true, spawnedAt: ts, feed: [] })
+      usageSamples.set(key, [])
+    }
+    if (kind === "agent.usage") {
+      const key = `${String(event.task)}·${String(event.role)}·R${String(event.round)}`
+      const lane = lanes.get(key)
+      if (lane !== undefined) {
+        const samples = usageSamples.get(key) ?? []
+        samples.push({ ts, out: typeof event.outputTokens === "number" ? event.outputTokens : 0 })
+        usageSamples.set(key, samples.slice(-10))
+        const inTok = typeof event.inputTokens === "number" ? event.inputTokens : 0
+        const outTok = typeof event.outputTokens === "number" ? event.outputTokens : 0
+        const cacheTok = typeof event.cacheReadTokens === "number" ? event.cacheReadTokens : 0
+        let rate = 0
+        if (samples.length >= 2) {
+          const first = samples[0]!
+          const last = samples[samples.length - 1]!
+          const seconds = (new Date(last.ts).getTime() - new Date(first.ts).getTime()) / 1000
+          // output_tokens is cumulative PER MESSAGE; sum message-final deltas
+          // by only counting increases across samples.
+          let produced = 0
+          let prev = samples[0]!.out
+          for (const sample of samples.slice(1)) {
+            if (sample.out > prev) produced += sample.out - prev
+            else if (sample.out < prev) produced += sample.out // new message counter reset
+            prev = sample.out
+          }
+          rate = seconds > 0 ? Math.round(produced / seconds) : 0
+        }
+        lane.usage = { inputTokens: inTok, outputTokens: outTok, cacheReadTokens: cacheTok, outputTokS: rate }
+      }
     }
     if (kind === "agent.result") {
       const key = `${String(event.task)}·${String(event.role)}·R${String(event.round)}`
@@ -222,13 +257,26 @@ export function buildMonitorState(runRoot: string): MonitorState {
   }
 
   const run = events.find((event) => typeof event.run === "string")?.run
-  const pgrep = typeof run === "string" ? spawnSync("pgrep", ["-f", `--run-id ${run}`], { encoding: "utf8" }) : undefined
+  // NB: the pattern must NOT start with "-" — macOS pgrep eats it as an
+  // option and errors, making processAlive permanently false.
+  const pgrep = typeof run === "string" ? spawnSync("pgrep", ["-f", `run-id ${run}`], { encoding: "utf8" }) : undefined
+  const usageTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }
+  for (const event of events) {
+    if (event.kind !== "agent.result") continue
+    const usage = event.usage as Record<string, unknown> | undefined
+    if (usage === undefined) continue
+    usageTotals.inputTokens += typeof usage.inputTokens === "number" ? usage.inputTokens : 0
+    usageTotals.outputTokens += typeof usage.outputTokens === "number" ? usage.outputTokens : 0
+    usageTotals.cacheReadTokens += typeof usage.cacheReadTokens === "number" ? usage.cacheReadTokens : 0
+    usageTotals.cacheCreationTokens += typeof usage.cacheCreationTokens === "number" ? usage.cacheCreationTokens : 0
+  }
   return {
     runRoot,
     run: typeof run === "string" ? run : undefined,
     startedAt,
     finishedAt: finished?.ts,
     ok: finished?.ok,
+    usage: usageTotals,
     costUsd: finished?.costUsd ?? [...nodes.values()].reduce((sum, node) => sum + (node.costUsd ?? 0), 0),
     processAlive: pgrep !== undefined && pgrep.status === 0,
     nodes: [...nodes.values()].sort((left, right) => left.task.localeCompare(right.task)),
@@ -255,16 +303,28 @@ export function buildMonitorState(runRoot: string): MonitorState {
         // derive the live line from the trailing run/partial.
         const folded: Array<Record<string, unknown>> = []
         for (const event of lane.feed) {
-          if (event.partial === true) continue
+          if (String(event.summary ?? "").trim() === "") continue
           const streaming = (event.activity === "thinking" || event.activity === "text") && event.tool === undefined
           const previous = folded[folded.length - 1]
-          if (
-            streaming &&
-            previous !== undefined &&
-            previous.activity === event.activity &&
-            previous.tool === undefined
-          ) {
-            previous.summary = String(previous.summary ?? "") + " " + String(event.summary ?? "")
+          const sameRun = streaming && previous !== undefined && previous.activity === event.activity && previous.tool === undefined
+          if (event.partial === true) {
+            // Rolling-window flushes overlap (each carries the freshest
+            // tail of the same buffer); the LAST one supersedes the rest.
+            if (sameRun) previous.summary = event.summary
+            else folded.push({ ...event })
+            continue
+          }
+          if (sameRun) {
+            if (previous.partial === true) {
+              // A COMPLETE event supersedes the rolling-window flushes of
+              // the same block: replace it (the complete event carries the
+              // full text). Merging into the partial entry instead made the
+              // whole block invisible — the renderer skips partials.
+              folded[folded.length - 1] = { ...event }
+            } else {
+              // Old-protocol disjoint chunks concatenate into the block text.
+              previous.summary = String(previous.summary ?? "") + " " + String(event.summary ?? "")
+            }
             continue
           }
           folded.push({ ...event })
@@ -307,9 +367,10 @@ export function startMonitorServer(options: { runRoot: string; port: number }): 
 const DASHBOARD = `<!doctype html>
 <html><head><meta charset="utf-8"><title>spec monitor</title>
 <style>
-  body{background:#0d1117;color:#c9d1d9;font:13px/1.5 -apple-system,Menlo,monospace;margin:0;padding:16px}
+  body{background:#0d1117;color:#c9d1d9;font:13px/1.5 -apple-system,Menlo,monospace;margin:0;padding:16px;max-width:100vw;overflow-x:hidden}
+  .card{min-width:0}
   h1{font-size:15px;margin:0 0 4px} .sub{color:#8b949e;margin-bottom:12px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;width:100%;box-sizing:border-box}
   .card{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:12px}
   .card h2{font-size:12px;color:#8b949e;margin:0 0 8px;text-transform:uppercase}
   table{width:100%;border-collapse:collapse}td{padding:3px 6px 3px 0;vertical-align:top}
@@ -319,10 +380,13 @@ const DASHBOARD = `<!doctype html>
   .lane{border:1px solid #30363d;border-radius:6px;margin-bottom:10px;background:#0d1117}
   .lane-on{border-color:#d29922}.lane-off{opacity:.55}
   .lane-head{padding:4px 8px;border-bottom:1px solid #21262d;font-size:12px}
-  .lane-feed{padding:4px 8px;max-height:220px;overflow:auto}
-  .ev{cursor:default}
-  .ev.has-full{cursor:pointer}
-  .ev.has-full::after{content:" ⌄";color:#58a6ff}
+  .lane-feed{padding:4px 8px;max-height:420px;overflow:auto;scrollbar-width:thin}
+  .lane-feed::-webkit-scrollbar{width:8px}
+  .lane-feed::-webkit-scrollbar-thumb{background:#30363d;border-radius:4px}
+  .ev{cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .ev::after{content:" ⌄";color:#58a6ff}
+  .ev.open{white-space:normal}
+  .ev.open::after{content:" ⌃"}
   .ev.open .evfull{display:block}
   .evfull{display:none;white-space:pre-wrap;background:#0a0d12;border-left:2px solid #30363d;margin:2px 0 4px;padding:4px 6px;max-height:300px;overflow:auto;font-size:11px;color:#8b949e}
   .live{padding:3px 8px;border-top:1px dashed #30363d;color:#a371f7;font-size:11px;min-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -330,7 +394,8 @@ const DASHBOARD = `<!doctype html>
   .lane-head{cursor:pointer;user-select:none}
   .lane-head::after{content:"▾";float:right;color:#8b949e}
   .lane.collapsed .lane-head::after{content:"▸"}
-  #dag{position:relative;overflow:auto}
+  #dag{position:relative;overflow:auto;max-width:100%;max-height:70vh;box-sizing:border-box}
+  #dag svg{max-width:none}
   #dag svg{position:absolute;top:0;left:0;pointer-events:none}
   .chip{position:absolute;border:1px solid #30363d;border-radius:5px;padding:2px 6px;width:118px;background:#0d1117;z-index:1;cursor:pointer}
   .chip .nm{font-weight:bold;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -372,14 +437,15 @@ function applyLaneFilter() {
   }
 }
 
+const fmtTok = (n) => n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
 const evLine = (e) => {
   const t = loc(e.ts);
-  if (e.kind === "agent.activity") return "<div><span class='muted'>" + t + "</span> <span class='" + e.activity + "'>[" + (e.tool || e.activity) + "]</span> " + esc((e.summary || "").slice(0, 120)) + "</div>";
-  if (e.kind === "node.started") return "<div><span class='muted'>" + t + "</span> ⟳ <b>" + esc(e.task) + "</b> 启动</div>";
-  if (e.kind === "node.finished") return "<div><span class='muted'>" + t + "</span> <span class='" + (e.ok ? "done" : "failed") + "'>" + (e.ok ? "✓" : "✗") + " " + esc(e.task) + "</span> " + esc((e.headSha || "").slice(0, 8)) + "</div>";
-  if (e.kind === "round.started") return "<div><span class='muted'>" + t + "</span> " + esc(e.task) + " 第 " + e.round + " 轮</div>";
-  if (e.kind === "round.finished") return "<div><span class='muted'>" + t + "</span> " + esc(e.task) + " R" + e.round + " " + (e.approved ? "<span class='done'>通过</span>" : "<span class='failed'>驳回</span>") + "</div>";
-  if (e.kind === "challenge") return "<div><span class='muted'>" + t + "</span> <span class='failed'>挑战契约 " + esc(e.clause) + "</span></div>";
+  if (e.kind === "agent.activity") return "<div class='ev'><span class='muted'>" + t + "</span> <span class='" + e.activity + "'>[" + (e.tool || e.activity) + "]</span> <span class='evtext'>" + esc(e.summary || "") + "</span></div>";
+  if (e.kind === "node.started") return "<div class='ev'><span class='muted'>" + t + "</span> ⟳ <b>" + esc(e.task) + "</b> 启动</div>";
+  if (e.kind === "node.finished") return "<div class='ev'><span class='muted'>" + t + "</span> <span class='" + (e.ok ? "done" : "failed") + "'>" + (e.ok ? "✓" : "✗") + " " + esc(e.task) + "</span> " + esc((e.headSha || "").slice(0, 8)) + "</div>";
+  if (e.kind === "round.started") return "<div class='ev'><span class='muted'>" + t + "</span> " + esc(e.task) + " 第 " + e.round + " 轮</div>";
+  if (e.kind === "round.finished") return "<div class='ev'><span class='muted'>" + t + "</span> " + esc(e.task) + " R" + e.round + " " + (e.approved ? "<span class='done'>通过</span>" : "<span class='failed'>驳回</span>") + "</div>";
+  if (e.kind === "challenge") return "<div class='ev'><span class='muted'>" + t + "</span> <span class='failed'>挑战契约 " + esc(e.clause) + "</span></div>";
   return "<div><span class='muted'>" + t + " " + esc(e.kind) + "</span></div>";
 };
 
@@ -400,9 +466,12 @@ function ensureLane(a) {
     laneEls.set(a.key, entry);
     document.getElementById("lanes").prepend(root);
   }
+  const usageText = a.usage !== undefined
+    ? " <span class='muted'>↑" + fmtTok(a.usage.inputTokens + a.usage.cacheReadTokens) + " ↓" + fmtTok(a.usage.outputTokens) + " · " + a.usage.outputTokS + " t/s</span>"
+    : "";
   entry.head.innerHTML =
     (a.alive ? '<span class="pulse">●</span> ' : '<span class="muted">○</span> ') +
-    "<b>" + esc(a.task) + "</b> · " + esc(a.role) + " · R" + a.round;
+    "<b>" + esc(a.task) + "</b> · " + esc(a.role) + " · R" + a.round + usageText;
   entry.root.className = "lane " + (a.alive ? "lane-on" : "lane-off");
   return entry;
 }
@@ -413,14 +482,11 @@ function appendPinned(container, html, id, full) {
   div.innerHTML = html;
   const node = div.firstChild;
   if (id !== undefined) node.dataset.id = id;
-  if (full !== undefined && full !== "") {
-    node.classList.add("has-full");
-    const detail = document.createElement("div");
-    detail.className = "evfull";
-    detail.textContent = full;
-    node.appendChild(detail);
-    node.addEventListener("click", () => node.classList.toggle("open"));
-  }
+  const detail = document.createElement("div");
+  detail.className = "evfull";
+  detail.textContent = full !== undefined && full !== "" ? full : "";
+  node.appendChild(detail);
+  node.addEventListener("click", () => node.classList.toggle("open"));
   container.appendChild(node);
   if (pinned) container.scrollTop = container.scrollHeight;
 }
@@ -434,8 +500,10 @@ async function tick() {
       : "";
     const bannerEl = document.getElementById("banner");
     if (bannerEl.innerHTML !== banner) bannerEl.innerHTML = banner;
+    const dagAll = s.dag.length > 0 ? s.dag.flat() : s.nodes;
+    const dagDone = dagAll.filter(n => n.status === "done").length;
     const head = esc(s.run || s.runRoot) + " · " + (s.processAlive ? "运行中" : "已结束") + " · " + mins + " min · $" + (s.costUsd || 0).toFixed(2) +
-      " · 节点 " + s.nodes.filter(n => n.status === "done").length + "/" + s.nodes.length + " · " + s.agents.filter(a => a.alive).length + " 个 Claude 并行";
+      " · 节点 " + dagDone + "/" + dagAll.length + " · " + s.agents.filter(a => a.alive).length + " 个 Claude 并行";
     const headEl = document.getElementById("head");
     if (headEl.textContent !== head) headEl.textContent = head;
     const subEl = document.getElementById("sub");
@@ -444,13 +512,16 @@ async function tick() {
     const dagEl = document.getElementById("dag");
     if (s.dag.length > 0 && !dagLaid) {
       dagLaid = true;
-      const COL = 148, ROW = 58, W = 118, H = 44, PAD = 4;
+      // Top-down layout: each dependency level is a horizontal row; nodes
+      // in a level spread across columns. Fits the half-width column.
+      const COL = 128, ROW = 96, W = 118, H = 44, PAD = 4;
       const pos = new Map();
-      const rows = Math.max(...s.dag.map((l) => l.length));
+      const rows = s.dag.length;
+      const cols = Math.max(...s.dag.map((l) => l.length));
       s.dag.forEach((level, li) => level.forEach((n, ni) => {
-        pos.set(n.task, { x: PAD + li * COL, y: PAD + ni * ROW + (rows - level.length) * ROW / 2 });
+        pos.set(n.task, { x: PAD + ni * COL + (cols - level.length) * COL / 2, y: PAD + li * ROW });
       }));
-      const width = PAD * 2 + s.dag.length * COL - (COL - W), height = PAD * 2 + rows * ROW - (ROW - H);
+      const width = PAD * 2 + cols * COL - (COL - W), height = PAD * 2 + rows * ROW - (ROW - H);
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.setAttribute("width", width); svg.setAttribute("height", height);
       const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
@@ -462,16 +533,16 @@ async function tick() {
           const a = pos.get(dep), b = pos.get(n.task);
           if (!a || !b) continue;
           const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-          const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x - 4, y2 = b.y + H / 2;
-          const mid = (x1 + x2) / 2;
-          path.setAttribute("d", "M" + x1 + "," + y1 + " C" + mid + "," + y1 + " " + mid + "," + y2 + " " + x2 + "," + y2);
+          const x1 = a.x + W / 2, y1 = a.y + H, x2 = b.x + W / 2, y2 = b.y - 4;
+          const mid = (y1 + y2) / 2;
+          path.setAttribute("d", "M" + x1 + "," + y1 + " C" + x1 + "," + mid + " " + x2 + "," + mid + " " + x2 + "," + y2);
           path.setAttribute("fill", "none"); path.setAttribute("stroke", "#30363d");
           path.setAttribute("marker-end", "url(#arr)");
           svg.appendChild(path);
           edgeByTarget.set(n.task, [...(edgeByTarget.get(n.task) ?? []), path]);
         }
       }
-      dagEl.style.minHeight = height + "px"; dagEl.style.minWidth = width + "px";
+      dagEl.style.width = "100%"; dagEl.style.height = Math.min(height + 24, window.innerHeight * 0.7) + "px";
       dagEl.appendChild(svg);
       for (const [task, pt] of pos) {
         const root = document.createElement("div");
@@ -508,7 +579,7 @@ async function tick() {
         const id = (e.ts || "") + ":" + (e.summary || "").slice(0, 24);
         if (entry.ids.has(id)) continue;
         entry.ids.add(id);
-        appendPinned(entry.feed, evLine(e), id, typeof e.full === "string" ? e.full : undefined);
+        appendPinned(entry.feed, evLine(e), id, typeof e.full === "string" && e.full !== "" ? e.full : String(e.summary ?? ""));
       }
       const liveEvent = a.live ?? null;
       const liveText = liveEvent === null ? "" : "[" + (liveEvent.activity === "thinking" ? "思考中" : "生成中") + "] " + String(liveEvent.summary || "").slice(-160);
