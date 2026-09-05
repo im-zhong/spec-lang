@@ -26,6 +26,10 @@ export interface HarnessTask {
   scope: string[]
   prompt: string
   specNodeIds?: string[]
+  /** Override the executor for retry pass-throughs (defaults to agent). */
+  executor?: "agent" | "materialize"
+  /** Files to materialize (retry no-ops carry an empty object). */
+  materializedFiles?: Record<string, string>
   /** Optional pre-conformance code/test/review synthesis loop. */
   loop?: AgentExecutionLoop
   /** Compiler-owned gate run once after reviewer approval. */
