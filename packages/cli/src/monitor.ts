@@ -621,8 +621,11 @@ async function tick() {
       if (chip.nm.textContent !== nm) chip.nm.textContent = nm;
       const dt = ((n.activity || "") + (n.costUsd ? " · $" + n.costUsd.toFixed(2) : "")).trim();
       if (chip.dt.textContent !== dt) { chip.dt.textContent = dt; chip.dt.title = dt; }
-      const cls = "chip chip-" + n.status;
-      if (chip.root.className !== cls) chip.root.className = cls;
+      // Toggle status classes WITHOUT replacing className — chip-selected
+      // and chip-dimmed from highlightDag() must survive every 2s tick.
+      for (const st of ["done", "running", "failed", "pending"]) {
+        chip.root.classList.toggle("chip-" + st, n.status === st)
+      }
       const edgeStroke = n.status === "running" ? "#d29922" : n.status === "done" ? "#238636" : "#30363d";
       for (const edge of chip.edges) {
         if (edge.classList.contains("edge-in") || edge.classList.contains("edge-out")) continue;
