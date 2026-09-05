@@ -104,14 +104,32 @@ function inTarget(root: string, relative: string): string {
 export function createGitHubGenerationPlan(input: GitHubGenerationPlanInput): AgentExecutionPlan {
   const directory = targetDirectory(input.targetDirectory)
 
-  // Retry-from: keep only the failed node and its transitive descendants.
-  // Landed predecessors are reused via their published task heads; their
-  // task entries stay in the plan (so dependency edges resolve) but carry
-  // no loop (they materialize nothing new and run no agent).
+  // Retry-from: re-run every task that did NOT land cleanly plus their
+  // transitive descendants. Landed predecessors become no-op pass-throughs.
   let activeTasks = input.shot.tasks
   if (input.retryFrom !== undefined) {
+    // Seed with the retry target AND every task that shares a dependency
+    // level with it and also depends on the same set of prerequisites —
+    // siblings that failed alongside it (e.g. router:User + router:Booking)
+    // must re-run too. More precisely: seed with ALL tasks whose dependency
+    // closure is NOT a strict subset of the landed set (i.e. any task that
+    // could not have completed before the retry target started failing).
     const retryId = safeTaskId(input.retryFrom)
     const descendants = new Set<string>([retryId])
+    // Expand: any task that depends on the retry target OR is a sibling
+    // (shares a direct dependency with it) that also appears to have been
+    // running concurrently. For correctness we include ALL siblings.
+    for (const task of input.shot.tasks) {
+      const normalized = safeTaskId(task.id)
+      if (descendants.has(normalized)) continue
+      // Sibling detection: shares any direct dependency with the retry node
+      const retryDeps = input.shot.tasks
+        .find((t) => safeTaskId(t.id) === retryId)?.dependsOn.map(safeTaskId) ?? []
+      if (task.dependsOn.map(safeTaskId).some((dep) => retryDeps.includes(dep))) {
+        descendants.add(normalized)
+      }
+    }
+    // Transitive closure downward
     let grew = true
     while (grew) {
       grew = false
